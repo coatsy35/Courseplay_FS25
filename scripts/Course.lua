@@ -1591,6 +1591,9 @@ local function createWaypointsFromXml(xmlFile, key)
                 -- apart than the row waypoint distance, add intermediate waypoints
                 addIntermediateWaypoints(d, waypoints, waypoints[#waypoints], wp)
             end
+            if rowStart then
+                wp:copyRowData(rowStart)
+            end
             rowStart = nil
         elseif rowStart then
             -- normal row waypoint, copy the row data from the row start waypoint

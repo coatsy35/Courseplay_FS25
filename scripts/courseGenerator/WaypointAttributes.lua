@@ -270,6 +270,8 @@ function WaypointAttributes.registerXmlSchema(schema, key)
     schema:register(XMLValueType.INT, key .. '#rowNumber', '')
     schema:register(XMLValueType.BOOL, key .. '#leftSideWorked', '')
     schema:register(XMLValueType.BOOL, key .. '#rightSideWorked', '')
+    schema:register(XMLValueType.BOOL, key .. '#leftSideBlockBoundary', '')
+    schema:register(XMLValueType.BOOL, key .. '#rightSideBlockBoundary', '')
     schema:register(XMLValueType.BOOL, key .. '#headlandTurn', '')
     schema:register(XMLValueType.BOOL, key .. '#headlandTransition', '')
     schema:register(XMLValueType.BOOL, key .. '#usePathfinderToNextWaypoint', '')
@@ -285,10 +287,12 @@ function WaypointAttributes:setXmlValue(xmlFile, key)
     CpUtil.setXmlValue(xmlFile, key .. '#headlandPassNumber', self.headlandPassNumber)
     if self.rowStart then
         -- only write these at the start of the row to reduce the XML file size, as these are the same for
-        -- all rows of the waypoint
+        -- all waypoints of the row
         CpUtil.setXmlValue(xmlFile, key .. '#rowNumber', self.rowNumber)
         CpUtil.setXmlValue(xmlFile, key .. '#leftSideWorked', self.leftSideWorked)
         CpUtil.setXmlValue(xmlFile, key .. '#rightSideWorked', self.rightSideWorked)
+        CpUtil.setXmlValue(xmlFile, key .. '#leftSideBlockBoundary', self.leftSideBlockBoundary)
+        CpUtil.setXmlValue(xmlFile, key .. '#rightSideBlockBoundary', self.rightSideBlockBoundary)
     end
     if self.headlandPassNumber then
         -- we need these on the headland though
@@ -317,6 +321,8 @@ function WaypointAttributes:writeStream(streamId)
     CpUtil.streamWriteBool(streamId, self.usePathfinderToThisWaypoint)
     CpUtil.streamWriteString(streamId, self.boundaryId)
     CpUtil.streamWriteString(streamId, self.atBoundaryId)
+    CpUtil.streamWriteBool(streamId, self.leftSideBlockBoundary)
+    CpUtil.streamWriteBool(streamId, self.rightSideBlockBoundary)
 end
 
 function WaypointAttributes.createFromStream(streamId)
@@ -334,6 +340,8 @@ function WaypointAttributes.createFromStream(streamId)
     attributes.usePathfinderToThisWaypoint = CpUtil.streamReadBool(streamId)
     attributes.boundaryId = CpUtil.streamReadString(streamId)
     attributes.atBoundaryId = CpUtil.streamReadString(streamId)
+    attributes.leftSideBlockBoundary = CpUtil.streamReadBool(streamId)
+    attributes.rightSideBlockBoundary = CpUtil.streamReadBool(streamId)
     return attributes
 end
 
@@ -347,6 +355,8 @@ function WaypointAttributes.createFromXmlFile(xmlFile, key)
     attributes.rowNumber = xmlFile:getValue(key .. '#rowNumber') 
     attributes.leftSideWorked = xmlFile:getValue(key .. '#leftSideWorked') 
     attributes.rightSideWorked = xmlFile:getValue(key .. '#rightSideWorked') 
+    attributes.leftSideBlockBoundary = xmlFile:getValue(key .. '#leftSideBlockBoundary')
+    attributes.rightSideBlockBoundary = xmlFile:getValue(key .. '#rightSideBlockBoundary')
     attributes.headlandTurn = xmlFile:getValue(key .. '#headlandTurn') 
     attributes.headlandTransition = xmlFile:getValue(key .. '#headlandTransition') 
     attributes.usePathfinderToNextWaypoint = xmlFile:getValue(key .. '#usePathfinderToNextWaypoint') 

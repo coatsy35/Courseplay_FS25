@@ -148,10 +148,11 @@ function AIDriveStrategyPlowCourse:isPlowRotationAllowed()
 end
 
 --- Initial plow rotation based on the ridge marker side selection by the course generator.
-function AIDriveStrategyPlowCourse:rotatePlows(ix)
+function AIDriveStrategyPlowCourse:rotatePlows(ix, course)
     self:debug('Starting work: check if plow needs to be turned.')
     ix = ix or self.ppc:getCurrentWaypointIx()
-    local plowShouldBeOnTheLeft = self.course:shouldPlowBeOnTheLeft(ix)
+    course = course or self.course
+    local plowShouldBeOnTheLeft = course:shouldPlowBeOnTheLeft(ix)
     for _, controller in pairs(self.controllers) do
         if controller.rotate then
             controller:rotate(plowShouldBeOnTheLeft)
@@ -199,12 +200,13 @@ end
 function AIDriveStrategyPlowCourse:resumeFieldworkAfterTurn(ix)
     self.plowOffsetUnknown:reset()
 
-    local nextIx = math.min(ix + 1, self.course:getNumberOfWaypoints())
-    if self:haveRotatablePlow() and (self.course:isOnHeadland(ix) or self.course:isOnHeadland(nextIx)) then
-        local plowIx = self.course:isOnHeadland(ix) and ix or nextIx
+    -- During alignment or a connecting path, self.course is still the temporary approach course.
+    local course = self.fieldWorkCourse
+    local nextIx = math.min(ix + 1, course:getNumberOfWaypoints())
+    if self:haveRotatablePlow() and (course:isOnHeadland(ix) or course:isOnHeadland(nextIx)) then
+        local plowIx = course:isOnHeadland(ix) and ix or nextIx
         self:debug('Entering headland, forcing plow side reinitialisation at ix %d.', plowIx)
-        self:rotatePlows(plowIx)
-        self.plowOffsetUnknown:reset()
+        self:rotatePlows(plowIx, course)
     end
     AIDriveStrategyFieldWorkCourse.resumeFieldworkAfterTurn(self, ix)
 end

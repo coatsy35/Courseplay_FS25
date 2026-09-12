@@ -1,11 +1,27 @@
 local lu = require('luaunit')
-package.path = package.path .. ';../?.lua;../courseGenerator/?.lua;../ai/controllers/?.lua;../ai/turns/?.lua;../ai/strategies/?.lua'
+package.path = package.path .. ';../?.lua;../util/?.lua;../courseGenerator/?.lua;../ai/controllers/?.lua;../ai/turns/?.lua;../ai/strategies/?.lua'
 require('CpObject')
+require('CpUtil')
+require('CpMathUtil')
 
 g_time = 0
 CpDebug = { DBG_TURN = 1 }
-CpUtil = { debugVehicle = function() end }
-CourseGenerator = {}
+CpUtil.debugVehicle = function() end
+CpUtil.getCurrentVehicle = function() end
+CourseGenerator = { cRowWaypointDistance = 5 }
+g_currentMission = { terrainRootNode = 0 }
+getTerrainHeightAtWorldPos = function() return 0 end
+MathUtil = {
+    vector2Length = function(x, z) return math.sqrt(x * x + z * z) end,
+    getYRotationFromDirection = function(x, z) return math.atan2(x, z) end
+}
+MathUtil.vector2Normalize = function(x, z)
+    local length = MathUtil.vector2Length(x, z)
+    return x / length, z / length
+end
+MathUtil.getPointPointDistance = function(x1, z1, x2, z2)
+    return MathUtil.vector2Length(x2 - x1, z2 - z1)
+end
 require('WaypointAttributes')
 require('Waypoint')
 require('Course')
@@ -19,10 +35,11 @@ AIDriveStrategyFieldWorkCourse = {
     resumeFieldworkAfterTurn = function(self, ix)
         self.resumedAt = ix
         self.rotationsAtResume = #self.rotations
+        self.course = self.fieldWorkCourse
     end
 }
 require('AIDriveStrategyPlowCourse')
-CpMathUtil = { isSameDirection = function(_, aligned) return aligned end }
+CpMathUtil.isSameDirection = function(_, aligned) return aligned end
 
 local function waypoint(attributes)
     return setmetatable({ attributes = setmetatable(attributes, CourseGenerator.WaypointAttributes) }, Waypoint)
@@ -180,6 +197,7 @@ local function strategy(headlandIx, rotatable)
     end
     result.plowOffsetUnknown:set(false, 3000)
     result.course.isOnClockwiseHeadland = function() return false end
+    result.fieldWorkCourse = result.course
     return result
 end
 
@@ -213,6 +231,173 @@ function testFixedPloughSkipsHeadlandReinitialisation()
     worker:resumeFieldworkAfterTurn(1)
     lu.assertEquals(worker.rotations, {})
     lu.assertEquals(worker.resumedAt, 1)
+end
+
+function testHeadlandResumeUsesFieldworkCourseDuringTemporaryApproach()
+    for _, side in ipairs({ true, false }) do
+        for _, resumeIx in ipairs({ 1, 2 }) do
+            local worker = strategy(2, true)
+            worker.fieldWorkCourse.isOnClockwiseHeadland = function() return not side end
+            worker.course = course({})
+            worker:resumeFieldworkAfterTurn(resumeIx)
+            lu.assertEquals(worker.rotations, { side })
+            lu.assertEquals(worker.rotationsAtResume, 1)
+            lu.assertIs(worker.course, worker.fieldWorkCourse)
+        end
+    end
+end
+
+function testTemporaryCourseCannotCauseHeadlandRotationOnCentreRow()
+    local worker = strategy(nil, true)
+    worker.course = course({ headlandPassNumber = 1 }, { headlandPassNumber = 1 })
+    worker:resumeFieldworkAfterTurn(1)
+    lu.assertEquals(worker.rotations, {})
+end
+
+-- Mock only the engine I/O; exercise the real course, waypoint and nullable-value serialisers.
+local function xmlFile()
+    local xml = { values = {} }
+    function xml:setValue(key, ...)
+        self.values[key] = { ... }
+    end
+    function xml:getValue(key, default)
+        if self.values[key] then return table.unpack(self.values[key]) end
+        return default
+    end
+    function xml:iterate(key, callback)
+        local ix = 0
+        while self.values[string.format('%s(%d)#position', key, ix)] do
+            callback(ix, string.format('%s(%d)', key, ix))
+            ix = ix + 1
+        end
+    end
+    return xml
+end
+
+for _, valueType in ipairs({ 'Bool', 'Int32', 'Float32', 'String' }) do
+    _G['streamWrite' .. valueType] = function(stream, value)
+        table.insert(stream.values, { valueType, value })
+    end
+    _G['streamRead' .. valueType] = function(stream)
+        local value = stream.values[stream.ix]
+        lu.assertNotNil(value, 'Read beyond the end of the stream')
+        lu.assertEquals(value[1], valueType)
+        stream.ix = stream.ix + 1
+        return value[2]
+    end
+end
+
+local function firstRowCourse(leftBoundary, rightBoundary)
+    local waypoints = {}
+    for i = 1, 5 do
+        local attributes = CourseGenerator.WaypointAttributes()
+        attributes.rowStart = i == 1
+        attributes.rowEnd = i == 5
+        attributes.rowNumber = 1
+        attributes.leftSideBlockBoundary = leftBoundary
+        attributes.rightSideBlockBoundary = rightBoundary
+        attributes.leftSideWorked = false
+        attributes.rightSideWorked = true
+        waypoints[i] = { x = 0, z = (i - 1) * 5, attributes = attributes }
+    end
+    waypoints[6] = { x = 5, z = 20 }
+    return Course(nil, waypoints)
+end
+
+local function assertFirstRowRestored(original, restored)
+    lu.assertEquals(restored:getNumberOfWaypoints(), original:getNumberOfWaypoints())
+    for i, wp in ipairs(original.waypoints) do
+        lu.assertEquals(restored.waypoints[i].attributes, wp.attributes)
+        lu.assertEquals(restored:shouldPlowBeOnTheLeft(i), original:shouldPlowBeOnTheLeft(i))
+    end
+end
+
+function testBoundaryFlagsRegisteredInXmlSchema()
+    XMLValueType = { BOOL = 'bool', INT = 'int', STRING = 'string' }
+    local registered = {}
+    CourseGenerator.WaypointAttributes.registerXmlSchema({
+        register = function(_, valueType, key) registered[key] = valueType end
+    }, 'wp(?)')
+    lu.assertEquals(registered['wp(?)#leftSideBlockBoundary'], XMLValueType.BOOL)
+    lu.assertEquals(registered['wp(?)#rightSideBlockBoundary'], XMLValueType.BOOL)
+end
+
+function testFirstRowOrientationSurvivesCompactedAndFullXmlRoundTrips()
+    for _, compacted in ipairs({ true, false }) do
+        for _, boundaries in ipairs({ { true, false }, { false, true }, {} }) do
+            local original = firstRowCourse(boundaries[1], boundaries[2])
+            original.compacted = compacted
+            local xml = xmlFile()
+            original:saveToXml(xml, 'course')
+            local savedWaypoints = 0
+            xml:iterate('course.wp', function() savedWaypoints = savedWaypoints + 1 end)
+            lu.assertEquals(savedWaypoints, compacted and 3 or 6)
+            local restored = Course.createFromXml(nil, xml, 'course')
+            -- Reconstructed intermediate points omit explicit false rowStart/rowEnd flags.
+            for i = 2, 4 do
+                lu.assertEquals(restored.waypoints[i].attributes.rowNumber, 1)
+                lu.assertEquals(restored.waypoints[i].attributes.leftSideWorked, false)
+                lu.assertEquals(restored.waypoints[i].attributes.rightSideWorked, true)
+            end
+            for i = 1, 5 do
+                lu.assertEquals(restored.waypoints[i].attributes.leftSideBlockBoundary, boundaries[1])
+                lu.assertEquals(restored.waypoints[i].attributes.rightSideBlockBoundary, boundaries[2])
+                lu.assertEquals(restored:shouldPlowBeOnTheLeft(i), original:shouldPlowBeOnTheLeft(i))
+            end
+            lu.assertEquals(restored:getNumberOfWaypoints(), 6)
+            lu.assertEquals(restored.waypoints[5].attributes.rowNumber, 1)
+            lu.assertNil(restored.waypoints[6].attributes.rowNumber)
+            lu.assertNil(restored.waypoints[6].attributes.leftSideBlockBoundary)
+            lu.assertNil(restored.waypoints[6].attributes.rightSideBlockBoundary)
+        end
+    end
+end
+
+function testFirstRowOrientationSurvivesNetworkRoundTrip()
+    for _, boundaries in ipairs({ { true, false }, { false, true }, {} }) do
+        local original = firstRowCourse(boundaries[1], boundaries[2])
+        local stream = { values = {}, ix = 1 }
+        original:writeStream(nil, stream)
+        local restored = Course.createFromStream(nil, stream)
+        assertFirstRowRestored(original, restored)
+        lu.assertEquals(stream.ix, #stream.values + 1)
+    end
+end
+
+function testOlderSavedCoursesWithoutBoundaryFlagsStillLoad()
+    local original = firstRowCourse(true, false)
+    local xml = xmlFile()
+    original:saveToXml(xml, 'course')
+    xml.values['course.wp(0)#leftSideBlockBoundary'] = nil
+    xml.values['course.wp(0)#rightSideBlockBoundary'] = nil
+    local restored = Course.createFromXml(nil, xml, 'course')
+    local legacy = firstRowCourse(nil, nil)
+    for i = 1, 5 do
+        lu.assertNil(restored.waypoints[i].attributes.leftSideBlockBoundary)
+        lu.assertNil(restored.waypoints[i].attributes.rightSideBlockBoundary)
+        lu.assertEquals(restored:shouldPlowBeOnTheLeft(i), legacy:shouldPlowBeOnTheLeft(i))
+    end
+end
+
+function testLoadedRowsDoNotInheritPreviousRowsBoundaryFlags()
+    local original = firstRowCourse(true, false)
+    for i, wp in ipairs(firstRowCourse(nil, true).waypoints) do
+        wp.x = wp.x + 10
+        if i <= 5 then wp.attributes.rowNumber = 2 end
+        table.insert(original.waypoints, wp)
+    end
+    for _, compacted in ipairs({ true, false }) do
+        original.compacted = compacted
+        local xml = xmlFile()
+        original:saveToXml(xml, 'course')
+        local restored = Course.createFromXml(nil, xml, 'course')
+        lu.assertEquals(restored:getNumberOfWaypoints(), 12)
+        for i = 7, 11 do
+            lu.assertEquals(restored.waypoints[i].attributes.rowNumber, 2)
+            lu.assertNil(restored.waypoints[i].attributes.leftSideBlockBoundary)
+            lu.assertIsTrue(restored.waypoints[i].attributes.rightSideBlockBoundary)
+        end
+    end
 end
 
 os.exit(lu.LuaUnit.run())
