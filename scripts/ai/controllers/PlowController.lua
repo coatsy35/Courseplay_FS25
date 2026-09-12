@@ -83,6 +83,18 @@ function PlowController:isFullyRotated()
     return rotationAnimationTime < 0.001 or rotationAnimationTime > 0.999
 end
 
+function PlowController:isRotatedToSide(shouldBeOnTheLeft)
+    if not self:isRotatablePlow() then
+        return true
+    end
+    local rotationAnimationTime = self.implement:getAnimationTime(self.plowSpec.rotationPart.turnAnimation)
+    if shouldBeOnTheLeft then
+        return rotationAnimationTime > 0.999
+    else
+        return rotationAnimationTime < 0.001
+    end
+end
+
 --- Rotates the plow if possible.
 ---@param shouldBeOnTheLeft boolean|nil
 function PlowController:rotate(shouldBeOnTheLeft)
@@ -135,7 +147,7 @@ end
 ---@param shouldBeOnTheLeft boolean should the plow be turned to the left to be in the good position after the turn?
 function PlowController:onTurnEndProgress(workStartNode, reversing, shouldLower, shouldBeOnTheLeft)
     self.lastPlowSide:set(shouldBeOnTheLeft or false, 2000)
-    if self:isRotatablePlow() and not self:isFullyRotated() and not self:isRotationActive() then
+    if self:isRotatablePlow() and not self:isRotatedToSide(shouldBeOnTheLeft) and not self:isRotationActive() then
         -- more or less aligned with the first waypoint of the row, start rotating to working position
         if CpMathUtil.isSameDirection(self.implement.rootNode, workStartNode, 30) or shouldLower then
             if self.towed then

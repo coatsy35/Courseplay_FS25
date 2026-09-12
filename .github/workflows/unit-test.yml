@@ -33,6 +33,7 @@ jobs:
           lua CpMathUtilTest.lua
           lua MovingAverageTest.lua
           lua LoggerTest.lua
+          lua PlowRotationTest.lua
       - name: Run course generator unit tests
         run: |
           pushd scripts/courseGenerator/test
