@@ -1,4 +1,4 @@
-name: Publish Live Release
+name: Prepare Live Release
 run-name: Publish live release from main
 
 on:
