@@ -72,3 +72,7 @@ TriangleCalculation.lua
 # Help menu website cache
 .github/scripts/update-help-menu/data/
 help_menu_cache_data/
+
+# Python bench and capture tools
+__pycache__/
+*.pyc

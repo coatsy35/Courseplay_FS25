@@ -1,0 +1,486 @@
+{
+  "source": "CP debug log 2026-09-13 23:27:18, Challenger 55 + PW 100-12; rounded log coordinates",
+  "scenario": {
+    "width": 5.6,
+    "length": 11.2,
+    "radius": 9,
+    "generatorRadius": 5,
+    "hitch": 1.9,
+    "front": 4.5,
+    "back": 18.3,
+    "clearance": 13,
+    "headland": 38,
+    "speed": 3,
+    "lowerSeconds": 2,
+    "raiseSeconds": 1,
+    "raiseLate": true,
+    "turnType": "dubins",
+    "lookahead": 3,
+    "extension": 0,
+    "side": 1,
+    "entryAngle": 45,
+    "entry": false,
+    "drill": true,
+    "lowerEarly": true,
+    "tight": true,
+    "tightDistance": 1,
+    "articulated": false,
+    "pattern": false,
+    "passes": 4,
+    "fieldLength": 160,
+    "headlandRows": 0,
+    "rowPattern": "alternating",
+    "rowsPerLand": 6,
+    "circles": 3,
+    "enforceBoundary": false,
+    "rowSpacing": 0,
+    "fieldShape": "rectangle",
+    "reverseCourse": false,
+    "irregularInset": 36,
+    "slopeSide": "left",
+    "edgeAngle": 25,
+    "courseLayout": false,
+    "fieldWidth": 220,
+    "rowAngle": 90,
+    "headlandOverlap": 5,
+    "roundHeadlands": 0,
+    "headlandFirst": true,
+    "clockwise": true,
+    "custom": false,
+    "mounted": false,
+    "targetZ": 0,
+    "targetExplicit": false,
+    "targetX": 0,
+    "targetHeading": 180,
+    "allowReverse": false,
+    "reverseSpeed": 1.5,
+    "fullCourse": false,
+    "rowsToSkip": 0,
+    "centreClockwise": false,
+    "spiralFromInside": false,
+    "fieldMargin": 0,
+    "sharpenCorners": true,
+    "loopTurnsOnHeadland": false,
+    "autoRowAngle": false,
+    "evenRowWidth": false,
+    "useBaseline": false,
+    "startX": 5,
+    "startZ": 5,
+    "vehicles": 1,
+    "vehicleIndex": 1,
+    "sameTurnWidth": false,
+    "narrowField": false,
+    "islandCount": 0,
+    "islandSize": 15,
+    "bypassIslands": true,
+    "islandHeadlands": 1,
+    "islandClockwise": true
+  },
+  "corner": [
+    -387.0,
+    -989.0
+  ],
+  "incoming": 3.1381019950858047,
+  "outgoing": 1.5707963267948966,
+  "start": [
+    -386.95427246646057,
+    -1004.909920190317
+  ],
+  "waypoints": [
+    {
+      "x": -387.0,
+      "z": -991.81,
+      "reverse": true
+    },
+    {
+      "x": -387.01,
+      "z": -990.32,
+      "reverse": true
+    },
+    {
+      "x": -387.01,
+      "z": -988.84,
+      "reverse": true
+    },
+    {
+      "x": -387.01,
+      "z": -987.35,
+      "reverse": true
+    },
+    {
+      "x": -387.02,
+      "z": -985.87,
+      "reverse": true
+    },
+    {
+      "x": -387.02,
+      "z": -984.38,
+      "reverse": true
+    },
+    {
+      "x": -387.02,
+      "z": -982.9,
+      "reverse": true
+    },
+    {
+      "x": -387.03,
+      "z": -981.41,
+      "reverse": true
+    },
+    {
+      "x": -387.03,
+      "z": -979.93,
+      "reverse": true
+    },
+    {
+      "x": -387.03,
+      "z": -978.44,
+      "reverse": true
+    },
+    {
+      "x": -387.04,
+      "z": -976.96,
+      "reverse": true
+    },
+    {
+      "x": -387.04,
+      "z": -975.47,
+      "reverse": true
+    },
+    {
+      "x": -387.04,
+      "z": -973.99,
+      "reverse": true
+    },
+    {
+      "x": -387.05,
+      "z": -972.5,
+      "reverse": true
+    },
+    {
+      "x": -387.05,
+      "z": -971.02,
+      "reverse": true
+    },
+    {
+      "x": -387.06,
+      "z": -969.53,
+      "reverse": true
+    },
+    {
+      "x": -387.06,
+      "z": -968.05,
+      "reverse": true
+    },
+    {
+      "x": -387.06,
+      "z": -966.56,
+      "reverse": true
+    },
+    {
+      "x": -387.07,
+      "z": -965.08,
+      "reverse": true
+    },
+    {
+      "x": -387.07,
+      "z": -963.59,
+      "reverse": true
+    },
+    {
+      "x": -387.07,
+      "z": -962.11,
+      "reverse": true
+    },
+    {
+      "x": -387.08,
+      "z": -960.62,
+      "reverse": true
+    },
+    {
+      "x": -387.08,
+      "z": -959.13,
+      "reverse": true
+    },
+    {
+      "x": -387.08,
+      "z": -957.65,
+      "reverse": true
+    },
+    {
+      "x": -387.09,
+      "z": -956.16,
+      "reverse": true
+    },
+    {
+      "x": -387.09,
+      "z": -954.68,
+      "reverse": true
+    },
+    {
+      "x": -387.09,
+      "z": -953.19,
+      "reverse": true
+    },
+    {
+      "x": -387.1,
+      "z": -951.71,
+      "reverse": true
+    },
+    {
+      "x": -387.1,
+      "z": -950.22,
+      "reverse": true
+    },
+    {
+      "x": -387.11,
+      "z": -948.74,
+      "reverse": true
+    },
+    {
+      "x": -387.02,
+      "z": -980.02,
+      "reverse": false
+    },
+    {
+      "x": -386.97,
+      "z": -980.96,
+      "reverse": false
+    },
+    {
+      "x": -386.82,
+      "z": -981.89,
+      "reverse": false
+    },
+    {
+      "x": -386.57,
+      "z": -982.79,
+      "reverse": false
+    },
+    {
+      "x": -386.23,
+      "z": -983.67,
+      "reverse": false
+    },
+    {
+      "x": -385.81,
+      "z": -984.51,
+      "reverse": false
+    },
+    {
+      "x": -385.29,
+      "z": -985.3,
+      "reverse": false
+    },
+    {
+      "x": -384.7,
+      "z": -986.03,
+      "reverse": false
+    },
+    {
+      "x": -384.03,
+      "z": -986.69,
+      "reverse": false
+    },
+    {
+      "x": -383.3,
+      "z": -987.28,
+      "reverse": false
+    },
+    {
+      "x": -382.51,
+      "z": -987.79,
+      "reverse": false
+    },
+    {
+      "x": -381.67,
+      "z": -988.22,
+      "reverse": false
+    },
+    {
+      "x": -380.8,
+      "z": -988.56,
+      "reverse": false
+    },
+    {
+      "x": -379.89,
+      "z": -988.8,
+      "reverse": false
+    },
+    {
+      "x": -378.96,
+      "z": -988.95,
+      "reverse": false
+    },
+    {
+      "x": -378.02,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -372.16,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -370.7,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -369.24,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -367.77,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -366.31,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -364.84,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -363.38,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -361.92,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -360.45,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -358.99,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -357.52,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -356.06,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -354.6,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -353.13,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -351.67,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -350.2,
+      "z": -988.99,
+      "reverse": false
+    },
+    {
+      "x": -378.02,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -379.51,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -381.0,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -382.5,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -383.99,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -385.48,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -386.97,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -388.47,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -389.96,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -391.45,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -392.94,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -394.43,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -395.93,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -397.42,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -398.91,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -400.4,
+      "z": -988.99,
+      "reverse": true
+    },
+    {
+      "x": -401.9,
+      "z": -988.99,
+      "reverse": true
+    }
+  ]
+}

@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Courseplay | Turn Bench</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/lucide.min.js"></script>
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="mark">CP</span>
+        <div><strong>Courseplay</strong><span>Turn bench</span></div>
+      </div>
+      <div class="header-right">
+        <span class="status-dot"></span><span>Offline model</span
+        ><button
+          id="info"
+          class="icon"
+          title="Model provenance"
+          aria-label="Model provenance"
+        >
+          <i data-lucide="info"></i>
+        </button>
+      </div>
+    </header>
+    <main>
+      <aside>
+        <form id="settings" novalidate>
+          <div class="settings-scroll">
+            <details class="settings-group" name="bench-settings">
+              <summary>Implement & tractor</summary>
+              <div class="settings-body">
+                <label
+                  >Scenario<select id="preset">
+                    <option value="drill4">Trailed seed drill / 4 m</option>
+                    <option value="drill">Trailed seed drill / 6 m</option>
+                    <option value="drill12">Trailed seed drill / 12 m</option>
+                    <option value="plough" selected>
+                      Kverneland PW 100-12 / 5.6 m
+                    </option>
+                    <option value="entry">45-degree drill entry</option>
+                    <option value="custom">Custom</option>
+                  </select></label
+                >
+                <strong id="implement-width">Working width: 6.0 m</strong>
+                <label
+                  >Working width (m)<input
+                    id="width"
+                    type="number"
+                    min="0.5"
+                    max="57"
+                    step="0.1"
+                    value="5.6"
+                /></label>
+                <label id="attachment-label" hidden
+                  >Attachment<select id="attachment">
+                    <option value="trailed">Trailed</option>
+                    <option value="mounted">Mounted (rigid)</option>
+                  </select></label
+                >
+                <div id="config-picker">
+                  <label for="config-toggle">CP configuration overrides</label>
+                  <button
+                    id="config-toggle"
+                    type="button"
+                    aria-expanded="false"
+                    aria-controls="config-popup"
+                  >
+                    Preset / no additional override ▾
+                  </button>
+                  <div id="config-popup" hidden>
+                    <input
+                      id="config-search"
+                      type="search"
+                      placeholder="Search implement name…"
+                      aria-label="Search CP configurations"
+                      autocomplete="off"
+                      aria-controls="config-implement"
+                    />
+                    <select
+                      id="config-implement"
+                      size="8"
+                      aria-label="CP configuration overrides"
+                    >
+                      <option value="">Preset / no additional override</option>
+                    </select>
+                    <small
+                      id="config-count"
+                      role="status"
+                      aria-live="polite"
+                    ></small>
+                  </div>
+                </div>
+                <p id="config-note">
+                  Drill dimensions are illustrative. CP configuration entries
+                  contain overrides, not complete implement geometry.
+                </p>
+                <label
+                  >Steering profile (approx.)<select id="steering">
+                    <option value="normal">Conventional</option>
+                    <option value="four">Four-wheel steer</option>
+                    <option value="twin">Twin track</option>
+                    <option value="articulated">Articulated wheels</option>
+                    <option value="articulatedTrack">Articulated tracks</option>
+                  </select></label
+                >
+                <div class="fields">
+                  <label
+                    >Turn direction<select id="side">
+                      <option value="1">Right</option>
+                      <option value="-1">Left</option>
+                    </select></label
+                  ><label
+                    >Speed (km/h)<input
+                      id="speed"
+                      type="number"
+                      min="1.8"
+                      max="28.8"
+                      step="0.1"
+                      value="10.8"
+                  /></label>
+                </div>
+                <label
+                  >Turn type<select id="turnType">
+                    <option value="dubins">
+                      Row turn / lightbulb (Dubins)
+                    </option>
+                    <option value="reedsShepp">
+                      Three-point (Reeds–Shepp)
+                    </option>
+                    <option value="headlandLoop">
+                      Headland loop (single turn)
+                    </option>
+                  </select></label
+                >
+                <label class="check"
+                  ><input id="allowReverse" type="checkbox" checked />Allow
+                  analytic reverse fallback</label
+                >
+                <label
+                  >Reverse speed (km/h)<input
+                    id="reverseSpeed"
+                    type="number"
+                    min="1.1"
+                    max="14.4"
+                    step="0.1"
+                    value="5.4"
+                /></label>
+              </div>
+            </details>
+            <details class="settings-group" name="bench-settings" open>
+              <summary>Field & pattern</summary>
+              <div class="settings-body">
+                <label
+                  >Field shape<select id="fieldShape">
+                    <option value="rectangle">Rectangle</option>
+                    <option value="sloping">
+                      Sloping side / angled row ends
+                    </option>
+                    <option value="irregular">
+                      Irregular / taper and inward notch
+                    </option>
+                  </select></label
+                >
+                <label id="irregular-inset-label" hidden
+                  >Left-side inset (% of field width)<input
+                    id="irregularInset"
+                    type="number"
+                    min="10"
+                    max="55"
+                    step="1"
+                    value="36"
+                  />
+                  <span
+                    >Increase to push the left side further inwards and make the
+                    taper steeper.</span
+                  >
+                </label>
+                <label id="slope-side-label" hidden
+                  >Sloping side<select id="slopeSide">
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                  </select></label
+                >
+                <label id="edge-angle-label" hidden
+                  >Side angle from vertical (degrees)
+                  <input
+                    id="edgeAngle"
+                    type="number"
+                    min="5"
+                    max="45"
+                    step="1"
+                    value="25"
+                  />
+                  <span
+                    >One continuous sloping side; the opposite side stays
+                    straight. Rows default to CP 0° (up/down). Use Rotate rows
+                    90° to run across the field.</span
+                  >
+                </label>
+                <label
+                  >Run mode<select id="pattern">
+                    <option value="course" selected>
+                      Full field / all rows and headlands
+                    </option>
+                    <option value="layout">
+                      CP Course Generator / layout only
+                    </option>
+                    <option value="field">Selected passes / turn test</option>
+                    <option value="single">Single turn</option>
+                  </select></label
+                >
+                <p id="run-mode-note"></p>
+                <label id="course-direction-label"
+                  >Drive course from<select id="courseDirection">
+                    <option value="start">Start point</option>
+                    <option value="end">End point / reverse course</option>
+                  </select>
+                  <span
+                    >End point drives the same course in the opposite order. The
+                    tractor still travels forwards except during reversing
+                    manoeuvres.</span
+                  >
+                </label>
+                <div class="fields">
+                  <label
+                    >Start across field (%)<input
+                      id="startX"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value="5"
+                  /></label>
+                  <label
+                    >Start along field (%)<input
+                      id="startZ"
+                      type="number"
+                      min="0"
+                      max="100"
+                      value="50"
+                  /></label>
+                </div>
+                <div class="fields">
+                  <label id="passes-label"
+                    >Number of test passes<input
+                      id="passes"
+                      type="number"
+                      min="1"
+                      max="32"
+                      step="1"
+                      value="4"
+                  /></label>
+                  <label
+                    >Field length (m)<input
+                      id="fieldLength"
+                      type="number"
+                      min="100"
+                      max="1000"
+                      step="1"
+                      value="240"
+                  /></label>
+                  <label
+                    >Headland rows / each end<input
+                      id="headlandRows"
+                      type="number"
+                      min="0"
+                      max="40"
+                      step="1"
+                      value="9"
+                  /></label>
+                </div>
+                <label
+                  >Field width (m)<input
+                    id="fieldWidth"
+                    type="number"
+                    min="100"
+                    max="1000"
+                    value="220"
+                /></label>
+                <label
+                  >Work order<select
+                    id="headlandFirst"
+                    aria-describedby="work-order-note"
+                  >
+                    <option value="headland" selected>Headland first</option>
+                    <option value="centre">
+                      Centre / up-and-down rows first
+                    </option>
+                  </select></label
+                >
+                <label
+                  >Number of round corners<input
+                    id="roundHeadlands"
+                    type="number"
+                    min="0"
+                    max="50"
+                    value="0"
+                  /><span
+                    >Number of headland passes rounded from the outside in. Zero
+                    keeps the working corners sharp. The tractor still follows
+                    curved forward/reverse manoeuvres at sharp corners;
+                    reversing is shown in purple.</span
+                  ></label
+                >
+                <label class="check"
+                  ><input id="sharpenCorners" type="checkbox" checked />Sharpen
+                  headland corners</label
+                >
+                <p id="work-order-note">
+                  Sets the order of complete-course playback and layout.
+                  Central-pass tests drive rows only.
+                </p>
+                <label class="check"
+                  ><input id="autoRowAngle" type="checkbox" checked />Automatic
+                  row angle</label
+                >
+                <label class="check"
+                  ><input id="useBaseline" type="checkbox" />Use boundary edge
+                  as baseline</label
+                >
+                <label
+                  >Manual row angle (CP degrees)<input
+                    id="rowAngle"
+                    type="number"
+                    min="0"
+                    max="175"
+                    step="5"
+                    value="0"
+                /></label>
+                <button type="button" id="rotateRows">Rotate rows 90°</button>
+                <p>
+                  CP angles: 0° runs up/down; 90° runs across. Automatic uses
+                  CP’s angle selection. Boundary baseline follows the edge
+                  nearest the start position and overrides the angle.
+                </p>
+                <label
+                  >Working-row pattern<select id="rowPattern">
+                    <option value="alternating">Up / down</option>
+                    <option value="lands">Lands</option>
+                    <option value="racetrack">Racetrack</option>
+                    <option value="spiral">Spiral</option>
+                  </select></label
+                >
+                <div class="fields">
+                  <label
+                    >Rows per land<input
+                      id="rowsPerLand"
+                      type="number"
+                      min="1"
+                      max="24"
+                      value="6" /></label
+                  ><label
+                    >Racetrack circles<input
+                      id="circles"
+                      type="number"
+                      min="1"
+                      max="12"
+                      value="2"
+                  /></label>
+                </div>
+                <label
+                  >Rows to skip<input
+                    id="rowsToSkip"
+                    type="number"
+                    min="0"
+                    max="6"
+                    value="0"
+                /></label>
+                <label class="check"
+                  ><input id="centreClockwise" type="checkbox" />Centre
+                  clockwise</label
+                >
+                <label class="check"
+                  ><input id="spiralFromInside" type="checkbox" />Spiral from
+                  inside</label
+                >
+                <label class="check"
+                  ><input id="loopTurnsOnHeadland" type="checkbox" />Loop turns
+                  on headland</label
+                >
+                <p>
+                  Use CP's forward-only loop at sharp headland corners. Rounded
+                  corners follow the course; central-row turns keep their own
+                  setting. Loops need room inside the field.
+                </p>
+                <label class="check"
+                  ><input id="enforceBoundary" type="checkbox" checked /><span
+                    id="boundary-check-label"
+                    >Check modelled boundary clearance</span
+                  ></label
+                >
+                <p>
+                  Checks the modelled tractor and implement envelope, including
+                  reverse sections. Full-course CP playback retains clearance
+                  estimates as diagnostics; isolated turn tests reject a
+                  footprint that does not fit.
+                </p>
+                <details>
+                  <summary>CP field generation settings</summary>
+                  <label
+                    >Course-generation turning radius (m)<input
+                      id="generatorRadius"
+                      type="number"
+                      min="2"
+                      max="25"
+                      step="0.5"
+                      value="5"
+                  /></label>
+                  <p>
+                    Controls the generated course geometry. The tractor and
+                    implement use the separate driving radius, including CP
+                    overrides.
+                  </p>
+                  <label
+                    >Field margin (m)<input
+                      id="fieldMargin"
+                      type="number"
+                      min="-5"
+                      max="6"
+                      step="0.2"
+                      value="0"
+                  /></label>
+                  <label class="check"
+                    ><input id="evenRowWidth" type="checkbox" />Distribute rows
+                    evenly</label
+                  >
+                  <label class="check"
+                    ><input id="narrowField" type="checkbox" />Two-sided
+                    headlands / narrow field</label
+                  >
+                  <label
+                    >Headland overlap (%)<input
+                      id="headlandOverlap"
+                      type="number"
+                      min="0"
+                      max="25"
+                      value="7"
+                  /></label>
+                  <label class="check"
+                    ><input
+                      id="clockwise"
+                      type="checkbox"
+                      checked
+                    />Clockwise</label
+                  >
+                  <p>
+                    These settings apply to the complete layout and
+                    non-rectangular field generation. Headland order controls
+                    the layout; movement tests run the selected central passes.
+                  </p>
+                </details>
+                <details>
+                  <summary>Vehicles &amp; islands</summary>
+                  <label
+                    >Vehicles<input
+                      id="vehicles"
+                      type="number"
+                      min="1"
+                      max="5"
+                      value="1"
+                  /></label>
+                  <label
+                    >Selected vehicle<input
+                      id="vehicleIndex"
+                      type="number"
+                      min="1"
+                      max="5"
+                      value="1"
+                  /></label>
+                  <label class="check"
+                    ><input id="sameTurnWidth" type="checkbox" />Same turn width
+                    for vehicles</label
+                  >
+                  <label
+                    >Islands<input
+                      id="islandCount"
+                      type="number"
+                      min="0"
+                      max="3"
+                      value="0"
+                  /></label>
+                  <label
+                    >Island diameter (m)<input
+                      id="islandSize"
+                      type="number"
+                      min="2"
+                      max="100"
+                      value="15"
+                  /></label>
+                  <label class="check"
+                    ><input id="bypassIslands" type="checkbox" checked />Bypass
+                    islands</label
+                  >
+                  <label
+                    >Island headlands<input
+                      id="islandHeadlands"
+                      type="number"
+                      min="1"
+                      max="10"
+                      value="1"
+                  /></label>
+                  <label class="check"
+                    ><input
+                      id="islandClockwise"
+                      type="checkbox"
+                      checked
+                    />Island headlands clockwise</label
+                  >
+                  <p>
+                    Vehicle courses and island bypasses use CP. Island positions
+                    are repeatable test fixtures. Vehicles run independently;
+                    traffic coordination is not modelled.
+                  </p>
+                </details>
+                <p id="field-size">
+                  One pass is one working row. Four passes make three turns.
+                </p>
+                <p>
+                  CP layout generates the whole course, including headlands.
+                  Complete-course playback drives headlands, central rows and
+                  connecting turns. Central-pass tests drive only the requested
+                  number of rows.
+                </p>
+              </div>
+            </details>
+            <details class="settings-group" name="bench-settings">
+              <summary>Implement geometry</summary>
+              <div class="settings-body">
+                <div class="fields">
+                  <label
+                    >Turning radius<input
+                      id="radius"
+                      type="number"
+                      min="2"
+                      max="25"
+                      step="0.1"
+                      value="9" /></label
+                  ><label
+                    >Hitch setback<input
+                      id="hitch"
+                      type="number"
+                      min="0"
+                      max="6"
+                      step="0.1"
+                      value="2"
+                  /></label>
+                  <label
+                    >Hitch to axle<input
+                      id="length"
+                      type="number"
+                      min="1"
+                      max="25"
+                      step="0.1"
+                      value="9"
+                  /></label>
+                  <label
+                    >Front marker setback<input
+                      id="front"
+                      type="number"
+                      min="0.1"
+                      max="35"
+                      step="0.1"
+                      value="11" /></label
+                  ><label
+                    >Rear marker setback<input
+                      id="back"
+                      type="number"
+                      min="0.1"
+                      max="45"
+                      step="0.1"
+                      value="12"
+                  /></label>
+                  <label
+                    >Minimum exit clearance<input
+                      id="clearance"
+                      type="number"
+                      min="0"
+                      max="50"
+                      step="0.1"
+                      value="13" /></label
+                  ><label
+                    >Headland depth (calculated)<input
+                      id="headland"
+                      type="number"
+                      min="1"
+                      max="400"
+                      step="0.5"
+                      value="36"
+                      readonly
+                  /></label>
+                </div>
+                <label id="entry-angle-label" hidden
+                  >Entry angle (degrees)<input
+                    id="entryAngle"
+                    type="number"
+                    min="-70"
+                    max="70"
+                    value="45"
+                /></label>
+              </div>
+            </details>
+            <details
+              class="settings-group"
+              name="bench-settings"
+              id="exit-controls"
+            >
+              <summary>Row exit / lifting</summary>
+              <div class="settings-body">
+                <label class="check"
+                  ><input id="raiseLate" type="checkbox" checked />Raise
+                  late</label
+                >
+                <label
+                  >Raising time (s)<input
+                    id="raiseSeconds"
+                    type="number"
+                    min="0"
+                    max="10"
+                    step="0.1"
+                    value="1"
+                /></label>
+              </div>
+            </details>
+            <details class="settings-group" name="bench-settings">
+              <summary>Row entry / lowering</summary>
+              <div class="settings-body">
+                <div class="fields">
+                  <label
+                    >Lowering time (s)<input
+                      id="lowerSeconds"
+                      type="number"
+                      min="0"
+                      max="10"
+                      step="0.1"
+                      value="2" /></label
+                  ><label
+                    >Lookahead (m)<input
+                      id="lookahead"
+                      type="number"
+                      min="1"
+                      max="10"
+                      step="0.1"
+                      value="3"
+                  /></label>
+                </div>
+                <label class="check"
+                  ><input id="lowerEarly" type="checkbox" checked />Lower
+                  early</label
+                >
+                <label class="check"
+                  ><input id="tight" type="checkbox" checked />Tight-turn
+                  correction</label
+                >
+                <label
+                  >Correction limit (m; 0 = default)<input
+                    id="tightDistance"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value="0"
+                /></label>
+              </div>
+            </details>
+            <details class="settings-group" name="bench-settings">
+              <summary>Comparison</summary>
+              <div class="settings-body">
+                <label
+                  >Extra clearance <output id="extension-value">0 m</output
+                  ><input
+                    id="extension"
+                    type="range"
+                    min="0"
+                    max="40"
+                    step="1"
+                    value="0"
+                /></label>
+                <p>
+                  Added to the minimum straight exit distance before turning.
+                  Lifting may already take the implement farther, so a small
+                  addition can produce no change.
+                </p>
+                <p>
+                  Choose more than 0 m, then Set configuration to enable the
+                  Extra clearance and Overlay tabs. This does not enlarge the
+                  field.
+                </p>
+                <p>
+                  Amber outlines show a rejected route and its sampled envelope
+                  where more boundary clearance is needed. Increase headland
+                  rows to move the working rows inwards before trying again.
+                </p>
+              </div>
+            </details>
+          </div>
+          <div class="settings-actions">
+            <p id="configuration-status" role="status">
+              Prepare your settings, then start the run.
+            </p>
+            <button class="primary" type="submit" id="run">
+              <i data-lucide="flask-conical"></i>Set configuration
+            </button>
+          </div>
+        </form>
+      </aside>
+      <div class="workspace">
+        <div class="toolbar">
+          <div class="tabs" role="group" aria-label="Simulation view">
+            <button data-view="baseline" aria-pressed="true">Baseline</button
+            ><button data-view="experiment" aria-pressed="false">
+              Extra clearance</button
+            ><button data-view="overlay" aria-pressed="false">Overlay</button>
+          </div>
+          <div class="tools">
+            <label><input id="show-turns" type="checkbox" /> Show turns</label>
+            <label
+              ><input id="show-clearance" type="checkbox" /> Clearance
+              details</label
+            >
+            <button
+              id="fit"
+              class="icon"
+              title="Fit view"
+              aria-label="Fit view"
+            >
+              <i data-lucide="scan"></i></button
+            ><button
+              id="load"
+              class="icon"
+              title="Load saved setup"
+              aria-label="Load saved setup"
+            >
+              <i data-lucide="folder-open"></i></button
+            ><input
+              id="setup-file"
+              type="file"
+              accept=".json,application/json"
+              hidden
+            /><button
+              id="download"
+              class="icon"
+              title="Export run and source hashes"
+              aria-label="Export run and source hashes"
+            >
+              <i data-lucide="download"></i>
+            </button>
+          </div>
+        </div>
+        <div id="error" role="alert" hidden></div>
+        <div class="metrics" aria-live="polite">
+          <div>
+            <span id="error-label">Entry lateral error</span
+            ><strong id="metric-error">--</strong>
+          </div>
+          <div>
+            <span id="angle-label">Entry angle</span
+            ><strong id="metric-angle">--</strong>
+          </div>
+          <div>
+            <span id="gap-label">Missed area / first 20 m</span
+            ><strong id="metric-gap">--</strong>
+          </div>
+          <div>
+            <span>Model envelope depth</span
+            ><strong id="metric-depth">--</strong>
+          </div>
+        </div>
+        <div class="telemetry" aria-live="polite">
+          <span
+            >Exit missed / sampled row ends
+            <strong id="metric-exit-gap">--</strong></span
+          >
+          <span
+            >Exit working overshoot
+            <strong id="metric-exit-over">--</strong></span
+          >
+        </div>
+        <p id="course-status" class="hint" hidden></p>
+        <div id="stage">
+          <canvas
+            id="canvas"
+            aria-label="Top-down tractor and trailed implement simulation with work coverage and headland boundary"
+          ></canvas>
+          <div class="stage-label">
+            <span id="run-label">Baseline</span
+            ><span id="state">Preparing</span>
+          </div>
+          <div id="shortfall"></div>
+          <div class="scale-label">Metres / planar model</div>
+        </div>
+        <div class="legend">
+          <span><b class="swatch route"></b>CP route</span
+          ><span><b class="swatch tractor"></b>Tractor</span
+          ><span><b class="swatch implement"></b>Implement</span
+          ><span><b class="swatch worked"></b>Worked</span
+          ><label
+            ><input type="checkbox" id="gaps" checked /><b
+              class="swatch gap"
+            ></b
+            >Final missed coverage</label
+          ><span><b class="swatch experimental"></b>Extra clearance</span>
+          <span><b class="swatch reverse"></b>Reverse route</span>
+        </div>
+        <div class="playback">
+          <button
+            id="restart"
+            class="icon"
+            title="Restart"
+            aria-label="Restart"
+          >
+            <i data-lucide="rotate-ccw"></i></button
+          ><button
+            id="play"
+            class="icon start-run"
+            title="Start run"
+            aria-label="Start run"
+            disabled
+          >
+            <i data-lucide="play"></i></button
+          ><button
+            id="step"
+            class="icon"
+            title="Step forward"
+            aria-label="Step forward"
+          >
+            <i data-lucide="step-forward"></i></button
+          ><input
+            id="timeline"
+            type="range"
+            min="0"
+            max="100"
+            value="0"
+            step="1"
+            aria-label="Playback position"
+          /><output id="time">0.0 s</output
+          ><select id="rate" aria-label="Playback speed">
+            <option value="1">1x</option>
+            <option value="2">2x</option>
+            <option value="4" selected>4x</option>
+            <option value="8">8x</option>
+          </select>
+        </div>
+        <div class="telemetry">
+          <span>Working-edge error <strong id="live-error">--</strong></span
+          ><span>Implement angle <strong id="live-angle">--</strong></span
+          ><span>Course offset <strong id="live-offset">--</strong></span
+          ><span>Waypoint <strong id="live-ix">--</strong></span>
+        </div>
+        <section class="events">
+          <h2>Event Trace</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Event</th>
+                <th>Implement angle</th>
+                <th>Lateral error</th>
+              </tr>
+            </thead>
+            <tbody id="events"></tbody>
+          </table>
+        </section>
+      </div>
+    </main>
+    <dialog id="provenance">
+      <div class="dialog-heading">
+        <h2>Model Provenance</h2>
+        <button id="close-info" class="icon" aria-label="Close" title="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <dl>
+        <dt>Production Lua</dt>
+        <dd>
+          Dubins turn generation, turn-end target and extension, tight-turn
+          correction, sharp headland-corner generation, marker-based raising,
+          forward/reverse lowering decisions and single-trailer heading
+          integration.
+        </dd>
+        <dt>Runtime parity is incomplete</dt>
+        <dd>
+          CP's sharp-corner paths, single rear-implement finishing sequence and
+          direction-switch controls are represented, but its PPC,
+          collision-aware pathfinding, complete implement controller events,
+          combine/chained-implement logic and live geometry are not. A completed
+          playback is not an in-game feasibility result.
+        </dd>
+        <dt>Test-only model</dt>
+        <dd>
+          Flat ground, bounded-curvature pursuit, single passive trailer,
+          rectangular working envelope and timed raising/lowering. Steering
+          profiles supply illustrative radius/hitch values, not GIANTS vehicle
+          physics. Plough turnover, collisions, slip and articulated chassis
+          dynamics are not simulated.
+        </dd>
+        <dt>Measurements</dt>
+        <dd>
+          Complete-course playback does not report coverage totals; use
+          central-pass tests for sampled entry and exit coverage. Missed
+          coverage uses a 0.25 m cell-centre raster of the first 20 m of the
+          incoming row and the last 20 m of the outgoing row. Final missed
+          coverage is independent of playback time. Envelope depth is this run's
+          maximum extent, not a certified minimum headland recommendation.
+        </dd>
+        <dt>Comparison</dt>
+        <dd>
+          Extra clearance increases the minimum turn-start distance into the
+          headland; raising may already require more space than that minimum. It
+          is an experiment, not an implemented Courseplay fix. The 45-degree
+          case is synthetic, not a replay of the game log.
+        </dd>
+        <dt>Calibration</dt>
+        <dd>
+          PW 100-12 dimensions are approximate and partially based on the
+          supplied log. Row exit uses CP's raise predicate with an approximate
+          hydraulic timer; the rig waits until that timer expires before
+          turning. The rectangular work envelope stays fully active until then:
+          individual plough shares and progressive lifting are not modelled.
+          Steering profiles are illustrative radius/hitch presets, not
+          measurements of GIANTS tractors. Real-time logs of tractor, hitch and
+          working markers are still needed for calibration.
+        </dd>
+        <dt>Turn types</dt>
+        <dd>
+          Dubins row turns include driven exit, turn and entry. Reeds-Shepp
+          three-point turns and 90-degree headland loops use CP's route
+          generators with planar movement. CP's analytic boundary fallback adds
+          reversing when permitted; trailer steering uses AIReverseDriver's
+          hitch correction. Complete courses include headlands, rows and
+          connecting turns. GIANTS physics, traffic coordination, plough
+          turnover and the game's full dynamic obstacle pathfinder remain
+          outside this offline model.
+        </dd>
+      </dl>
+      <h3>Loaded Source Fingerprints</h3>
+      <pre id="hashes"></pre>
+    </dialog>
+  </body>
+</html>

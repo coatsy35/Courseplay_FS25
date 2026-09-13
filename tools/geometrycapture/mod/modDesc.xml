@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<modDesc descVersion="105">
+    <author>DC development</author>
+    <version>0.1.0.0</version>
+    <title><en>Vehicle Geometry Capture</en></title>
+    <description><en>Independent machine geometry and movement capture for the Courseplay turn bench. Ctrl+Alt+G opens the capture panel. Exports to modSettings/VehicleGeometryCapture. Development diagnostic; no steering or vehicle settings are changed.</en></description>
+    <iconFilename>icon.dds</iconFilename>
+    <multiplayer supported="false"/>
+    <extraSourceFiles><sourceFile filename="Geometry.lua"/><sourceFile filename="Capture.lua"/></extraSourceFiles>
+    <actions>
+        <action name="VGC_PANEL"/><action name="VGC_NEXT"/><action name="VGC_CLASS"/>
+        <action name="VGC_STATE"/><action name="VGC_CAPTURE"/><action name="VGC_RECORD"/>
+    </actions>
+    <inputBinding>
+        <actionBinding action="VGC_PANEL"><binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_lalt KEY_g"/></actionBinding>
+        <actionBinding action="VGC_NEXT"><binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_lalt KEY_n"/></actionBinding>
+        <actionBinding action="VGC_CLASS"><binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_lalt KEY_t"/></actionBinding>
+        <actionBinding action="VGC_STATE"><binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_lalt KEY_l"/></actionBinding>
+        <actionBinding action="VGC_CAPTURE"><binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_lalt KEY_c"/></actionBinding>
+        <actionBinding action="VGC_RECORD"><binding device="KB_MOUSE_DEFAULT" input="KEY_lctrl KEY_lalt KEY_r"/></actionBinding>
+    </inputBinding>
+    <l10n>
+        <text name="input_VGC_PANEL"><en>Capture: show panel</en></text>
+        <text name="input_VGC_NEXT"><en>Capture: next machine</en></text>
+        <text name="input_VGC_CLASS"><en>Capture: machine category</en></text>
+        <text name="input_VGC_STATE"><en>Capture: state label</en></text>
+        <text name="input_VGC_CAPTURE"><en>Capture: save geometry</en></text>
+        <text name="input_VGC_RECORD"><en>Capture: start/stop recording</en></text>
+    </l10n>
+</modDesc>
