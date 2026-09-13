@@ -21,7 +21,7 @@ This workflow does not create a release or change `main`.
 
 1. Merge the tested changes into `main` and set the intended four-part version
    in `modDesc.xml` (for example, `8.1.0.4`).
-2. Open **Actions > Publish Live Release > Run workflow** and select `main`.
+2. Open **Actions > Prepare Live Release > Run workflow** and select `main`.
 3. Run it to publish the version tag, release notes and `FS25_Courseplay.zip`.
 
 The release is marked Latest and uses the exact `main` commit selected when the
