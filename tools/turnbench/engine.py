@@ -23,6 +23,7 @@ SOURCES = [
     'scripts/courseGenerator/RowPattern.lua', 'config/VehicleConfigurations.xml',
     'scripts/ai/AIReverseDriver.lua',
     'tools/turnbench/full_course.py', 'scripts/ai/turns/Corner.lua',
+    'tools/turnbench/alignment.py', 'tools/turnbench/aligned_turn.py',
 ]
 
 
@@ -100,6 +101,11 @@ class Scenario:
     islandCount: int = 0
     islandSize: float = 15
     bypassIslands: bool = True
+    alignedPlanner: bool = False
+    approachLength: float = 0  # Experimental final straight; zero preserves CP.
+    boundarySlope: float = 0  # Local inner boundary z = slope*x.
+    turnBias: float = 0  # Lateral placement of the final curved pull-in.
+    finalStraight: float = 4
     islandHeadlands: int = 1
     islandClockwise: bool = True
 
@@ -121,7 +127,9 @@ class Scenario:
                   'fieldLength': (100, 1000), 'fieldWidth': (100, 1000), 'rowSpacing': (0, 2000),
                   'irregularInset': (10, 55), 'rowAngle': (0, 180), 'edgeAngle': (5, 45), 'headlandOverlap': (0, 25), 'targetZ': (-2000, 2000),
                   'lowerSeconds': (0, 10), 'raiseSeconds': (0, 10), 'lookahead': (1, 10),
-                  'extension': (0, 40), 'entryAngle': (-70, 70), 'tightDistance': (0, 100)}
+                  'extension': (0, 40), 'entryAngle': (-70, 70), 'tightDistance': (0, 100),
+                  'approachLength': (0, 150), 'boundarySlope': (-1, 1), 'turnBias': (-12, 12),
+                  'finalStraight': (1, 30)}
         for key, (lo, hi) in bounds.items():
             value = getattr(p, key)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lo <= value <= hi:
@@ -129,7 +137,7 @@ class Scenario:
         for key in ('entry', 'drill', 'lowerEarly', 'raiseLate', 'tight', 'articulated', 'pattern', 'enforceBoundary','courseLayout','headlandFirst','clockwise','custom','mounted'):
             if type(getattr(p, key)) is not bool:
                 raise ValueError(f'{key} must be boolean')
-        for key in ('targetExplicit','reverseCourse','allowReverse','fullCourse','centreClockwise','spiralFromInside','sharpenCorners','loopTurnsOnHeadland',
+        for key in ('alignedPlanner','targetExplicit','reverseCourse','allowReverse','fullCourse','centreClockwise','spiralFromInside','sharpenCorners','loopTurnsOnHeadland',
                     'autoRowAngle','evenRowWidth','useBaseline','sameTurnWidth','narrowField','bypassIslands','islandClockwise'):
             if type(getattr(p,key)) is not bool:
                 raise ValueError(f'{key} must be boolean')
@@ -261,7 +269,10 @@ def simulate_exit(p, bridge, dt, start=None, final=False):
         hitch = point(x,z,theta,along=-p.hitch)
         axle = point(*hitch,phi,along=0 if p.mounted else -p.length)
         work = point(*axle,phi,along=(0 if p.mounted else p.length)+p.hitch-p.front)
-        if requested_at is None and bridge.g.shouldRaise(bridge.rig,*work,phi,p.width,p.back-p.front):
+        rear_edges = [point(*work,phi,across=a,along=-(p.back-p.front)) for a in (-p.width/2,p.width/2)]
+        clear = (min(v[1]-p.boundarySlope*v[0] for v in rear_edges) >= 0
+                 if p.alignedPlanner else bridge.g.shouldRaise(bridge.rig,*work,phi,p.width,p.back-p.front))
+        if requested_at is None and clear:
             requested_at = now
             events.append({'time':round(now,2),'kind':'Raise requested','angle':0,'error':0})
         if requested_at is not None and not inactive and now-requested_at >= p.raiseSeconds:
@@ -325,12 +336,13 @@ def route_preview(p, bridge):
 def drive_guidance(p,bridge,path,ix,x,z,theta,phi,axle):
     """Bounded-curvature pursuit with gear-local progress and CP trailer reverse correction."""
     reverse=bool(path[ix].get('reverse'))
+    tractor_path = p.approachLength and p.turnType == 'reedsShepp'
     end=path[ix].get('legEnd',ix)
     while 'legEnd' not in path[ix] and end+1<len(path) and bool(path[end+1].get('reverse'))==reverse:
         end+=1
     def nav(w):
         return point(w['x'],w['z'],w['t'],across=0 if w.get('reverse') else -w.get('offset',0))
-    rx,rz=axle if reverse and not p.mounted else (x,z)
+    rx,rz=axle if reverse and not p.mounted and not tractor_path else (x,z)
     ix=min(range(ix,min(ix+15,end+1)),key=lambda i:(nav(path[i])[0]-rx)**2+(nav(path[i])[1]-rz)**2)
     reached=math.hypot(path[end]['x']-rx,path[end]['z']-rz)<.75
     if end>0 and bool(path[end-1].get('reverse'))==reverse:
@@ -349,7 +361,7 @@ def drive_guidance(p,bridge,path,ix,x,z,theta,phi,axle):
         end=path[ix].get('legEnd',ix)
         while 'legEnd' not in path[ix] and end+1<len(path) and bool(path[end+1].get('reverse'))==reverse:
             end+=1
-        rx,rz=axle if reverse and not p.mounted else (x,z)
+        rx,rz=axle if reverse and not p.mounted and not tractor_path else (x,z)
     goal=ix
     while goal<end and math.hypot(nav(path[goal])[0]-rx,nav(path[goal])[1]-rz)<p.lookahead:
         goal+=1
@@ -359,7 +371,7 @@ def drive_guidance(p,bridge,path,ix,x,z,theta,phi,axle):
     gx,gz=point(wp['x'],wp['z'],wp['t'],across=0 if reverse else -wp.get('offset',0))
     dx,dz=gx-x,gz-z
     curvature=2*(dx*math.cos(theta)-dz*math.sin(theta))/max(.01,dx*dx+dz*dz)
-    if reverse and not p.mounted:
+    if reverse and not p.mounted and not tractor_path:
         ref=path[ix]
         if ix<end:
             path_angle=math.atan2(path[ix+1]['x']-ref['x'],path[ix+1]['z']-ref['z'])
@@ -375,6 +387,7 @@ def drive_guidance(p,bridge,path,ix,x,z,theta,phi,axle):
 
 
 def simulate(p, dt=0.025, start=None, stop_distance=25):
+    from alignment import assess_envelope
     bridge = Bridge(p)
     exit_frames, exit_events, exit_gaps = [], [], []
     exit_overshoot, time_offset = 0, 0
@@ -383,7 +396,7 @@ def simulate(p, dt=0.025, start=None, stop_distance=25):
         exit_gaps = exit_coverage.gaps()
         time_offset = exit_frames[-1]['time']
         bridge = Bridge(p,turn_pose=exit_frames[-1])
-    if not p.entry and p.turnType != 'dubins':
+    if not p.entry and p.turnType != 'dubins' and not p.approachLength:
         from full_course import drive_course
         target=dict(bridge.rig.workStart)
         nav=[dict(w,working=False,phase='Turn',row=0,headland=0,offset=bridge.g.changeWaypoint(bridge.rig,i+1),
@@ -414,10 +427,12 @@ def simulate(p, dt=0.025, start=None, stop_distance=25):
     frames, events = [], []
     ix, last_ix, offset = 0, -1, 0
     commanded, lowered, lower_at = False, False, None
+    contact_started = False
+    previous_entry_pose = None
     entry_error = None
     coverage = Coverage(p.width, target)
     max_z, max_articulation = -math.inf, 0
-    sample_every = max(1, round(.1/dt))
+    sample_every = 1 if p.approachLength else max(1, round(.1/dt))
     previous_bar = None
     complete = False
     for tick in range(int((240+stop_distance/p.speed)/dt)):
@@ -438,35 +453,59 @@ def simulate(p, dt=0.025, start=None, stop_distance=25):
         if reverse:
             _,curvature,_ = drive_guidance(p,bridge,path,ix,x,z,theta,phi,axle)
         speed = 0 if p.drill and commanded and not lowered else (-p.reverseSpeed if reverse else p.speed)
+        if p.approachLength:
+            speed = -p.reverseSpeed if reverse else p.speed
+        rear = point(*work,phi,along=-(p.back-p.front))
+        alignment = assess_envelope(work,rear,phi,p.width,(target,p.targetZ),math.pi)
+        front_edges = [point(*work,phi,across=a) for a in (-p.width/2,p.width/2)]
+        boundary_distance = min(v[1]-p.boundarySlope*v[0] for v in front_edges)
         should_lower, _ = bridge.g.shouldLower(bridge.rig,*work,phi,p.width,p.back-p.front,abs(speed))
+        if p.approachLength:
+            should_lower = not reverse and alignment.aligned and 0 <= boundary_distance <= p.speed*p.lowerSeconds+.5
+            if commanded and not alignment.aligned and not contact_started:
+                commanded,lowered,lower_at = False,False,None
+                events.append({'time':round(now,2),'kind':'Lowering cancelled: alignment lost',
+                               'angle':math.degrees(alignment.angle),'error':alignment.edge_error})
         if not commanded and path[ix]['lower'] and should_lower:
             commanded, lower_at = True, now
             events.append({'time':round(now,2),'kind':'Lower requested',
                            'angle':round(math.degrees(wrap(phi-math.pi)),2),
-                           'error':round(work[0]-target,3)})
+                           'error':round(work[0]-target,3),
+                           'edgeError':alignment.edge_error,'aligned':alignment.aligned})
         if commanded and not lowered and now-lower_at >= p.lowerSeconds:
             lowered = True
-            events.append({'time':round(now,2),'kind':'Working envelope active',
+            events.append({'time':round(now,2),'kind':'Implement lowered' if p.approachLength else 'Working envelope active',
                            'angle':round(math.degrees(wrap(phi-math.pi)),2),
                            'error':round(work[0]-target,3)})
         left = point(*work,phi,across=p.width/2)
         right = point(*work,phi,across=-p.width/2)
         rear_left = point(*left,phi,along=-(p.back-p.front))
         rear_right = point(*right,phi,along=-(p.back-p.front))
-        if lowered:
-            coverage.stamp([[a,b-p.targetZ] for a,b in [left,right,rear_right,rear_left]])
+        if p.approachLength and commanded and not lowered:
+            # Brake before first contact if hydraulic travel would overrun it.
+            speed = min(speed,max(0,(boundary_distance-.02)/dt))
+        working = lowered and (not p.approachLength or boundary_distance <= 0)
+        if p.approachLength and working and not contact_started:
+            contact_started = True
+            events.append({'time':round(now,2),'kind':'Working envelope active',
+                           'angle':math.degrees(alignment.angle),'error':alignment.edge_error})
+        if working:
+            coverage.stamp([[a,b-(p.boundarySlope*a if p.approachLength else p.targetZ)]
+                            for a,b in [left,right,rear_right,rear_left]])
             if previous_bar:
-                coverage.stamp([[a,b-p.targetZ] for a,b in [previous_bar[0],previous_bar[1],right,left]])
+                coverage.stamp([[a,b-(p.boundarySlope*a if p.approachLength else p.targetZ)]
+                                for a,b in [previous_bar[0],previous_bar[1],right,left]])
             previous_bar = [left,right]
-        if entry_error is None and work[1] <= p.targetZ and math.cos(theta) < -0.5:
+        if entry_error is None and (not p.approachLength or (not reverse and path[ix]['lower'])) and (boundary_distance <= 0 if p.approachLength else work[1] <= p.targetZ) and math.cos(theta) < -0.5:
             entry_x,entry_phi=work[0],phi
-            if previous_entry_pose and previous_entry_pose[1]>p.targetZ:
+            if not p.approachLength and previous_entry_pose and previous_entry_pose[1]>p.targetZ:
                 px,pz,pphi=previous_entry_pose
                 fraction=(pz-p.targetZ)/(pz-work[1])
                 entry_x=px+fraction*(work[0]-px)
                 entry_phi=wrap(pphi+fraction*wrap(phi-pphi))
             entry_error = {'angle':round(math.degrees(wrap(entry_phi-math.pi)),2),
-                           'lateral':round(entry_x-target,3),'lowered':lowered}
+                           'lateral':round(entry_x-target,3),'lowered':working,
+                           'edgeError':alignment.edge_error,'aligned':alignment.aligned}
         previous_entry_pose=(work[0],work[1],phi)
         articulation = abs(math.degrees(wrap(theta-phi)))
         max_articulation = max(max_articulation,articulation)
@@ -475,13 +514,15 @@ def simulate(p, dt=0.025, start=None, stop_distance=25):
         if tick % sample_every == 0:
             frames.append({'time':round(now,2),'x':x,'z':z,'theta':theta,'phi':phi,
                            'hitch':hitch[:],'axle':axle[:],'work':work[:], 'left':left,'right':right,
-                           'rearLeft':rear_left,'rearRight':rear_right,'lowered':lowered,
-                           'state':'Reversing' if reverse else ('Working' if lowered else ('Lowering' if commanded else 'Approach')),
+                           'rearLeft':rear_left,'rearRight':rear_right,'lowered':working,
+                           'hydraulicallyLowered':lowered,'envelopeAligned':alignment.aligned,
+                           'edgeError':alignment.edge_error,
+                           'state':'Reversing' if reverse else ('Working' if working else ('Lowering' if commanded and not lowered else 'Approach')),
                            'reverse':reverse,
                            'phase':'entry' if commanded else 'turn',
                            'offset':offset,'ix':ix+1,'angle':math.degrees(wrap(phi-math.pi)),
                            'error':work[0]-target})
-        if tick % sample_every == 0 and work[1] < p.targetZ-stop_distance and math.cos(theta) < -0.5:
+        if tick % sample_every == 0 and (not p.approachLength or (not reverse and path[ix]['lower'])) and work[1] < p.targetZ-stop_distance and math.cos(theta) < -0.5:
             complete = True
             break
         old_hitch = hitch
@@ -496,7 +537,7 @@ def simulate(p, dt=0.025, start=None, stop_distance=25):
             phi = theta if p.mounted else wrap(bridge.g.nextTrailerHeading(phi,math.atan2(hx,hz),math.hypot(hx,hz),p.length))
         axle = point(*hitch,phi,along=0 if p.mounted else -p.length)
         work = point(*axle,phi,along=(0 if p.mounted else p.length)+p.hitch-p.front)
-    gaps = [[x,z+p.targetZ] for x,z in coverage.gaps()]
+    gaps = [[x,z+(p.boundarySlope*x if p.approachLength else p.targetZ)] for x,z in coverage.gaps()]
     return {'path':path,'frames':exit_frames[:-1]+frames,'events':exit_events+events,
             'gaps':gaps,'exitGaps':exit_gaps,'resolution':coverage.resolution,'preview':False,
             'target':dict(bridge.rig.workStart),
@@ -733,6 +774,9 @@ def segment_clearance(a,b,c,d):
 
 def compare(data):
     p = Scenario.parse(data)
+    if p.alignedPlanner:
+        from aligned_turn import compare_aligned
+        return compare_aligned(p)
     if p.courseLayout:
         generated=generate_layout(p)
         if p.fullCourse:

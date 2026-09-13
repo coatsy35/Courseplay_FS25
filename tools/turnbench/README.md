@@ -5,6 +5,24 @@ install a game ZIP, create GitHub Actions or require Farming Simulator to be run
 
 See [the CP parity audit](CP_PARITY_AUDIT.md) for verified source mappings and outstanding runtime gaps.
 
+## Experimental aligned entries
+
+Open `http://127.0.0.1:56514/?mode=aligned` when using that server port, or choose
+**Field & pattern → Run mode → Aligned entry comparison**. Set configuration,
+then start playback. The original CP baseline remains a separate tab.
+
+- Rectangle tests ordinary row entries; sloping tests pikes.
+- **Rows across to next pass** tests short-to-long row transitions. For example,
+  twelve PW widths at 25 degrees places the next entry 31.3 m farther out.
+- More headland rows allow the planner to place the turn farther out when useful.
+- Reversing enabled also tests K-type candidates. An unsuitable reversing turn
+  is rejected rather than assumed feasible because the tractor alone fits.
+
+The steering-led prototype uses the whole working envelope and a curved pull-in;
+it does not require a fixed 20 m straight. See
+[the planner notes](../../docs/envelope-turn-planner.md) for measured examples,
+model limits and the remaining in-game integration.
+
 ## Run
 
 Requires Python 3.10+ with a Lupa wheel available for that Python/platform. From the repository root:

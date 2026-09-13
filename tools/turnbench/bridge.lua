@@ -128,7 +128,32 @@ function makeRig(p)
     context.getHeadlandAngle=function() return math.pi/2 end
     context.getTurnEndForwardOffset=function(self) return self.turnEndForwardOffset end
     local course
-    if p.entry then
+    if p.approachLength and p.approachLength > 0 then
+        -- Experimental endpoint: finish the curve on the incoming row, then
+        -- pull straight before the front working marker reaches the boundary.
+        local bias=p.turnBias or 0
+        local solver=PathfinderUtil.dubinsSolver
+        if p.turnType=='reedsShepp' then
+            solver=p.side<0 and LeftTurnReedsSheppSolver() or RightTurnReedsSheppSolver()
+        end
+        local path=PathfinderUtil.findAnalyticPath(solver,
+            node,0,0,workStart,bias,p.front-p.approachLength,p.radius)
+        if not path and p.turnType=='reedsShepp' then
+            path=PathfinderUtil.findAnalyticPath(PathfinderUtil.reedsSheppSolver,
+                node,0,0,workStart,bias,p.front-p.approachLength,p.radius)
+        end
+        course=Course.createFromAnalyticPath(vehicle,path,true)
+        local tail={}
+        local bend=math.max(1,p.approachLength-(p.finalStraight or 4))
+        for d=.5,p.approachLength+80,.5 do
+            local u=math.min(1,d/bend)
+            local lateral=bias*(1-3*u*u+2*u*u*u)
+            local x,_,z=localToWorld(workStart,lateral,0,p.front-p.approachLength+d)
+            tail[#tail+1]={x=x,z=z,
+                turnControls={[TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END]=true}}
+        end
+        course:appendWaypoints(tail)
+    elseif p.entry then
         local points={}
         for z=10,-80,-1 do table.insert(points,{x=workStart.x,z=z}) end
         course=Course(vehicle,points,true)

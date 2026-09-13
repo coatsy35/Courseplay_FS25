@@ -211,9 +211,14 @@
                     </option>
                     <option value="field">Selected passes / turn test</option>
                     <option value="single">Single turn</option>
+                    <option value="aligned">Aligned entry comparison</option>
                   </select></label
                 >
                 <p id="run-mode-note"></p>
+                <label id="entry-rows-label" hidden>Rows across to next pass
+                  <input id="entryRows" type="number" min="1" max="24" step="1" value="1" />
+                  <span>Use more than one to test leaving a short pike run for a longer row farther across the field.</span>
+                </label>
                 <label id="course-direction-label"
                   >Drive course from<select id="courseDirection">
                     <option value="start">Start point</option>

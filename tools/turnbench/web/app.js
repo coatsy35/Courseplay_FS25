@@ -186,6 +186,8 @@ function scenario() {
     lowerEarly: $("lowerEarly").checked,
     raiseLate: $("raiseLate").checked,
     loopTurnsOnHeadland: $("loopTurnsOnHeadland").checked,
+    alignedPlanner: $("pattern").value === "aligned",
+    rowSpacing: $("pattern").value === "aligned" ? p.width*Number($("entryRows").value) : 0,
     turnType: $("turnType").value,
     tight: $("tight").checked,
   };
@@ -219,9 +221,9 @@ function chooseView(next) {
   $("timeline").max = selected().frames.length - 1;
   $("run-label").textContent =
     view === "overlay"
-      ? "Baseline + extra clearance"
+      ? (result.planner ? "CP + aligned entry" : "Baseline + extra clearance")
       : view === "experiment"
-        ? "Extra clearance"
+        ? (result.planner ? "Aligned entry" : "Extra clearance")
         : "Baseline";
   updateMetrics();
   updateEvents();
@@ -254,6 +256,7 @@ async function run(event) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Simulation failed");
     result = data;
+    document.querySelector('[data-view="experiment"]').textContent = data.planner ? "Aligned entry" : "Extra clearance";
     preparedConfiguration = configuration;
     document.querySelectorAll("[data-view]").forEach((b) => {
       b.disabled = b.dataset.view !== "baseline" && !data.experiment;
@@ -269,7 +272,7 @@ async function run(event) {
     $("hashes").textContent = Object.entries(data.sources)
       .map(([file, hash]) => `${file}\n${hash}`)
       .join("\n\n");
-    chooseView(data.experiment ? view : "baseline");
+    chooseView(data.planner && data.experiment ? "experiment" : data.experiment ? view : "baseline");
   } catch (error) {
     result = null;
     ctx.clearRect(0, 0, size.w, size.h);
@@ -297,7 +300,7 @@ async function run(event) {
 }
 function updateMetrics() {
   const fleet = selected().fleet;
-  $("course-status").hidden = !fleet;
+  $("course-status").hidden = !fleet && !result.planner;
   $("course-status").textContent = fleet
     ? "Playback check: " +
       fleet
@@ -309,7 +312,11 @@ function updateMetrics() {
       (selected().generatorErrors.length
         ? ` · CP: ${selected().generatorErrors.join("; ")}`
         : "")
-    : "";
+    : result.planner
+      ? result.planner.feasible
+        ? `${result.planner.manoeuvre} verified in the model · ${result.planner.finalStraight} m final straight · ${Math.abs(result.planner.turnBias)} m pull-in offset · ${result.planner.rowEndDifference} m between row ends · ${result.planner.attempted} candidates checked`
+        : result.planner.message
+      : "";
   const m = selected().metrics;
   const field = Boolean(selected().field);
   $("error-label").textContent = field
@@ -495,7 +502,14 @@ function fit() {
   if (selected().layout) {
     // Bounds already include the entire generated course and polygon.
   } else if (selected().field?.boundary) {
-    addPoints(selected().field.boundary);
+    if (result.planner) {
+      const r=selected(), xs=r.frames.map(f=>f.x);
+      const west=Math.max(r.field.west,Math.min(...xs)-12);
+      const east=Math.min(r.field.east,Math.max(...xs)+12);
+      const slope=p.boundarySlope || 0;
+      addPoints([[west,slope*west+p.headland*Math.hypot(1,slope)],
+                 [east,slope*east+p.headland*Math.hypot(1,slope)]]);
+    } else addPoints(selected().field.boundary);
     addPoints(selected().paths.flat());
   } else if (selected().field) {
     points.push(
@@ -984,11 +998,14 @@ function updateControls() {
   const preview = $("pattern").value === "layout";
   const layout = $("pattern").value === "layout";
   const complete = $("pattern").value === "course";
+  const aligned = $("pattern").value === "aligned";
+  $("entry-rows-label").hidden = !aligned;
+  $("entryRows").disabled = !aligned;
   const generated =
     layout ||
     complete ||
     ($("pattern").value === "field" && $("fieldShape").value !== "rectangle");
-  $("turnType").disabled = entry || layout;
+  $("turnType").disabled = entry || layout || aligned;
   $("side").disabled = layout || complete;
   $("raiseLate").disabled = entry || preview;
   $("raiseSeconds").disabled = entry || preview;
@@ -1000,7 +1017,7 @@ function updateControls() {
     "tightDistance",
   ])
     $(id).disabled = preview;
-  $("extension").disabled = entry;
+  $("extension").disabled = entry || aligned;
   $("pattern").disabled = entry;
   const field = !entry && !preview && $("pattern").value === "field";
   $("passes").disabled = !field;
@@ -1009,7 +1026,9 @@ function updateControls() {
   $("courseDirection").disabled = !(layout || complete);
   $("irregular-inset-label").hidden = $("fieldShape").value !== "irregular";
   $("irregularInset").disabled = $("fieldShape").value !== "irregular";
-  $("run-mode-note").textContent = complete
+  $("run-mode-note").textContent = aligned
+    ? "Experimental row-end comparison: rectangle for straight work, sloping for pikes. Increase headland rows to test more space. Searches for an aligned entry inside the modelled field; maximum model articulation is 85°, pending actual joint limits. Does not run a full field."
+    : complete
     ? "Drives the whole CP-generated field, including short rows and connections between sections. No pass count is needed. Set configuration, then press Start run."
     : field
       ? "Turn test only: drives the requested number of usable rows. Choose Full field to work every section in CP’s generated order."
@@ -1018,7 +1037,7 @@ function updateControls() {
         : "One isolated turn for geometry testing.";
   $("fieldLength").disabled = !field;
   if (layout || complete) $("fieldLength").disabled = false;
-  $("fieldWidth").disabled = !(layout || field || complete);
+  $("fieldWidth").disabled = !(layout || field || complete || aligned);
   $("enforceBoundary").disabled = layout;
   for (const id of [
     "rowAngle",
@@ -1257,7 +1276,7 @@ $("setup-file").onchange = async () => {
       throw new Error("Saved setup exceeds 64 MB");
     const saved = JSON.parse(await file.text());
     const source =
-      saved.experiment?.scenario || saved.baseline?.scenario || saved.scenario;
+      saved.scenario || saved.experiment?.scenario || saved.baseline?.scenario;
     const p = source && {
       raiseLate: true,
       raiseSeconds: 1,
@@ -1348,6 +1367,8 @@ $("setup-file").onchange = async () => {
     $("headlandRows").min = p.headlandRows === 0 ? "0" : "1";
     $("pattern").value = p.pattern ? "field" : "single";
     if (p.courseLayout) $("pattern").value = p.fullCourse ? "course" : "layout";
+    if (p.alignedPlanner) $("pattern").value = "aligned";
+    $("entryRows").value = p.rowSpacing ? p.rowSpacing/p.width : 1;
     $("fieldShape").value = p.fieldShape;
     $("slopeSide").value = p.slopeSide;
     $("courseDirection").value = p.reverseCourse ? "end" : "start";
@@ -1495,6 +1516,10 @@ $("config-search").addEventListener("keydown", (event) => {
     $("config-implement").focus();
   }
 });
+if (new URLSearchParams(location.search).get("mode") === "aligned") {
+  $("pattern").value = "aligned";
+  updateControls();
+}
 fetch("/api/implements")
   .then((r) => r.json())
   .then((data) => {
