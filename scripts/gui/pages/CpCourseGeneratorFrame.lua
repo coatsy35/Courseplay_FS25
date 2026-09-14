@@ -248,6 +248,7 @@ function CpCourseGeneratorFrame:initialize(menu)
 end
 
 function CpCourseGeneratorFrame:update(dt)
+    self:updateProfileGeneration()
 	if self.updateTime < g_time then
 		for i = 1, self.activeWorkerList:getItemCount() do
 			local element = self.activeWorkerList:getElementAtSectionIndex(1, i)
@@ -306,10 +307,99 @@ function CpCourseGeneratorFrame:update(dt)
 		end
 	end
 
-	CpCourseGeneratorFrame:superClass().update(self, dt)
+    local profileVehicle = self.cpMenu:getCurrentVehicle()
+    if self.fieldworkSettingsVisible and profileVehicle and
+        (profileVehicle ~= self.fieldworkProfileVehicle or
+         profileVehicle.cpImplementProfile ~= self.fieldworkProfileState or
+         profileVehicle.cpProfileRefreshAt ~= self.fieldworkProfileRefreshAt) then
+        self:updateSettings(profileVehicle)
+    end
+    CpCourseGeneratorFrame:superClass().update(self, dt)
+end
+
+-- Local UI selection; never persisted or streamed as a generator setting.
+function CpCourseGeneratorFrame:addImplementProfileSelector(layout, vehicle)
+    local manager = g_Courseplay.implementProfiles
+    self.fieldworkProfileVehicle = vehicle
+    self.fieldworkProfiles = manager:getMatchingProfiles(vehicle)
+    self.fieldworkProfileState = vehicle.cpImplementProfile
+    self.fieldworkProfileRefreshAt = vehicle.cpProfileRefreshAt
+    local values, texts = {0}, {g_i18n:getText('CP_implementProfiles_keepSettings')}
+    if #self.fieldworkProfiles == 0 then texts[1] = g_i18n:getText('CP_implementProfiles_noMatchingProfiles') end
+    local selected = 0
+    for i, profile in ipairs(self.fieldworkProfiles) do
+        values[#values + 1] = i
+        texts[#texts + 1] = profile.name
+        local active = vehicle.cpImplementProfile and vehicle.cpImplementProfile.profile
+        if active and active.id == profile.id and active.revision == profile.revision and
+            ImplementProfile.matchesSettings(vehicle, profile) then selected = i end
+    end
+    local selector = AIParameterSettingList({name = 'fieldworkImplementProfile',
+        title = 'CP_implementProfiles_selectorTitle', tooltip = 'CP_implementProfiles_selectorTooltip',
+        values = values, texts = texts, callbacks = {}}, nil, nil)
+    selector:setValue(selected, true)
+    selector.getIsDisabled = function() return #self.fieldworkProfiles == 0 or not manager:canChange(vehicle) end
+    selector.onClickCenter = function() self:loadFieldworkProfile() end
+    self.fieldworkProfileSelector = selector
+    local heading = self.sectionHeaderPrefab:clone(layout)
+    heading:setText(g_i18n:getText('CP_implementProfiles_setupHeading'))
+    FocusManager:loadElementFromCustomValues(heading)
+    local row = self.multiTextPrefab:clone(layout)
+    row:setImageColor(1, unpack(GuiUtils.getColorArray(g_gui.presets['fs25_colorGreyDark_50'])))
+    row.aiParameter = selector
+    local control = row:getDescendantByName('setting')
+    control:setDataSource(selector)
+    self.fieldworkProfileControl = control
+    FocusManager:loadElementFromCustomValues(control)
+end
+
+function CpCourseGeneratorFrame:saveFieldworkProfile()
+    local vehicle = self.cpMenu:getCurrentVehicle()
+    if not vehicle then return end
+    local equipment = ImplementProfile.signature(ImplementProfile.describe(vehicle))
+    TextInputDialog.show(function(_, name, accepted)
+        if not accepted then return end
+        if vehicle ~= self.cpMenu:getCurrentVehicle() or
+            equipment ~= ImplementProfile.signature(ImplementProfile.describe(vehicle)) then
+            InfoDialog.show(g_i18n:getText('CP_implementProfiles_mismatch'))
+            return
+        end
+        local profile, reason = g_Courseplay.implementProfiles:save(vehicle, name)
+        if not profile then
+            InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. (reason or 'saveFailed')))
+            return
+        end
+        self:updateSubCategoryPages(self.CATEGRORIES.BASIC_SETTINGS)
+        for i, saved in ipairs(self.fieldworkProfiles) do
+            if saved.id == profile.id then
+                self.fieldworkProfileSelector:setValue(i, true)
+                self.fieldworkProfileControl:setDataSource(self.fieldworkProfileSelector)
+                break
+            end
+        end
+    end, self, '', g_i18n:getText('CP_implementProfiles_name'),
+        g_i18n:getText('CP_implementProfiles_saveProfile'), 50)
+end
+
+function CpCourseGeneratorFrame:loadFieldworkProfile(confirmed)
+    local vehicle = self.cpMenu:getCurrentVehicle()
+    if vehicle ~= self.fieldworkProfileVehicle then return end
+    local profile = self.fieldworkProfiles and self.fieldworkProfiles[self.fieldworkProfileSelector:getValue()]
+    if not profile then return end
+    local course = vehicle:getFieldWorkCourse()
+    local width = profile.settings['generator.workWidth']
+    if not confirmed and course and type(width) == 'number' and math.abs((course:getWorkWidth() or 0) - width) > 0.05 then
+        YesNoDialog.show(function(_, accepted)
+            if accepted then self:loadFieldworkProfile(true) end
+        end, self, g_i18n:getText('CP_implementProfiles_courseWarning'))
+        return
+    end
+    local ok, reason = g_Courseplay.implementProfiles:requestApply(vehicle, profile)
+    if not ok then InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. reason)) end
 end
 
 function CpCourseGeneratorFrame:updateSettings(vehicle)
+    self.bindingProfileSettings = true
 	local settings = vehicle:getCourseGeneratorSettings()
 	local settingsBySubTitle = CpCourseGeneratorSettings.getSettingSetup()
 
@@ -317,6 +407,7 @@ function CpCourseGeneratorFrame:updateSettings(vehicle)
 	for i = #layout.elements, 1, -1 do
 		layout.elements[i]:delete()
 	end
+	self:addImplementProfileSelector(layout, vehicle)
 	CpSettingsUtil.generateAndBindGuiElementsToSettings(settingsBySubTitle,
 		layout, self.multiTextPrefab, self.booleanPrefab, 
 		self.sectionHeaderPrefab, settings)
@@ -332,6 +423,16 @@ function CpCourseGeneratorFrame:updateSettings(vehicle)
 		layout, self.multiTextPrefab, self.booleanPrefab, 
 		self.sectionHeaderPrefab, settings)
 	CpSettingsUtil.updateGuiElementsBoundToSettings(layout, vehicle)
+    for _, page in pairs(self.subCategoryPages) do
+        local settingsLayout = page:getDescendantByName('layout')
+        if settingsLayout then
+            for _, row in ipairs(settingsLayout.elements) do
+                local control = row.aiParameter and row:getDescendantByName('setting')
+                if control then control.cpDisplayedValue = row.aiParameter:getValue() end
+            end
+        end
+    end
+    self.bindingProfileSettings = false
 end
 
 function CpCourseGeneratorFrame:onFrameOpen()
@@ -500,6 +601,7 @@ function CpCourseGeneratorFrame:saveHotspotFilter()
 end
 
 function CpCourseGeneratorFrame:onFrameClose()
+    self.profileGenerationPending = nil
 	self:closeMap()
 	g_messageCenter:unsubscribeAll(self)
 	self.jobTypeInstances = {}
@@ -555,6 +657,15 @@ function CpCourseGeneratorFrame:onClickBack(force)
 end
 
 function CpCourseGeneratorFrame:onClickCpMultiTextOption(_, guiElement)
+    if self.bindingProfileSettings then return end
+    local source = guiElement.dataSource
+    local value = source and source:getValue()
+    local changed = value ~= guiElement.cpDisplayedValue
+    guiElement.cpDisplayedValue = value
+    if changed and source and self.fieldworkProfileSelector and source ~= self.fieldworkProfileSelector then
+        self.fieldworkProfileSelector:setValue(0, true)
+        self.fieldworkProfileControl:setDataSource(self.fieldworkProfileSelector)
+    end
 	CpSettingsUtil.updateGuiElementsBoundToSettings(guiElement.parent.parent, self.cpMenu:getCurrentVehicle())
 end
 
@@ -579,6 +690,11 @@ function CpCourseGeneratorFrame:updateCourseGenerator(visible, vehicle)
 end
 
 function CpCourseGeneratorFrame:updateSubCategoryPages(state)
+    self.fieldworkSettingsVisible = state == self.CATEGRORIES.BASIC_SETTINGS
+    if self.fieldworkSettingsVisible then
+        local vehicle = self.cpMenu:getCurrentVehicle()
+        if vehicle then self:updateSettings(vehicle) end
+    end
 	self.menuButtonInfo = table.clone(self.cpMenu.defaultMenuButtonInfo) 
 	for i, _ in ipairs(self.subCategoryPages) do
 		self.subCategoryPages[i]:setVisible(false)
@@ -593,7 +709,19 @@ function CpCourseGeneratorFrame:updateSubCategoryPages(state)
 		self.ingameMap:setVisible(false)
 		layout:invalidateLayout()
 		self.settingsSlider:setDataElement(layout)
-		FocusManager:setFocus(self.subCategoryPages[state])
+        FocusManager:setFocus(self.subCategoryPages[state])
+        if state == self.CATEGRORIES.BASIC_SETTINGS then
+            table.insert(self.menuButtonInfo, {
+                inputAction = InputAction.MENU_ACCEPT,
+                text = g_i18n:getText('CP_implementProfiles_saveProfile'),
+                callback = function() self:saveFieldworkProfile() end})
+        end
+        if state == self.CATEGRORIES.BASIC_SETTINGS and #(self.fieldworkProfiles or {}) > 0 then
+            table.insert(self.menuButtonInfo, {
+                inputAction = InputAction.MENU_EXTRA_1,
+                text = g_i18n:getText('CP_implementProfiles_loadProfile'),
+                callback = function() self:loadFieldworkProfile() end})
+        end
 		table.insert(self.menuButtonInfo, {
 			inputAction = InputAction.MENU_EXTRA_2,
 			text = g_i18n:getText("CP_ai_page_generate_course"),
@@ -1050,13 +1178,52 @@ function CpCourseGeneratorFrame:onStartCancelJob()
 	end
 end
 
-function CpCourseGeneratorFrame:generateFieldworkCourse()
-	if self.generateCoursePending then
+-- A client must receive the accepted settings before the generator reads them.
+function CpCourseGeneratorFrame:updateProfileGeneration()
+    local pending = self.profileGenerationPending
+    if not pending then return end
+    local vehicle = self.cpMenu:getCurrentVehicle()
+    if vehicle ~= pending.vehicle or self.currentJob ~= pending.job or
+        not self:getCanGenerateFieldWorkCourse() or vehicle.cpProfileApplyError then
+        self.profileGenerationPending = nil
+        return
+    end
+    local active = vehicle.cpImplementProfile and vehicle.cpImplementProfile.profile
+    if vehicle.cpImplementProfile ~= pending.previousState and active and
+        active.id == pending.profile.id and active.revision == pending.profile.revision and
+        ImplementProfile.matchesSettings(vehicle, pending.profile) then
+        self.profileGenerationPending = nil
+        self:generateFieldworkCourse(true)
+    elseif g_time > pending.deadline then
+        self.profileGenerationPending = nil
+        InfoDialog.show(g_i18n:getText('CP_error_could_not_generate_course'))
+    end
+end
+
+function CpCourseGeneratorFrame:generateFieldworkCourse(profileReady)
+	if self.generateCoursePending or self.profileGenerationPending then
 		return false
 	end
 	if not self:getCanGenerateFieldWorkCourse() then 
 		return false
 	end
+    local vehicle = self.cpMenu:getCurrentVehicle()
+    local profile = not profileReady and vehicle == self.fieldworkProfileVehicle and
+        self.fieldworkProfileSelector and self.fieldworkProfiles[self.fieldworkProfileSelector:getValue()]
+    if profile then
+        local previousState = vehicle.cpImplementProfile
+        vehicle.cpProfileApplyError = nil
+        local ok, reason = g_Courseplay.implementProfiles:requestApply(vehicle, profile)
+        if not ok then
+            InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. reason))
+            return false
+        end
+        if not vehicle.isServer then
+            self.profileGenerationPending = {vehicle = vehicle, job = self.currentJob,
+                profile = ImplementProfile.copy(profile), previousState = previousState, deadline = g_time + 10000}
+            return true
+        end
+    end
 	self.generateCoursePending = true
 	self.currentJob:onClickGenerateFieldWorkCourse(function(course)
 		self.generateCoursePending = false

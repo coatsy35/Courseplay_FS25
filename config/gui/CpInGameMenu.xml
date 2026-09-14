@@ -5,6 +5,7 @@
         id="pagingElement">
         <FrameReference ref="cpInGameMenuGlobalSettings" name="cpInGameMenuGlobalSettings" id="pageGlobalSettings" />
         <FrameReference ref="cpInGameMenuVehicleSettings" name="cpInGameMenuVehicleSettings" id="pageVehicleSettings" />
+        <FrameReference ref="cpInGameMenuImplementProfiles" name="cpInGameMenuImplementProfiles" id="pageImplementProfiles" />
         <FrameReference ref="cpInGameMenuCourseGenerator" name="cpInGameMenuCourseGenerator" id="pageCourseGenerator" />
         <FrameReference ref="cpInGameMenuCourseManager" name="cpInGameMenuCourseManager" id="pageCourseManager"/>
         <FrameReference ref="cpInGameMenuConstruction" name="cpInGameMenuConstruction" id="pageConstruction"/>

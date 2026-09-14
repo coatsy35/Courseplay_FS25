@@ -48,6 +48,12 @@
 		</Setting>
 	</SettingSubTitle>
 	<SettingSubTitle prefix="true" title="userSettings">
+		<Setting classType="AIParameterBooleanSetting" name="autoLoadSingleImplementProfile" isUserSetting="true" defaultBool="false"/>
+		<Setting classType="AIParameterBooleanSetting" name="showImplementProfileSuggestions" isUserSetting="true" defaultBool="true"/>
+        <Setting classType="AIParameterSettingList" name="noImplementProfileSettings" isUserSetting="true" default="1">
+            <Values><Value>1</Value><Value>2</Value></Values>
+            <Texts><Text>defaults</Text><Text>keep</Text></Texts>
+        </Setting>
 		<!-- When enabled, then a few settings are invisible and return their default values. -->
 		<Setting classType="AIParameterBooleanSetting" name="expertModeActive" isUserSetting="true" defaultBool="false"/>
 		<!-- <Setting classType="AIParameterBooleanSetting" name="controllerHudSelected" isUserSetting="true" defaultBool="false" onChangeCallback="onHudSelectionChanged"/> -->

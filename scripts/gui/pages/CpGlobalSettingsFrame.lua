@@ -103,6 +103,10 @@ function CpGlobalSettingsFrame:onFrameOpen()
 		local ix = 1
 		for _, data in pairs(settingsBySubTitle) do 
 			local layout = self.subCategoryPages[ix]:getDescendantByName("layout")
+            -- Keep the first row below the top clip boundary, as on the vehicle settings page.
+            local heading = self.sectionHeaderPrefab:clone(layout)
+            heading:setText(g_i18n:getText(data.title))
+            FocusManager:loadElementFromCustomValues(heading)
 			CpSettingsUtil.generateAndBindGuiElements(data, layout, 
 				self.multiTextPrefab, self.booleanPrefab, settings)
 			CpSettingsUtil.updateGuiElementsBoundToSettings(layout)

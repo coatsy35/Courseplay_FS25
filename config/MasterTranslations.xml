@@ -603,13 +603,43 @@
 			<Text language="de"><![CDATA[Fährt nach erledigter Arbeit zum Startpunkt zurück.]]></Text>
 			<Text language="en"><![CDATA[Return to starting point after finished fieldwork.]]></Text>
 		</Translation>
+		<Translation name="CP_vehicle_setting_subTitle_implementTiming">
+			<Text language="en"><![CDATA[Implement profile timing]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_subTitle_vehicleTimingOverrides">
+			<Text language="en"><![CDATA[Tool timing]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_raiseImplementLateOverrideEnabled_title">
+			<Text language="en"><![CDATA[Override tool timing]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_raiseImplementLateOverrideEnabled_tooltip">
+			<Text language="en"><![CDATA[Activate to adjust Raise tools and Lower tools for this vehicle. Deactivate to use the implement profile timings again.]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_raiseImplementLateOverride_title">
+			<Text language="en"><![CDATA[Raise tools]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_raiseImplementLateOverride_tooltip">
+			<Text language="en"><![CDATA[With override deactivated, shows the current implement timing and cannot be edited here. Activate override to display and edit this vehicle's manual timing. Deactivate it to return to the implement timing.]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_lowerImplementEarlyOverrideEnabled_title">
+			<Text language="en"><![CDATA[Override lowering timing]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_lowerImplementEarlyOverrideEnabled_tooltip">
+			<Text language="en"><![CDATA[Activate to adjust Raise tools and Lower tools for this vehicle. Deactivate to use the implement profile timings again.]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_lowerImplementEarlyOverride_title">
+			<Text language="en"><![CDATA[Lower tools]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_lowerImplementEarlyOverride_tooltip">
+			<Text language="en"><![CDATA[With override deactivated, shows the current implement timing and cannot be edited here. Activate override to display and edit this vehicle's manual timing. Deactivate it to return to the implement timing.]]></Text>
+		</Translation>
 		<Translation name="CP_vehicle_setting_raiseImplementLate_title">
 			<Text language="de"><![CDATA[Gerät anheben]]></Text>
 			<Text language="en"><![CDATA[Raise tools]]></Text>
 		</Translation>
 		<Translation name="CP_vehicle_setting_raiseImplementLate_tooltip">
 			<Text language="de"><![CDATA[Geräte früh oder spät anheben.]]></Text>
-			<Text language="en"><![CDATA[Raise tools early or late at the start of a turn.]]></Text>
+			<Text language="en"><![CDATA[Implement default for raising tools at the start of a turn. Saved in implement profiles; a vehicle override takes priority while enabled.]]></Text>
 		</Translation>
 		<Translation name="CP_vehicle_setting_raiseImplementLate_early">
 			<Text language="de"><![CDATA[früh]]></Text>
@@ -625,7 +655,7 @@
 		</Translation>
 		<Translation name="CP_vehicle_setting_lowerImplementEarly_tooltip">
 			<Text language="de"><![CDATA[Geräte früh oder spät absenken.]]></Text>
-			<Text language="en"><![CDATA[Lower tools early or late at the end of a turn.]]></Text>
+			<Text language="en"><![CDATA[Implement default for lowering tools at the end of a turn. Saved in implement profiles; a vehicle override takes priority while enabled.]]></Text>
 		</Translation>
 		<Translation name="CP_vehicle_setting_lowerImplementEarly_early">
 			<Text language="de"><![CDATA[früh]]></Text>
@@ -3279,5 +3309,201 @@ TPS extension
 			<Text language="en"><![CDATA[CP: TEST]]></Text>
 		</Translation>
 		-->
+	</Category>
+	<Category name="Implement profiles">
+		<Translation name="CP_implementProfiles_setupHeading"><Text language="en"><![CDATA[Implement setup]]></Text></Translation>
+        <Translation name="CP_implementProfiles_selectorTitle">
+			<Text language="en"><![CDATA[Implement profile]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_selectorTooltip">
+			<Text language="en"><![CDATA[Generate uses the selected profile automatically. Custom settings uses your current values. Load profile lets you adjust a profile before generating.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_keepSettings">
+			<Text language="en"><![CDATA[Custom settings]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_noMatchingProfiles">
+			<Text language="en"><![CDATA[No saved profiles for attached equipment]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_loadProfile">
+			<Text language="en"><![CDATA[Load profile]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_title">
+			<Text language="en"><![CDATA[Implement profiles]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_attached">
+			<Text language="en"><![CDATA[Attached equipment]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_all">
+			<Text language="en"><![CDATA[All profiles]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_search">
+			<Text language="en"><![CDATA[Search]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_expand">
+			<Text language="en"><![CDATA[Expand / collapse]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_apply">
+			<Text language="en"><![CDATA[Apply profile]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_saveNew">
+			<Text language="en"><![CDATA[Save as new]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_show">
+            <Text language="en"><![CDATA[Show]]></Text>
+        </Translation>
+        <Translation name="CP_implementProfiles_allEquipment">
+            <Text language="en"><![CDATA[All equipment]]></Text>
+        </Translation>
+        <Translation name="CP_global_setting_noImplementProfileSettings_title"><Text language="en"><![CDATA[When no profile is loaded]]></Text></Translation>
+        <Translation name="CP_global_setting_noImplementProfileSettings_tooltip"><Text language="en"><![CDATA[Use defaults resets implement settings for newly attached equipment. Keep current settings retains the previous working setup. Existing saved setups are preserved when loading a savegame.]]></Text></Translation>
+        <Translation name="CP_global_setting_noImplementProfileSettings_defaults"><Text language="en"><![CDATA[Use defaults]]></Text></Translation>
+        <Translation name="CP_global_setting_noImplementProfileSettings_keep"><Text language="en"><![CDATA[Keep current settings]]></Text></Translation>
+		<Translation name="CP_implementProfiles_saveProfile">
+			<Text language="en"><![CDATA[Save implement profile]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_update">
+			<Text language="en"><![CDATA[Update profile]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_delete">
+			<Text language="en"><![CDATA[Delete profile]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_edit"><Text language="en"><![CDATA[Edit profile]]></Text></Translation>
+        <Translation name="CP_implementProfiles_editValue"><Text language="en"><![CDATA[Edit selected setting]]></Text></Translation>
+        <Translation name="CP_implementProfiles_saveChanges"><Text language="en"><![CDATA[Save changes]]></Text></Translation>
+        <Translation name="CP_implementProfiles_cancelChanges"><Text language="en"><![CDATA[Cancel changes]]></Text></Translation>
+        <Translation name="CP_implementProfiles_editHint"><Text language="en"><![CDATA[Changes are kept in a draft until you choose Save changes. Applied vehicle setups are unchanged.]]></Text></Translation>
+        <Translation name="CP_implementProfiles_advanced">
+            <Text language="en"><![CDATA[Advanced]]></Text>
+        </Translation>
+        <Translation name="CP_implementProfiles_advancedPlaceholder">
+            <Text language="en"><![CDATA[Advanced equipment configurations  -  planned. Machine-specific corrections for attached implements, self-propelled machines and removable headers will go here. This placeholder does not load, edit or save configuration values.]]></Text>
+        </Translation>
+        <Translation name="CP_implementProfiles_rename">
+            <Text language="en"><![CDATA[Rename profile]]></Text>
+        </Translation>
+		<Translation name="CP_global_setting_showImplementProfileSuggestions_title">
+            <Text language="en"><![CDATA[Suggest implement profiles on attachment]]></Text>
+        </Translation>
+        <Translation name="CP_global_setting_showImplementProfileSuggestions_tooltip">
+            <Text language="en"><![CDATA[Show a pop-up when attached equipment matches saved profiles. Deactivate to stop these pop-ups. Matching profiles remain available in Fieldwork Settings and Implement Profiles. This preference applies to your user across vehicles and savegames.]]></Text>
+        </Translation>
+		<Translation name="CP_global_setting_autoLoadSingleImplementProfile_title"><Text language="en"><![CDATA[Auto-load a single matching profile]]></Text></Translation>
+        <Translation name="CP_global_setting_autoLoadSingleImplementProfile_tooltip"><Text language="en"><![CDATA[With attachment prompts disabled, automatically load exactly one matching profile. With prompts enabled, always let you choose whether to load. Multiple matches remain manual. Silent loading is skipped if an existing course has a different working width.]]></Text></Translation>
+        <Translation name="CP_implementProfiles_singleOffer"><Text language="en"><![CDATA[One matching profile found: %s. Load it now, view profiles, or choose not to load a profile.]]></Text></Translation>
+        <Translation name="CP_implementProfiles_viewProfiles"><Text language="en"><![CDATA[View profiles]]></Text></Translation>
+        <Translation name="CP_implementProfiles_dontLoad"><Text language="en"><![CDATA[Don't load a profile]]></Text></Translation>
+        <Translation name="CP_implementProfiles_multipleOffer"><Text language="en"><![CDATA[Several profiles match the attached equipment. Select a profile and confirm to load it, view the directory, or choose Don't load a profile. Cancelling loads nothing.]]></Text></Translation>
+        <Translation name="CP_implementProfiles_moreActions"><Text language="en"><![CDATA[More actions]]></Text></Translation>
+        <Translation name="CP_implementProfiles_dialogTitle"><Text language="en"><![CDATA[Matching implement profiles]]></Text></Translation>
+        <Translation name="input_CP_PROFILE_RENAME"><Text language="en"><![CDATA[CP: Rename implement profile]]></Text></Translation>
+        <Translation name="input_CP_PROFILE_DELETE"><Text language="en"><![CDATA[CP: Delete implement profile]]></Text></Translation>
+        <Translation name="CP_implementProfiles_name">
+			<Text language="en"><![CDATA[Implement already identified. Name the course setup.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_active">
+			<Text language="en"><![CDATA[Applied: %s (revision %d)]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_noActive">
+			<Text language="en"><![CDATA[No implement profile applied]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_revision">
+			<Text language="en"><![CDATA[revision %d]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_empty">
+			<Text language="en"><![CDATA[No profiles found. Attach equipment and save your current CP setup, or browse all profiles.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_help">
+			<Text language="en"><![CDATA[Select a profile to view its equipment and saved settings.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_offer">
+			<Text language="en"><![CDATA[Found %d saved profiles for the attached equipment. Open implement profiles?]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_match_exact">
+			<Text language="en"><![CDATA[Exact equipment match]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_match_partial">
+			<Text language="en"><![CDATA[Part of the attached equipment — create a combination profile to apply these settings.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_match_none">
+			<Text language="en"><![CDATA[Different equipment or configuration]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_updateConfirm">
+			<Text language="en"><![CDATA[Replace "%s" with the current working and generation settings? Existing jobs keep their working copies.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_deleteConfirm">
+			<Text language="en"><![CDATA[Delete "%s" from your library? Existing jobs keep their working copies.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_stopFirst">
+			<Text language="en"><![CDATA[Stop the tractor and CP before saving or applying a profile. Wait for attachment changes to finish.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_invalidName">
+			<Text language="en"><![CDATA[Enter a profile name without control characters.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_duplicateName">
+			<Text language="en"><![CDATA[A profile with this name already exists for this equipment. Update it or choose another name.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_noEquipment">
+			<Text language="en"><![CDATA[Attach working equipment before saving a profile.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_mismatch">
+			<Text language="en"><![CDATA[The equipment or profile revision has changed. Select a matching profile and try again.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_invalidSettings">
+			<Text language="en"><![CDATA[This profile contains settings which are unavailable or invalid for the current vehicle. Review the equipment and settings before saving a compatible version.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_saveFailed">
+			<Text language="en"><![CDATA[The profile could not be saved. Your previous library is retained in the backup where available.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_libraryReadOnly">
+			<Text language="en"><![CDATA[The profile library could not be loaded safely and is read-only. Check implementProfiles.xml and its .bak file in the Courseplay modSettings folder.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_noAccess">
+			<Text language="en"><![CDATA[You do not have access to change this vehicle.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_courseWarning">
+			<Text language="en"><![CDATA[The assigned course was generated for a different working width. Apply this profile? Generate or load a suitable course before starting CP.]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_ploughs">
+			<Text language="en"><![CDATA[Ploughs]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_seedDrills">
+			<Text language="en"><![CDATA[Seed drills]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_cultivators">
+			<Text language="en"><![CDATA[Cultivators]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_mowers">
+			<Text language="en"><![CDATA[Mowers]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_sprayers">
+			<Text language="en"><![CDATA[Sprayers and spreaders]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_balers">
+			<Text language="en"><![CDATA[Balers]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_wrappers">
+			<Text language="en"><![CDATA[Bale wrappers]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_windrowers">
+			<Text language="en"><![CDATA[Windrowers]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_tedders">
+			<Text language="en"><![CDATA[Tedders]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_forageWagons">
+			<Text language="en"><![CDATA[Forage wagons]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_harvesters">
+			<Text language="en"><![CDATA[Harvesters]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_headers">
+			<Text language="en"><![CDATA[Headers]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_other">
+			<Text language="en"><![CDATA[Other implements]]></Text>
+		</Translation>
+		<Translation name="CP_implementProfiles_group_combinations">
+			<Text language="en"><![CDATA[Implement combinations]]></Text>
+		</Translation>
 	</Category>
 </Translations>

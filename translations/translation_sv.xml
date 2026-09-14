@@ -191,6 +191,16 @@
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Aktiverar/avaktiverar automatisk hopfällning av redskapen i slutet av kursen."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Återgå till startpunkten"/>
     <text name="CP_vehicle_setting_returnToStart_tooltip" text="Återvända till startpunkten efter avslutat fältarbete."/>
+    <text name="CP_vehicle_setting_subTitle_implementTiming" text="Implement profile timing"/>
+    <text name="CP_vehicle_setting_subTitle_vehicleTimingOverrides" text="Vehicle timing overrides"/>
+    <text name="CP_vehicle_setting_raiseImplementLateOverrideEnabled_title" text="Override raising timing"/>
+    <text name="CP_vehicle_setting_raiseImplementLateOverrideEnabled_tooltip" text="Enable a timing override for this vehicle. Deactivate it to use the implement setting. This choice is saved with the vehicle and excluded from implement profiles."/>
+    <text name="CP_vehicle_setting_raiseImplementLateOverride_title" text="Vehicle raising timing"/>
+    <text name="CP_vehicle_setting_raiseImplementLateOverride_tooltip" text="Timing used only while the vehicle override is enabled. Saving or updating an implement profile keeps its own timing."/>
+    <text name="CP_vehicle_setting_lowerImplementEarlyOverrideEnabled_title" text="Override lowering timing"/>
+    <text name="CP_vehicle_setting_lowerImplementEarlyOverrideEnabled_tooltip" text="Enable a timing override for this vehicle. Deactivate it to use the implement setting. This choice is saved with the vehicle and excluded from implement profiles."/>
+    <text name="CP_vehicle_setting_lowerImplementEarlyOverride_title" text="Vehicle lowering timing"/>
+    <text name="CP_vehicle_setting_lowerImplementEarlyOverride_tooltip" text="Timing used only while the vehicle override is enabled. Saving or updating an implement profile keeps its own timing."/>
     <text name="CP_vehicle_setting_raiseImplementLate_title" text="Höj verktyg"/>
     <text name="CP_vehicle_setting_raiseImplementLate_tooltip" text="Höj verktygen tidigt eller sent i början av en tur."/>
     <text name="CP_vehicle_setting_raiseImplementLate_early" text="tidigt"/>
@@ -666,5 +676,86 @@
     <text name="input_CP_OPEN_COURSEGENERATOR_SETTINGS" text="CP: Öppna kursgenerator/jobbmeny"/>
     <text name="input_CP_OPEN_COURSEMANAGER" text="CP: Ansvarig för öppna kurser"/>
     <text name="input_CP_OPEN_INGAME_MENU" text="CP: Öppna menyn"/>
+    <!---->
+    <!--Implement profiles-->
+    <!---->
+    <text name="CP_implementProfiles_setupHeading" text="Implement setup"/>
+    <text name="CP_implementProfiles_selectorTitle" text="Implement profile"/>
+    <text name="CP_implementProfiles_selectorTooltip" text="Profiles matching the detected attached equipment. Select a profile, then choose Load profile or press the centre of the selector. Loading changes the working settings; generate the course afterwards."/>
+    <text name="CP_implementProfiles_keepSettings" text="Keep current settings"/>
+    <text name="CP_implementProfiles_noMatchingProfiles" text="No saved profiles for attached equipment"/>
+    <text name="CP_implementProfiles_loadProfile" text="Load profile"/>
+    <text name="CP_implementProfiles_title" text="Implement profiles"/>
+    <text name="CP_implementProfiles_attached" text="Attached equipment"/>
+    <text name="CP_implementProfiles_all" text="All profiles"/>
+    <text name="CP_implementProfiles_search" text="Search"/>
+    <text name="CP_implementProfiles_expand" text="Expand / collapse"/>
+    <text name="CP_implementProfiles_apply" text="Apply profile"/>
+    <text name="CP_implementProfiles_saveNew" text="Save as new"/>
+    <text name="CP_implementProfiles_show" text="Show"/>
+    <text name="CP_implementProfiles_allEquipment" text="All equipment"/>
+    <text name="CP_global_setting_noImplementProfileSettings_title" text="When no profile is loaded"/>
+    <text name="CP_global_setting_noImplementProfileSettings_tooltip" text="Use defaults resets implement settings for newly attached equipment. Keep current settings retains the previous working setup. Existing saved setups are preserved when loading a savegame."/>
+    <text name="CP_global_setting_noImplementProfileSettings_defaults" text="Use defaults"/>
+    <text name="CP_global_setting_noImplementProfileSettings_keep" text="Keep current settings"/>
+    <text name="CP_implementProfiles_saveProfile" text="Save implement profile"/>
+    <text name="CP_implementProfiles_update" text="Update profile"/>
+    <text name="CP_implementProfiles_delete" text="Delete profile"/>
+    <text name="CP_implementProfiles_edit" text="Edit profile"/>
+    <text name="CP_implementProfiles_editValue" text="Edit selected setting"/>
+    <text name="CP_implementProfiles_saveChanges" text="Save changes"/>
+    <text name="CP_implementProfiles_cancelChanges" text="Cancel changes"/>
+    <text name="CP_implementProfiles_editHint" text="Changes are kept in a draft until you choose Save changes. Applied vehicle setups are unchanged."/>
+    <text name="CP_implementProfiles_advanced" text="Advanced"/>
+    <text name="CP_implementProfiles_advancedPlaceholder" text="Advanced equipment configurations  -  planned. Machine-specific corrections for attached implements, self-propelled machines and removable headers will go here. This placeholder does not load, edit or save configuration values."/>
+    <text name="CP_implementProfiles_rename" text="Rename profile"/>
+    <text name="CP_global_setting_showImplementProfileSuggestions_title" text="Suggest implement profiles on attachment"/>
+    <text name="CP_global_setting_showImplementProfileSuggestions_tooltip" text="Show a pop-up when attached equipment matches saved profiles. Deactivate to stop these pop-ups. Matching profiles remain available in Fieldwork Settings and Implement Profiles. This preference applies to your user across vehicles and savegames."/>
+    <text name="CP_global_setting_autoLoadSingleImplementProfile_title" text="Auto-load a single matching profile"/>
+    <text name="CP_global_setting_autoLoadSingleImplementProfile_tooltip" text="When exactly one profile matches, offer a direct Load profile action. With attachment prompts disabled, load it automatically instead. Multiple matches remain manual. Silent loading is skipped if an existing course has a different working width."/>
+    <text name="CP_implementProfiles_singleOffer" text="One matching profile found: %s. Load it now, view profiles, or keep the current settings."/>
+    <text name="CP_implementProfiles_viewProfiles" text="View profiles"/>
+    <text name="CP_implementProfiles_dontLoad" text="Don't load a profile"/>
+    <text name="CP_implementProfiles_multipleOffer" text="Several profiles match the attached equipment. Select a profile and confirm to load it, view the directory, or choose Don't load a profile. Cancelling loads nothing."/>
+    <text name="CP_implementProfiles_moreActions" text="More actions"/>
+    <text name="CP_implementProfiles_dialogTitle" text="Matching implement profiles"/>
+    <text name="input_CP_PROFILE_RENAME" text="CP: Rename implement profile"/>
+    <text name="input_CP_PROFILE_DELETE" text="CP: Delete implement profile"/>
+    <text name="CP_implementProfiles_name" text="Profile name"/>
+    <text name="CP_implementProfiles_active" text="Applied: %s (revision %d)"/>
+    <text name="CP_implementProfiles_noActive" text="No implement profile applied"/>
+    <text name="CP_implementProfiles_revision" text="revision %d"/>
+    <text name="CP_implementProfiles_empty" text="No profiles found. Attach equipment and save your current CP setup, or browse all profiles."/>
+    <text name="CP_implementProfiles_help" text="Select a profile to view its equipment and saved settings."/>
+    <text name="CP_implementProfiles_offer" text="Found %d saved profiles for the attached equipment. Open implement profiles?"/>
+    <text name="CP_implementProfiles_match_exact" text="Exact equipment match"/>
+    <text name="CP_implementProfiles_match_partial" text="Part of the attached equipment — create a combination profile to apply these settings."/>
+    <text name="CP_implementProfiles_match_none" text="Different equipment or configuration"/>
+    <text name="CP_implementProfiles_updateConfirm" text="Replace &quot;%s&quot; with the current working and generation settings? Existing jobs keep their working copies."/>
+    <text name="CP_implementProfiles_deleteConfirm" text="Delete &quot;%s&quot; from your library? Existing jobs keep their working copies."/>
+    <text name="CP_implementProfiles_stopFirst" text="Stop the tractor and CP before saving or applying a profile. Wait for attachment changes to finish."/>
+    <text name="CP_implementProfiles_invalidName" text="Enter a profile name without control characters."/>
+    <text name="CP_implementProfiles_duplicateName" text="A profile with this name already exists for this equipment. Update it or choose another name."/>
+    <text name="CP_implementProfiles_noEquipment" text="Attach working equipment before saving a profile."/>
+    <text name="CP_implementProfiles_mismatch" text="The equipment or profile revision has changed. Select a matching profile and try again."/>
+    <text name="CP_implementProfiles_invalidSettings" text="This profile contains settings which are unavailable or invalid for the current vehicle. Review the equipment and settings before saving a compatible version."/>
+    <text name="CP_implementProfiles_saveFailed" text="The profile could not be saved. Your previous library is retained in the backup where available."/>
+    <text name="CP_implementProfiles_libraryReadOnly" text="The profile library could not be loaded safely and is read-only. Check implementProfiles.xml and its .bak file in the Courseplay modSettings folder."/>
+    <text name="CP_implementProfiles_noAccess" text="You do not have access to change this vehicle."/>
+    <text name="CP_implementProfiles_courseWarning" text="The assigned course was generated for a different working width. Apply this profile? Generate or load a suitable course before starting CP."/>
+    <text name="CP_implementProfiles_group_ploughs" text="Ploughs"/>
+    <text name="CP_implementProfiles_group_seedDrills" text="Seed drills"/>
+    <text name="CP_implementProfiles_group_cultivators" text="Cultivators"/>
+    <text name="CP_implementProfiles_group_mowers" text="Mowers"/>
+    <text name="CP_implementProfiles_group_sprayers" text="Sprayers and spreaders"/>
+    <text name="CP_implementProfiles_group_balers" text="Balers"/>
+    <text name="CP_implementProfiles_group_wrappers" text="Bale wrappers"/>
+    <text name="CP_implementProfiles_group_windrowers" text="Windrowers"/>
+    <text name="CP_implementProfiles_group_tedders" text="Tedders"/>
+    <text name="CP_implementProfiles_group_forageWagons" text="Forage wagons"/>
+    <text name="CP_implementProfiles_group_harvesters" text="Harvesters"/>
+    <text name="CP_implementProfiles_group_headers" text="Headers"/>
+    <text name="CP_implementProfiles_group_other" text="Other implements"/>
+    <text name="CP_implementProfiles_group_combinations" text="Implement combinations"/>
   </texts>
 </l10n>

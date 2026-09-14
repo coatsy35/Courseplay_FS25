@@ -107,13 +107,47 @@ function CpVehicleSettingsFrame:onFrameOpen()
 	CpSettingsUtil.generateAndBindGuiElementsToSettings(settingsBySubTitle,
 		layout, self.multiTextPrefab, self.booleanPrefab, 
 		self.sectionHeaderPrefab, settings)
+	self:bindTimingSources(layout, vehicle)
 	CpSettingsUtil.updateGuiElementsBoundToSettings(layout, vehicle)
 	
 	self:updateSubCategoryPages(self.CATEGRORIES.BASIC_SETTINGS)
 	FocusManager:setFocus(self.subCategoryPages[self.CATEGRORIES.BASIC_SETTINGS]:getDescendantByName("layout"))
 end
 
+--- Bind each timing row to its active source without modifying either saved value.
+function CpVehicleSettingsFrame:bindTimingSources(layout, vehicle)
+    local settings = vehicle:getCpSettings()
+    for _, row in ipairs(layout.elements) do
+        local parameter = row.aiParameter
+        if parameter then
+            local name = row.timingOverrideName or parameter:getName()
+            if name == 'raiseImplementLateOverride' or name == 'lowerImplementEarlyOverride' then
+                row.timingOverrideName = name
+                local baseName = name:gsub('Override$', '')
+                local manual = settings[name]
+                local source = manual
+                if not settings.raiseImplementLateOverrideEnabled:getValue() then
+                    source = setmetatable({
+                        getIsDisabled = function() return true end,
+                        getValue = function() return settings[baseName]:getValue() end,
+                        setValue = function() end,
+                        setFloatValue = function() end,
+                        getIsVisible = function() return manual:getIsVisible() end,
+                        getTitle = function() return manual:getTitle() end,
+                        getTooltip = function() return manual:getTooltip() end
+                    }, {__index = settings[baseName]})
+                end
+                row.aiParameter = source
+                row:getDescendantByName('setting'):setDataSource(source)
+            end
+        end
+    end
+end
+
 function CpVehicleSettingsFrame:onClickCpMultiTextOption(_, guiElement)
+    if guiElement.dataSource and guiElement.dataSource:getName() == 'raiseImplementLateOverrideEnabled' then
+        self:bindTimingSources(guiElement.parent.parent, self.cpMenu:getCurrentVehicle())
+    end
 	CpSettingsUtil.updateGuiElementsBoundToSettings(guiElement.parent.parent, self.cpMenu:getCurrentVehicle())
 end
 

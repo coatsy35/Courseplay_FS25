@@ -47,20 +47,6 @@
 		<Setting classType="AIParameterBooleanSetting" name="foldImplementAtEnd" defaultBool="true" isExpertModeOnly="true" isVisible="areCourseSettingsVisible"/>
 		<!--Return to Start-->
 		<Setting classType="AIParameterBooleanSetting" name="returnToStart" defaultBool="false" isExpertModeOnly="true" isVisible="areCourseSettingsVisable"/>
-		<!--Raise Implement-->
-		<Setting classType="AIParameterBooleanSetting" name="raiseImplementLate" vehicleConfiguration="raiseLate" isVisible="areCourseSettingsVisible">
-			<Texts>
-				<Text>early</Text>
-				<Text>late</Text>
-			</Texts>
-		</Setting>
-		<!--Lower Implement-->
-		<Setting classType="AIParameterBooleanSetting" name="lowerImplementEarly" vehicleConfiguration="lowerEarly" isVisible="areCourseSettingsVisible">
-			<Texts>
-				<Text>late</Text>
-				<Text>early</Text>
-			</Texts>
-		</Setting>
 		<!--Tool Offset X-->
 		<Setting classType="AIParameterSettingList" name="toolOffsetX" min="-10" max="10" incremental="0.1" default="0" unit="2"
 				 onChangeCallback="cpShowWorkWidth" setDefault="setAutomaticWorkWidthAndOffset" isVisible="isToolOffsetVisible"
@@ -89,6 +75,39 @@
 				<Text prefix="false">CP_deactivated</Text>
 				<Text>waiting</Text>
 				<Text>active</Text>
+			</Texts>
+		</Setting>
+	</SettingSubTitle>
+
+	<SettingSubTitle title="vehicleTimingOverrides">
+		<!--Raise Implement-->
+		<Setting classType="AIParameterBooleanSetting" name="raiseImplementLate" vehicleConfiguration="raiseLate" isVisible="isImplementTimingHidden">
+			<Texts>
+				<Text>early</Text>
+				<Text>late</Text>
+			</Texts>
+		</Setting>
+		<!--Lower Implement-->
+		<Setting classType="AIParameterBooleanSetting" name="lowerImplementEarly" vehicleConfiguration="lowerEarly" isVisible="isImplementTimingHidden">
+			<Texts>
+				<Text>late</Text>
+				<Text>early</Text>
+			</Texts>
+		</Setting>
+
+
+		<Setting classType="AIParameterBooleanSetting" name="raiseImplementLateOverrideEnabled" defaultBool="false" isVisible="areCourseSettingsVisible"/>
+		<Setting classType="AIParameterBooleanSetting" name="raiseImplementLateOverride" defaultBool="false" isVisible="areCourseSettingsVisible" isDisabled="isRaiseTimingOverrideDisabled">
+			<Texts>
+				<Text prefix="false">CP_vehicle_setting_raiseImplementLate_early</Text>
+				<Text prefix="false">CP_vehicle_setting_raiseImplementLate_late</Text>
+			</Texts>
+		</Setting>
+		<Setting classType="AIParameterBooleanSetting" name="lowerImplementEarlyOverrideEnabled" defaultBool="false" isVisible="isImplementTimingHidden"/>
+		<Setting classType="AIParameterBooleanSetting" name="lowerImplementEarlyOverride" defaultBool="false" isVisible="areCourseSettingsVisible" isDisabled="isLowerTimingOverrideDisabled">
+			<Texts>
+				<Text prefix="false">CP_vehicle_setting_lowerImplementEarly_late</Text>
+				<Text prefix="false">CP_vehicle_setting_lowerImplementEarly_early</Text>
 			</Texts>
 		</Setting>
 	</SettingSubTitle>

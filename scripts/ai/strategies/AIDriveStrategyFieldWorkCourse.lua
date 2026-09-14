@@ -699,11 +699,11 @@ function AIDriveStrategyFieldWorkCourse:getLoweringDurationMs()
 end
 
 function AIDriveStrategyFieldWorkCourse:getImplementRaiseLate()
-    return self.settings.raiseImplementLate:getValue()
+    return ImplementProfile.getTiming(self.settings, 'raiseImplementLate')
 end
 
 function AIDriveStrategyFieldWorkCourse:getImplementLowerEarly()
-    return self.settings.lowerImplementEarly:getValue()
+    return ImplementProfile.getTiming(self.settings, 'lowerImplementEarly')
 end
 
 function AIDriveStrategyFieldWorkCourse:rememberWaypointToContinueFieldWork()
