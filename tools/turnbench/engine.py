@@ -24,6 +24,7 @@ SOURCES = [
     'scripts/ai/AIReverseDriver.lua',
     'tools/turnbench/full_course.py', 'scripts/ai/turns/Corner.lua',
     'tools/turnbench/alignment.py', 'tools/turnbench/aligned_turn.py',
+    'tools/turnbench/aligned_pattern.py',
 ]
 
 
@@ -102,6 +103,7 @@ class Scenario:
     islandSize: float = 15
     bypassIslands: bool = True
     alignedPlanner: bool = False
+    alignedPattern: bool = False
     approachLength: float = 0  # Experimental final straight; zero preserves CP.
     boundarySlope: float = 0  # Local inner boundary z = slope*x.
     turnBias: float = 0  # Lateral placement of the final curved pull-in.
@@ -137,7 +139,7 @@ class Scenario:
         for key in ('entry', 'drill', 'lowerEarly', 'raiseLate', 'tight', 'articulated', 'pattern', 'enforceBoundary','courseLayout','headlandFirst','clockwise','custom','mounted'):
             if type(getattr(p, key)) is not bool:
                 raise ValueError(f'{key} must be boolean')
-        for key in ('alignedPlanner','targetExplicit','reverseCourse','allowReverse','fullCourse','centreClockwise','spiralFromInside','sharpenCorners','loopTurnsOnHeadland',
+        for key in ('alignedPlanner','alignedPattern','targetExplicit','reverseCourse','allowReverse','fullCourse','centreClockwise','spiralFromInside','sharpenCorners','loopTurnsOnHeadland',
                     'autoRowAngle','evenRowWidth','useBaseline','sameTurnWidth','narrowField','bypassIslands','islandClockwise'):
             if type(getattr(p,key)) is not bool:
                 raise ValueError(f'{key} must be boolean')
@@ -209,6 +211,13 @@ class Bridge:
         self.rig = self.g.makeRig(self.lua.table_from(params))
         raw = self.g.readPath(self.rig)
         self.path = [dict(raw[i]) for i in range(1, len(raw) + 1)]
+        end=len(self.path)-1
+        for i in range(len(self.path)-1,-1,-1):
+            w=self.path[i]
+            if i==len(self.path)-1 or bool(w.get('reverse'))!=bool(self.path[i+1].get('reverse')):
+                end=i
+            w['legEnd']=end
+            w['navPoint']=point(w['x'],w['z'],w['t'],across=0 if w.get('reverse') else -w.get('offset',0))
 
 
 def inside(x, z, poly):
@@ -229,18 +238,23 @@ class Coverage:
         self.nz = int(20 / r)
         self.cells = set()
         self.width = width
+        self.remaining = [set(range(self.nz)) if (i+.5)*r < width else set() for i in range(self.nx)]
 
     def stamp(self, poly):
         r = self.resolution
         xmin, xmax = min(p[0] for p in poly), max(p[0] for p in poly)
         zmin, zmax = min(p[1] for p in poly), max(p[1] for p in poly)
+        if zmax < -self.nz*r or zmin > 0 or xmax < self.x0 or xmin > self.x0+self.width:
+            return
         for i in range(max(0, int(math.floor((xmin-self.x0)/r))), min(self.nx, int(math.ceil((xmax-self.x0)/r)))):
             x = self.x0 + (i+0.5)*r
             if x > self.x0+self.width:
                 continue
-            for j in range(max(0, int(math.floor(-zmax/r))), min(self.nz, int(math.ceil(-zmin/r)))):
-                if (i,j) not in self.cells and inside(x,-(j+0.5)*r,poly):
+            lo,hi=max(0, int(math.floor(-zmax/r))), min(self.nz, int(math.ceil(-zmin/r)))
+            for j in tuple(self.remaining[i]):
+                if lo <= j < hi and inside(x,-(j+0.5)*r,poly):
                     self.cells.add((i,j))
+                    self.remaining[i].remove(j)
 
     def gaps(self):
         r = self.resolution
@@ -341,7 +355,8 @@ def drive_guidance(p,bridge,path,ix,x,z,theta,phi,axle):
     while 'legEnd' not in path[ix] and end+1<len(path) and bool(path[end+1].get('reverse'))==reverse:
         end+=1
     def nav(w):
-        return point(w['x'],w['z'],w['t'],across=0 if w.get('reverse') else -w.get('offset',0))
+        cached=w.get('navPoint')
+        return cached if cached is not None else point(w['x'],w['z'],w['t'],across=0 if w.get('reverse') else -w.get('offset',0))
     rx,rz=axle if reverse and not p.mounted and not tractor_path else (x,z)
     ix=min(range(ix,min(ix+15,end+1)),key=lambda i:(nav(path[i])[0]-rx)**2+(nav(path[i])[1]-rz)**2)
     reached=math.hypot(path[end]['x']-rx,path[end]['z']-rz)<.75
@@ -778,6 +793,9 @@ def segment_clearance(a,b,c,d):
 
 def compare(data):
     p = Scenario.parse(data)
+    if p.alignedPlanner and p.alignedPattern:
+        from aligned_pattern import compare_pattern
+        return compare_pattern(p)
     if p.alignedPlanner:
         from aligned_turn import compare_aligned
         return compare_aligned(p)
@@ -819,6 +837,32 @@ def check_boundary(run):
     islands=field.get('islands',[]) if field else []
     west,east,south,north = ((field['west'],field['east'],field['south'],field['north'])
                               if field else (-math.inf,math.inf,-math.inf,p['headland']))
+    polygon = field.get('boundary') if field else None
+    if polygon and not islands:
+        # For a convex field the inward-offset half-planes are convex too.
+        # Every body vertex inside them proves all body edges retain the reserve.
+        area=sum(a[0]*b[1]-b[0]*a[1] for a,b in zip(polygon,polygon[1:]+polygon[:1]))
+        direction=1 if area>0 else -1
+        planes=[]
+        for a,b in zip(polygon,polygon[1:]+polygon[:1]):
+            dx,dz=b[0]-a[0],b[1]-a[1]
+            length=math.hypot(dx,dz)
+            if length>1e-9:
+                nx,nz=-dz*direction/length,dx*direction/length
+                planes.append((nx,nz,-nx*a[0]-nz*a[1]))
+        convex=planes and all(nx*x+nz*z+c>=-1e-8 for x,z in polygon for nx,nz,c in planes)
+        if convex:
+            safe=True
+            for f in run['frames']:
+                corners=[point(f['x'],f['z'],f['theta'],across=a,along=b)
+                         for a in (-1.9,1.9) for b in (-2,4)]
+                corners += [f[k] for k in ('left','right','rearLeft','rearRight','axle','hitch')]
+                if any(nx*x+nz*z+c<.5 for x,z in corners for nx,nz,c in planes):
+                    safe=False
+                    break
+            if safe:
+                run['boundaryChecked']=True
+                return run
     violation = False
     for f in run['frames']:
         corners = [point(f['x'],f['z'],f['theta'],across=a,along=b)

@@ -215,6 +215,7 @@
                   </select></label
                 >
                 <p id="run-mode-note"></p>
+                <label id="aligned-pattern-label" hidden><input id="alignedPattern" type="checkbox" /> Complete skipped-row block</label>
                 <label id="entry-rows-label" hidden>Rows across to next pass
                   <input id="entryRows" type="number" min="1" max="24" step="1" value="1" />
                   <span>Use more than one to test leaving a short pike run for a longer row farther across the field.</span>
@@ -847,7 +848,11 @@
             <option value="2">2x</option>
             <option value="4" selected>4x</option>
             <option value="8">8x</option>
+            <option value="16">16x</option>
+            <option value="32">32x</option>
+            <option value="64">64x</option>
           </select>
+          <button id="show-result" class="icon start-run" type="button" disabled><span>Show result</span></button>
         </div>
         <div class="telemetry">
           <span>Working-edge error <strong id="live-error">--</strong></span

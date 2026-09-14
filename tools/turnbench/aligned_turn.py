@@ -63,7 +63,7 @@ def accepted(run):
                 if f['phase']!='exit' and f['lowered']))
 
 
-def compare_aligned(p):
+def compare_aligned(p, include_baseline=True, start=None):
     if p.fieldShape not in ('rectangle','sloping') or p.entry or p.pattern or p.courseLayout:
         raise ValueError('Aligned entry comparison supports isolated rectangle or sloping row ends')
     slope=(math.tan(math.radians(p.edgeAngle)) * (1 if p.slopeSide=='left' else -1)
@@ -73,7 +73,8 @@ def compare_aligned(p):
                  targetHeading=180,targetX=0,targetExplicit=False,turnType='dubins',
                  extension=0,approachLength=0,enforceBoundary=True,allowReverse=False,
                  fullCourse=False,pattern=False,courseLayout=False)
-    baseline=attach_field(simulate(replace(base,alignedPlanner=False,allowReverse=p.allowReverse),dt=.05),base)
+    baseline=(attach_field(simulate(replace(base,alignedPlanner=False,allowReverse=p.allowReverse),dt=.05),base)
+              if include_baseline else None)
     sources={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in SOURCES}
     # Search final straight and outgoing distance together. The requested radius
     # is a minimum; larger radii offer gentler sideways sweeps without exceeding
@@ -101,12 +102,12 @@ def compare_aligned(p):
                 def trial(bias):
                     nonlocal attempted,feasible,best
                     q=replace(candidate,turnBias=bias)
-                    run=simulate(q,dt=.05)
+                    run=simulate(q,dt=.05,start=start)
                     attempted+=1
                     if accepted(run):
                         attach_field(run,q)
                         if accepted(run):
-                            fine=attach_field(simulate(q,dt=.025),q)
+                            fine=attach_field(simulate(q,dt=.025,start=start),q)
                             if accepted(fine):
                                 feasible+=1
                                 best=fine
@@ -150,7 +151,7 @@ def compare_aligned(p):
             for radius in (p.radius,p.radius*1.25):
                 q=replace(base,approachLength=approach,finalStraight=approach,
                           turnType='reedsShepp',radius=radius,tight=False)
-                run=simulate(q,dt=.05)
+                run=simulate(q,dt=.05,start=start)
                 k_attempted+=1
                 attempted+=1
                 if not any(f.get('reverse') for f in run['frames']) or not accepted(run):
@@ -158,7 +159,7 @@ def compare_aligned(p):
                 attach_field(run,q)
                 if not accepted(run):
                     continue
-                fine=attach_field(simulate(q,dt=.025),q)
+                fine=attach_field(simulate(q,dt=.025,start=start),q)
                 if not accepted(fine):
                     continue
                 feasible+=1

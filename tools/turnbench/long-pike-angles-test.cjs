@@ -44,6 +44,8 @@ const {chromium}=require('C:/Users/danco/.cache/codex-runtimes/codex-primary-run
       await page.locator('#play').click();await page.waitForFunction(()=>frame>5);await page.locator('#play').click();
       await page.evaluate(()=>{frame=selected().frames.findIndex(f=>f.phase!=='exit'&&f.lowered);draw();});
       await page.screenshot({path:`out/long-pike-${angle}-${side===1?'short-to-long':'long-to-short'}.png`});
+      await page.evaluate(()=>{frame=selected().frames.length-1;document.getElementById('gaps').checked=true;draw();});
+      await page.screenshot({path:`out/long-pike-${angle}-${side===1?'short-to-long':'long-to-short'}-worked.png`});
       assert.deepEqual(errors,[]);
       const summary={angle,direction:side===1?'short-to-long':'long-to-short',...data.planner,...data.metrics};
       summaries.push(summary);console.log(JSON.stringify(summary));

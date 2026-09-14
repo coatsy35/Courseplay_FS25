@@ -259,6 +259,14 @@ For the long-pike drill fixture, open
 12 m drill, 25° pike and six skipped rows (84 m between driven rows).
 Use **Whole field** to see the entire outline, or clear it to inspect the turn.
 Field length remains editable. This mode plays the row-end experiment only.
+Enable **Complete skipped-row block** to drive all 14 rows in CP's skip-six
+order and fill the intervening rows. This checks coverage across the whole
+working block, with green worked area and pink gaps; headland work is separate.
+Use **Show result** for the finished coverage or playback up to **64×**.
+`coverage-gallery.cjs` captures eight angles/directions for each of the PW,
+6 m drill and 12 m drill. `build-coverage-gallery.py` builds their local gallery.
+Complete-block links add `&block=1`; `&implement=plough` or `&implement=drill`
+selects the PW or 6 m drill, and `&angle=45&direction=long` starts on the long side.
 The browser regression `long-pike-angles-test.cjs` covers 10–45° short-to-long
 and a 45° long-to-short control; results are recorded in
 `docs/envelope-turn-planner.md`.

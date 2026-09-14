@@ -10,6 +10,32 @@ let result = null,
 let camera = { x: 0, z: 0, scale: 5 },
   size = { w: 0, h: 0 },
   drag = null;
+const workedCanvas = document.createElement('canvas');
+let workedRun = null, workedKey = '', workedFrame = -1;
+function drawWorkedCoverage(run, end) {
+  const key = [camera.x,camera.z,camera.scale,canvas.width,canvas.height].join(',');
+  const target = workedCanvas.getContext('2d');
+  if (workedRun !== run || key !== workedKey || end < workedFrame) {
+    workedCanvas.width = canvas.width; workedCanvas.height = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    target.setTransform(dpr,0,0,dpr,0,0);
+    workedRun = run; workedKey = key; workedFrame = -1;
+  }
+  target.fillStyle = '#bfd9cc';
+  const fill = points => {
+    target.beginPath();
+    points.forEach((p,i) => {const s=toScreen(...p);if(i)target.lineTo(...s);else target.moveTo(...s);});
+    target.closePath();target.fill();
+  };
+  for (let i=workedFrame+1;i<=end;i++) {
+    const s=run.frames[i];
+    if (!s.lowered) continue;
+    fill([s.left,s.right,s.rearRight,s.rearLeft]);
+    if(i && run.frames[i-1].lowered) fill([run.frames[i-1].left,run.frames[i-1].right,s.right,s.left]);
+  }
+  workedFrame=end;
+  ctx.drawImage(workedCanvas,0,0,size.w,size.h);
+}
 const numeric = [
   "width",
   "length",
@@ -108,7 +134,7 @@ $("whole-field").onchange = () => { fit(); draw(); };
 function refreshConfiguration() {
   const dirty = JSON.stringify(scenario()) !== preparedConfiguration;
   if (dirty || configuring || selected()?.preview) setPlaying(false);
-  for (const id of ["play", "step", "restart", "timeline", "rate"])
+  for (const id of ["play", "step", "restart", "timeline", "rate", "show-result"])
     $(id).disabled =
       !result || dirty || configuring || Boolean(selected()?.preview);
   $("configuration-status").textContent = configuring
@@ -188,6 +214,7 @@ function scenario() {
     raiseLate: $("raiseLate").checked,
     loopTurnsOnHeadland: $("loopTurnsOnHeadland").checked,
     alignedPlanner: $("pattern").value === "aligned",
+    alignedPattern: $("pattern").value === "aligned" && $("alignedPattern").checked,
     rowSpacing: $("pattern").value === "aligned" ? p.width*Number($("entryRows").value) : 0,
     turnType: $("turnType").value,
     tight: $("tight").checked,
@@ -225,7 +252,7 @@ function chooseView(next) {
       ? (result.planner ? "CP + aligned entry" : "Baseline + extra clearance")
       : view === "experiment"
         ? (result.planner ? "Aligned entry" : "Extra clearance")
-        : "Baseline";
+        : result.planner?.pattern ? "Aligned pattern" : "Baseline";
   updateMetrics();
   updateEvents();
   fit();
@@ -257,6 +284,7 @@ async function run(event) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Simulation failed");
     result = data;
+    document.querySelector('[data-view="baseline"]').textContent = data.planner?.pattern ? "Aligned pattern" : "Baseline";
     $("whole-field-label").hidden = !data.planner;
     document.querySelector('[data-view="experiment"]').textContent = data.planner ? "Aligned entry" : "Extra clearance";
     preparedConfiguration = configuration;
@@ -269,7 +297,7 @@ async function run(event) {
           : "";
     });
     frame = 0;
-    for (const id of ["play", "step", "restart", "timeline", "rate"])
+    for (const id of ["play", "step", "restart", "timeline", "rate", "show-result"])
       $(id).disabled = data.baseline.preview;
     $("hashes").textContent = Object.entries(data.sources)
       .map(([file, hash]) => `${file}\n${hash}`)
@@ -315,17 +343,20 @@ function updateMetrics() {
         ? ` · CP: ${selected().generatorErrors.join("; ")}`
         : "")
     : result.planner
-      ? result.planner.feasible
+      ? result.planner.pattern
+        ? `${result.planner.message} · ${result.planner.calculationSeconds} s calculation · CP row order: ${result.planner.order.join(', ')}`
+        : result.planner.feasible
         ? `${result.planner.manoeuvre} verified in the model · ${result.planner.finalStraight} m final straight · ${Math.abs(result.planner.turnBias)} m pull-in offset · ${result.planner.rowEndDifference} m between row ends · ${result.planner.attempted} candidates checked`
         : result.planner.message
       : "";
   const m = selected().metrics;
+  $("metric-exit-gap").parentElement.hidden = Boolean(selected().coverageScope);
   const field = Boolean(selected().field);
   $("error-label").textContent = field
     ? "Worst entry lateral error"
     : "Entry lateral error";
   $("angle-label").textContent = field ? "Worst entry angle" : "Entry angle";
-  $("gap-label").textContent = field
+  $("gap-label").textContent = selected().coverageScope ? "Missed area / complete working block" : field
     ? "Missed entry area / all turns"
     : "Missed area / first 20 m";
   $("metric-error").textContent = m.entry
@@ -674,7 +705,8 @@ function draw() {
       ],
       "#d7e4dc",
     );
-  const step = camera.scale < 4 ? 10 : 5;
+  const rawStep=40/camera.scale, magnitude=10**Math.floor(Math.log10(rawStep));
+  const step=[1,2,5,10].map(n=>n*magnitude).find(n=>n>=rawStep);
   for (let x = Math.ceil(x0 / step) * step; x < x1; x += step) {
     line(
       [
@@ -697,16 +729,7 @@ function draw() {
     );
     if (z !== 0 && toScreen(x0, z)[1] > 44) label(String(z), x0 + 1, z + 0.4);
   }
-  for (let i = 0; i <= Math.floor(frame); i++) {
-    const s = run.frames[i];
-    if (!s.lowered) continue;
-    polygon([s.left, s.right, s.rearRight, s.rearLeft], "#bfd9cc");
-    if (i && run.frames[i - 1].lowered)
-      polygon(
-        [run.frames[i - 1].left, run.frames[i - 1].right, s.right, s.left],
-        "#bfd9cc",
-      );
-  }
+  drawWorkedCoverage(run, Math.floor(frame));
   if ($("gaps").checked) {
     ctx.fillStyle = "#e89ba5aa";
     for (const [x, z] of [...run.gaps, ...run.exitGaps]) {
@@ -929,7 +952,7 @@ function draw() {
   $("state").textContent = run.completeCourse
     ? `Vehicle ${p.vehicleIndex}/${p.vehicles} · ${f.state}${f.headland ? " " + f.headland : f.row ? " " + f.row : ""}`
     : f.pass
-      ? `Pass ${f.pass}/${p.passes} · ${f.state}`
+      ? `Pass ${f.pass}/${result.planner?.rows || p.passes} · ${f.state}`
       : f.state;
   $("live-error").textContent = run.preview ? "--" : `${f.error.toFixed(2)} m`;
   $("live-angle").textContent = run.preview
@@ -1005,6 +1028,12 @@ function updateControls() {
   const layout = $("pattern").value === "layout";
   const complete = $("pattern").value === "course";
   const aligned = $("pattern").value === "aligned";
+  $("aligned-pattern-label").hidden = !aligned;
+  $("entryRows").max = $("alignedPattern").checked ? "7" : "24";
+  if (aligned && $("alignedPattern").checked) {
+    $("rowsToSkip").value = Number($("entryRows").value)-1;
+    $("rowPattern").value = "alternating";
+  }
   $("entry-rows-label").hidden = !aligned;
   $("entryRows").disabled = !aligned;
   const generated =
@@ -1033,7 +1062,9 @@ function updateControls() {
   $("irregular-inset-label").hidden = $("fieldShape").value !== "irregular";
   $("irregularInset").disabled = $("fieldShape").value !== "irregular";
   $("run-mode-note").textContent = aligned
-    ? "Experimental row-end comparison: rectangle for straight work, sloping for pikes. Increase headland rows to test more space. Searches for an aligned entry inside the modelled field; maximum model articulation is 85°, pending actual joint limits. Does not run a full field."
+    ? $("alignedPattern").checked
+      ? "Drives a complete skipped-row block in CP order, filling the intervening rows. Green shows worked area; pink shows missed coverage across the whole working block. Headland work is not included."
+      : "Experimental row-end comparison: rectangle for straight work, sloping for pikes. Searches for an aligned entry inside the modelled field. Enable Complete skipped-row block to fill the intervening rows."
     : complete
     ? "Drives the whole CP-generated field, including short rows and connections between sections. No pass count is needed. Set configuration, then press Start run."
     : field
@@ -1044,7 +1075,7 @@ function updateControls() {
   $("fieldLength").disabled = !field;
   if (layout || complete || aligned) $("fieldLength").disabled = false;
   $("fieldWidth").disabled = !(layout || field || complete || aligned);
-  $("enforceBoundary").disabled = layout;
+  $("enforceBoundary").disabled = layout || aligned;
   for (const id of [
     "rowAngle",
     "headlandOverlap",
@@ -1080,7 +1111,9 @@ function updateControls() {
     !generated || $("autoRowAngle").checked || $("useBaseline").checked;
   $("autoRowAngle").disabled = !generated || $("useBaseline").checked;
   $("rotateRows").disabled = !generated;
-  $("rowsToSkip").disabled = $("rowPattern").value !== "alternating";
+  $("rowPattern").disabled = aligned;
+  $("rowsToSkip").disabled = aligned || $("rowPattern").value !== "alternating";
+  $("loopTurnsOnHeadland").disabled = aligned;
   $("spiralFromInside").disabled = $("rowPattern").value !== "spiral";
   $("centreClockwise").disabled = !["spiral", "lands"].includes(
     $("rowPattern").value,
@@ -1147,6 +1180,7 @@ $("headlandFirst").onchange = updateControls;
 $("courseDirection").onchange = updateControls;
 $("autoRowAngle").onchange = updateControls;
 $("useBaseline").onchange = updateControls;
+$("alignedPattern").onchange = updateControls;
 $("rotateRows").onclick = () => {
   let angle = Number($("rowAngle").value);
   if (
@@ -1250,6 +1284,12 @@ $("play").onclick = () => {
   if (!result) return;
   if (frame >= selected().frames.length - 1) frame = 0;
   setPlaying(!playing);
+};
+$("show-result").onclick = () => {
+  if (!result) return;
+  setPlaying(false);
+  frame=selected().frames.length-1;
+  draw();
 };
 $("restart").onclick = () => {
   setPlaying(false);
@@ -1374,6 +1414,7 @@ $("setup-file").onchange = async () => {
     $("pattern").value = p.pattern ? "field" : "single";
     if (p.courseLayout) $("pattern").value = p.fullCourse ? "course" : "layout";
     if (p.alignedPlanner) $("pattern").value = "aligned";
+    $("alignedPattern").checked = Boolean(p.alignedPattern);
     $("entryRows").value = p.rowSpacing ? p.rowSpacing/p.width : 1;
     $("fieldShape").value = p.fieldShape;
     $("slopeSide").value = p.slopeSide;
@@ -1523,14 +1564,17 @@ $("config-search").addEventListener("keydown", (event) => {
   }
 });
 if (new URLSearchParams(location.search).get("mode") === "aligned") {
+  const options = new URLSearchParams(location.search);
   $("pattern").value = "aligned";
   if (new URLSearchParams(location.search).get("case") === "long-pike-12m") {
     $("whole-field").checked = true;
-    $("preset").value = "drill12";
+    const implement = ['drill12','drill','plough'].includes(options.get('implement')) ? options.get('implement') : 'drill12';
+    $("preset").value = implement;
     $("preset").dispatchEvent(new Event("change"));
     for (const [id,value] of Object.entries({fieldLength:500,fieldWidth:400,
-      headlandRows:6,fieldShape:"sloping",edgeAngle:25,slopeSide:"left",side:1,entryRows:7}))
+      headlandRows:implement==='drill12'?6:9,fieldShape:"sloping",edgeAngle:Number(options.get('angle') || 25),slopeSide:"left",side:options.get('direction')==='long'?-1:1,entryRows:7}))
       $(id).value=String(value);
+    $("alignedPattern").checked = options.get('block')==='1';
   }
   updateControls();
 }

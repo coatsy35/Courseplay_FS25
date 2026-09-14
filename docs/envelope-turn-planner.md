@@ -106,6 +106,48 @@ a turn easier. The coverage simulation continues far enough to finish the full
 20 m sample at both sides of the sloping working edge, including the 45° case.
 `tools/turnbench/long-pike-angles-test.cjs` checks all eight cases in the browser.
 
+## Complete skipped-row blocks and screenshots
+
+Enable **Complete skipped-row block** in Aligned entry comparison. Seven widths
+across selects a 14-row block, skipping six rows and then filling them in CP's
+actual order: 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14. All 13 turns and
+the full intervening working rows are driven continuously. Tractor position,
+heading and implement yaw carry through each row; cached poses are never spliced
+into the animation. This completes the central working block, not headland work.
+
+Coverage now measures the whole working block at 0.25 m cell centres. Green
+shows actual lowered work-envelope sweeps and pink marks uncovered cells. This
+reveals outer-edge gaps that the previous 20 m row-end samples could miss.
+The PW's 10°, 25°, 30°, 35°, 40° and 45° short-start cases respectively show
+0.56, 0.50, 1.44, 0.31, 1.56 and 0.19 m² remaining; 20° shows zero. The 45°
+long-start case shows 0.19 m². These gaps remain visible and are not counted as
+covered merely because heading/edge alignment passes its tolerance.
+
+The gallery captures 500 × 400 m blocks with the PW (5.6 m, nine headlands),
+6 m drill (nine headlands) and 12 m drill (six headlands), at 10°, 20°, 25°, 30°,
+35°, 40° and 45° short-start, plus 45° long-start. The drill geometries remain
+illustrative. The PW's adjacent-row turns approach the provisional 85° model
+articulation ceiling; in-game joint/body constraints still need validation.
+
+Speed changes precompute gear-leg ends and navigation points, avoid redundant
+coverage tests, use convex half-plane clearance checks where applicable, and
+reuse validated turn parameters. A changed pike angle may start from a prior
+valid shape, which is rechecked at 50 ms and 25 ms. Each actual arriving state is
+simulated at 25 ms; failure triggers bias refinement or a fresh search. Recorded
+turn scenarios preserve the chosen parameters. Warm-start results can differ
+from a cold bounded search and do not establish a globally minimum turn.
+
+Four complete results and 64 turn templates are cached in memory. Repeated
+identical PW configuration measured 0.69 s calculation / 1.66 s HTTP round trip;
+new-angle requests remain longer. Browser coverage uses an incremental backing
+canvas. **Show result** jumps straight to the finished coverage; 16×, 32× and
+64× playback are available.
+
+Run `node tools/turnbench/coverage-gallery.cjs`, then
+`python tools/turnbench/build-coverage-gallery.py` to build the completed coverage
+gallery in `out/turn-coverage-gallery`. Captures resume from its `results.json`;
+use a fresh output directory when deliberately regenerating every scenario.
+
 ## Remaining limits and next integration
 
 - The 85° articulation ceiling is a provisional test limit, not a captured safe
