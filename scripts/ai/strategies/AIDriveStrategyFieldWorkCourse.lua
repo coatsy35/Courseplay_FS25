@@ -50,6 +50,9 @@ function AIDriveStrategyFieldWorkCourse:init(task, job)
 end
 
 function AIDriveStrategyFieldWorkCourse:delete()
+    -- A user can stop a job while the envelope planner is suspended between
+    -- updates. Release its prediction nodes even when no candidate has finished.
+    if self.aiTurn and self.aiTurn.release then self.aiTurn:release() end
     AIDriveStrategyCourse.delete(self)
     self:raiseImplements()
     TurnContext.deleteNodes(self.turnNodes)
@@ -396,7 +399,20 @@ function AIDriveStrategyFieldWorkCourse:startTurn(ix)
     self.ppc:setShortLookaheadDistance()
     self.turnContext = TurnContext(self.vehicle, self.course, ix, ix + 1, self.turnNodes, self:getWorkWidth(), fm, bm,
             self:getTurnEndSideOffset(self.course:isHeadlandTurnAtIx(ix + 1)), self:getTurnEndForwardOffset())
-    if AITurn.canMakeKTurn(self.vehicle, self.turnContext, self.workWidth, self:isTurnOnFieldActive()) then
+    -- Keep the experimental strategy outside the shared Dubins solver. It
+    -- applies only to row ends; headland corners/loop turns retain stock CP.
+    local useEnvelope = EnvelopeTurnGeometry.enabled(self.vehicle, self.turnContext)
+    if useEnvelope then
+        local supported, reason = EnvelopeTurnGeometry.supported(self.vehicle)
+        useEnvelope = supported
+        if not supported then
+            Logging.info('[CP envelope] %s: stock CP turn selected: %s', CpUtil.getName(self.vehicle), reason)
+        end
+    end
+    if useEnvelope then
+        self.aiTurn = EnvelopeCourseTurn(self.vehicle, self, self.ppc, self.proximityController,
+                self.turnContext, self.course, self.workWidth)
+    elseif AITurn.canMakeKTurn(self.vehicle, self.turnContext, self.workWidth, self:isTurnOnFieldActive()) then
         self.aiTurn = KTurn(self.vehicle, self, self.ppc, self.proximityController, self.turnContext, self.workWidth)
     else
         self.aiTurn = CourseTurn(self.vehicle, self, self.ppc, self.proximityController, self.turnContext, self.course, self.workWidth)

@@ -2,6 +2,11 @@
 
 Development branch: `codex/implement-envelope-turns`.
 
+An opt-in in-game integration now lives on `codex/implement-envelope-ingame`.
+See [runtime architecture, test build and limitations](implement-envelope-ingame.md).
+The results below describe the earlier offline prototype; they are not live-game
+validation of the integration.
+
 ## Accepted behaviour
 
 - Plan backwards from an aligned working entry, for pikes and ordinary rows.

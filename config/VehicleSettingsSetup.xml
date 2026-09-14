@@ -43,6 +43,9 @@
 	</SettingSubTitle>
 
 	<SettingSubTitle title="implement">
+		<!-- Opt-in while the geometry/physics adapter is being tested. Local
+		     envelope test packages enable this default; release builds do not. -->
+		<Setting classType="AIParameterBooleanSetting" name="envelopeAlignedTurns" defaultBool="false" isVisible="areCourseSettingsVisible"/>
 		<!--Fold at End-->
 		<Setting classType="AIParameterBooleanSetting" name="foldImplementAtEnd" defaultBool="true" isExpertModeOnly="true" isVisible="areCourseSettingsVisible"/>
 		<!--Return to Start-->
