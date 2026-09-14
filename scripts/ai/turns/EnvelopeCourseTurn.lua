@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.7'
+EnvelopeCourseTurn.TEST_VERSION = '0.8'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -195,7 +195,12 @@ function EnvelopeCourseTurn:updatePlanner()
     until result or getTimeSec()-started>=0.008
     if not result then return end
     self.planner=nil
-    if not result.ok then self:stopWithReason(result.reason); return end
+    if not result.ok then
+        if result.attempts then
+            self:log('search exhausted: %d trials, best predicted edge error %s m',result.attempts,tostring(result.bestError))
+        end
+        self:stopWithReason(result.reason); return
+    end
     self.result=result
     self.entrySpeedLimit=nil
     local points={}
@@ -210,7 +215,7 @@ function EnvelopeCourseTurn:updatePlanner()
     self.ppc:initialize(1)
     self.state=self.states.TURNING
     if result.repairedApproach then
-        self:log('SELECTED local entry correction: %d trials, predicted edge error %.3f m; no second loop',result.attempts,result.entryError)
+        self:log('SELECTED local entry correction: %d trials, lateral lead %.3f m, predicted edge error %.3f m; no second loop',result.attempts,result.bias,result.entryError)
     elseif result.retainedApproach then
         self:log('VALIDATED remaining working-position approach: predicted edge error %.3f m',result.entryError)
     else

@@ -335,6 +335,46 @@ local working=assert(EnvelopeTurnGeometry.capture(f.turn))
 assert(working.headland==q.headland)
 ''')
 
+    def test_live_v07_snapshot_finds_steering_lead_without_long_search(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+-- Post-rotation v0.7 log, 18:11:02 on 14 September. As with the v0.5 replay,
+-- no field polygon or GIANTS physics is reconstructed from these log values.
+for _,mirror in ipairs({1,-1}) do
+    local p=envelopeFixture(5.6,11.44,1.348,3.842,17.826,-41.5,-1,45.1)
+    p.start={x=-229.605*mirror,z=-34.290,t=math.rad(163.844)*mirror,phi=math.rad(-177.447)*mirror}
+    p.goal={x=-229.703*mirror,z=-50.040,t=-math.pi*mirror}
+    p.hitchX=-0.018*mirror;p.hitchZ=-1.348;p.lookahead=2.695;p.trackingRadius=5.389
+    p.slope=p.slope*mirror
+    p.work={{x=3.385*mirror,z=-2.494,towed=true},{x=-2.167*mirror,z=-2.797,towed=true},
+        {x=3.385*mirror,z=-16.478,towed=true,rear=true},{x=-2.167*mirror,z=-16.478,towed=true,rear=true}}
+    p.workCentreX=(3.385-2.167)/2*mirror+p.hitchX;p.footprint=p.work
+    p.contains=function() return true end
+    local search=E.newApproachSearch(p)
+    local result
+    repeat result=search:update(256) until result
+    assert(result.ok and result.repairedApproach,result.reason)
+    assert(result.attempts<20 and result.entryError<=E.edgeTolerance)
+    assert(math.abs(result.bias)>0.1 and result.distance<40)
+    for i=2,#result.path do
+        local a,b=result.path[i-1],result.path[i]
+        local _,forward=E.localPoint(b,{x=a.x,z=a.z,t=p.goal.t})
+        assert(forward>0) -- steering lead remains an approach, never a second loop
+    end
+end
+''')
+
+    def test_local_search_is_bounded_and_cannot_turn_back_out(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)
+-- Facing away from entry requires another manoeuvre, not a local correction.
+local search=EnvelopeTurnPlanner.newApproachSearch(p)
+local result,updates=nil,0
+repeat result=search:update(10);updates=updates+1 until result or updates>200
+assert(result and not result.ok and result.attempts<=96)
+assert(not p.activeTracker)
+''')
+
     def test_rotating_tool_direction_frame_controls_geometry_and_entry(self):
         self.lua.execute('''
 local E,G=EnvelopeTurnPlanner,EnvelopeTurnGeometry

@@ -3,12 +3,34 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.7**, packaged mod version **8.1.0.107**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.7` records identify it.
+Current test: **v0.8**, packaged mod version **8.1.0.108**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.8` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.8 addresses the next v0.7 live failure: after rotation, the tractor
+stayed stationary for 28 seconds while the local cubic family exhausted its
+entry-alignment candidates. The corrected direction node was active and the
+headland estimate remained 45.1 m. Changing tangent lengths alone did not supply
+the necessary sideways steering lead from that measured working position.
+
+Local corrections now include a smooth lateral lead which is zero, with zero
+derivative, at both endpoints. Its amplitude is solved from the working edges'
+signed error, balancing the most negative and positive displacements rather
+than forcing one rear corner to zero while the front aligns too late. The
+original strict per-edge, heading, braking-lead and footprint checks remain.
+The path must progress towards the incoming row and cannot create a second loop.
+Searches are limited to 96 candidate attempts and interleave tangent/straight
+choices. Failure records include the trial count and best sampled entry error.
+
+The logged 18:11:02 working-position snapshot and its mirrored counterpart both
+find a verified planar correction in five trials (about 0.071 m predicted entry
+error), instead of exhausting the previous family. This is not a field-boundary
+or GIANTS-physics replay: neither was recorded in the log. The live result still
+needs checking; no measured dimensions or fixed PW-specific bias were added to
+production code. The first bulb's side selection is unchanged.
 
 Version 0.7 follows stock `AIReverseDriver`'s direction-reference choice for
 rotating/offset implements: prefer the tool's `getAIToolReverserDirectionNode()`
@@ -228,7 +250,7 @@ python tools/turnbench/build_ingame_test.py
 ```
 
 These are offline checks, **not an in-game physics or collision certification**.
-The first live run of v0.7 is still needed. Field-density data does not describe every
+The first live run of v0.8 is still needed. Field-density data does not describe every
 hedge/obstacle; CP's normal proximity controller remains active. A stopped job
 does not imply that a different family of turn could never fit that headland.
 

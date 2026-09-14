@@ -54,11 +54,13 @@ end
 function E.assess(p, state)
     local error, angle, contact = 0, 0, -math.huge
     local rearError = 0
+    local minError,maxError=math.huge,-math.huge
     for _, marker in ipairs(p.work) do
         local v = E.marker(p, state, marker)
         local x, z = E.localPoint(v, p.goal)
         local expectedX = marker.x + (marker.towed and p.hitchX or 0)
         local d = x - expectedX
+        minError,maxError=math.min(minError,d),math.max(maxError,d)
         error = math.max(error, math.abs(d))
         angle = math.max(angle, math.abs(E.wrap((marker.towed and state.phi or state.t) - p.goal.t)))
         if marker.rear then rearError = d end
@@ -69,7 +71,7 @@ function E.assess(p, state)
         end
     end
     return error <= E.edgeTolerance and angle <= E.angleTolerance,
-        error, angle, contact, rearError
+        error, angle, contact, rearError,(minError+maxError)/2
 end
 
 local function segmentDistanceSquared(p, a, b)
@@ -189,7 +191,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
             while goalIx<#path and (path[goalIx].x-s.x)^2+(path[goalIx].z-s.z)^2<p.lookahead^2 do goalIx=goalIx+1 end
             gx,gz=path[goalIx].x,path[goalIx].z
         end
-        local aligned, error, angle, contact, rear = E.assess(p,s)
+        local aligned, error, angle, contact, rear,balanced = E.assess(p,s)
         local articulation=math.abs(E.wrap(s.t-s.phi))
         maxArticulation=math.max(maxArticulation,articulation)
         if p.length and articulation > p.maxArticulation then return finish({ok=false,reason='joint angle'}) end
@@ -205,7 +207,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
                 -- Hydraulic travel is handled by stopping BEFORE first contact.
                 -- We still need a short aligned window in which to stop/lower.
                 if not aligned or alignmentLead < p.loweringLead then
-                    return finish({ok=false,reason='entry alignment',error=error,rearError=rear})
+                    return finish({ok=false,reason='entry alignment',error=error,rearError=rear,alignmentError=balanced})
                 end
             end
             if entered and not aligned then return finish({ok=false,reason='alignment lost',rearError=rear}) end
@@ -323,20 +325,27 @@ end
 -- around another bulb. Tangent lengths vary with the remaining distance,
 -- rather than prescribing a long straight or a model-specific correction.
 function E.newApproachSearch(p)
-    local factors={0.3,0.4,0.2,0.5,0.1,0.6,0.8,1,1.2}
-    local straights={0,2,4,8}
+    local factors={0.1,0.2,0.3,0.4,0.5,0.6}
+    local straights={2,0,4,8}
     local ai,bi,si,attempts=1,1,1,0
     local simulation,path,verified
+    local bias,stage,iterations=0,'zero',0
+    local lo,hi,loError,hiError,zeroError,biasLimit
+    local bestError=math.huge
     local lastReason='no forward approach'
     local function advance()
-        bi=bi+1
+        -- Interleave remaining straight lengths so a bounded search samples
+        -- each one instead of spending its whole budget on the first length.
+        si=si+1
+        if si>#straights then si=1;bi=bi+1 end
         if bi>#factors then bi=1;ai=ai+1 end
-        if ai>#factors then ai=1;si=si+1 end
+        bias,stage,iterations=0,'zero',0
     end
     local function makeApproach()
         local finish=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.front-straights[si])
         local _,remaining=E.localPoint(finish,{x=p.start.x,z=p.start.z,t=p.goal.t})
         if remaining<=0 or math.abs(E.wrap(p.start.t-p.goal.t))>=math.pi/2 then return nil end
+        biasLimit=math.min(p.width/2,remaining*remaining/(24*p.radius),3)
         local a=E.point(p.start.x,p.start.z,p.start.t,0,remaining*factors[ai])
         local b=E.point(finish.x,finish.z,p.goal.t,0,-remaining*factors[bi])
         local points={}
@@ -345,6 +354,14 @@ function E.newApproachSearch(p)
             local u=i/steps;local v=1-u
             local q={x=v^3*p.start.x+3*v*v*u*a.x+3*v*u*u*b.x+u^3*finish.x,
                 z=v^3*p.start.z+3*v*v*u*a.z+3*v*u*u*b.z+u^3*finish.z}
+            -- A lateral lead in the middle pulls the trailer onto line before
+            -- the tractor settles. This quartic is zero with zero derivative
+            -- at BOTH ends, preserving the measured start and incoming tangent.
+            -- Merely changing cubic tangent lengths cannot always provide this
+            -- steering lead (the v0.7 live working-position snapshot is one).
+            local lead=16*bias*u*u*v*v
+            q.x=q.x+lead*math.cos(p.goal.t)
+            q.z=q.z-lead*math.sin(p.goal.t)
             if #points>0 then
                 local previous=points[#points]
                 local dx,dz=E.localPoint(q,{x=previous.x,z=previous.z,t=p.goal.t})
@@ -364,15 +381,20 @@ function E.newApproachSearch(p)
         if attempts==0 and not E.checkFootprint(p,p.start) then
             return {ok=false,reason='local approach: starting footprint lacks field clearance',attempts=0}
         end
-        if si>#straights then return {ok=false,reason='local approach: '..lastReason,attempts=attempts} end
+        -- Recovery at row entry must remain bounded; an exhausted search must
+        -- not leave the tractor parked for minutes or launch another full loop.
+        if ai>#factors or (attempts>=96 and not simulation) then
+            return {ok=false,reason='local approach: '..lastReason,attempts=attempts,bestError=bestError}
+        end
+        local result
         if not simulation then
             attempts=attempts+1
             path=makeApproach()
-            if not path then advance();return nil end
-            simulation=E.newSimulation(p,path,2,0.15,false,false)
+            if path then simulation=E.newSimulation(p,path,2,0.15,false,false)
+            else result={ok=false,reason='local curve exceeds forward approach bounds'} end
             verified=false
         end
-        local result=simulation:update(budget)
+        result=result or simulation:update(budget)
         if not result then return nil end
         if result.ok and not verified then
             simulation=E.newSimulation(p,path,2,0.075,true,true)
@@ -381,12 +403,43 @@ function E.newApproachSearch(p)
         simulation=nil
         if result.ok then
             result.attempts,result.straight,result.bend=attempts,straights[si],0
-            result.radius,result.extension,result.bias=p.radius,0,0
+            result.radius,result.extension,result.bias=p.radius,0,bias
             result.repairedApproach=true
             return result
         end
         lastReason=result.reason
-        advance()
+        bestError=math.min(bestError,result.error or math.huge)
+        -- Balance the most negative/positive working-edge displacement, rather
+        -- than forcing just one rear corner onto its line. That can leave the
+        -- front outside tolerance until too late to stop before work entry.
+        -- Solve this signed error rather than trying
+        -- hundreds of nearly identical cubic curves. Fine verification still
+        -- requires every working edge and the full footprint to pass.
+        local err=result.alignmentError or result.rearError
+        if stage=='zero' then
+            if not path then advance();return nil end
+            zeroError=err
+            lo,hi=-biasLimit,biasLimit
+            stage,bias='left',lo
+        elseif stage=='left' then
+            loError=err;stage,bias='right',hi
+        elseif stage=='right' then
+            hiError=err
+            -- One extreme can exceed the forward-only shape bounds. Keep the
+            -- valid zero-bias sample as a bracket endpoint on the other side.
+            if not loError and zeroError then lo,loError=0,zeroError end
+            if not hiError and zeroError then hi,hiError=0,zeroError end
+            if loError and hiError and loError*hiError<0 then
+                stage='root';bias=lo-loError*(hi-lo)/(hiError-loError)
+            else advance() end
+        else
+            iterations=iterations+1
+            if not err or iterations>=6 then advance()
+            else
+                if loError*err<=0 then hi,hiError=bias,err else lo,loError=bias,err end
+                bias=lo-loError*(hi-lo)/(hiError-loError)
+            end
+        end
         return nil
     end}
 end
