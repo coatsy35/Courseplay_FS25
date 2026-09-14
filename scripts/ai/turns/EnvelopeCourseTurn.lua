@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.9'
+EnvelopeCourseTurn.TEST_VERSION = '0.10'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -245,8 +245,8 @@ function EnvelopeCourseTurn:getDriveData(dt)
         if not EnvelopeTurnPlanner.checkFootprint(self.geometry,state) then
             self:stopWithReason('live footprint reached the reserved field edge'); return nil,nil,true,0
         end
-        if self.lowerRequested and not aligned then
-            self:stopWithReason(string.format('alignment lost while lowering (edge %.3f m, angle %.2f degrees)',error,math.deg(angle)))
+        if self.entryReleased and not aligned then
+            self:stopWithReason(string.format('alignment lost after lowering (edge %.3f m, angle %.2f degrees)',error,math.deg(angle)))
             return nil,nil,true,0
         end
         local px,_,pz=self.ppc:getGoalPointPosition()
@@ -269,7 +269,7 @@ function EnvelopeCourseTurn:endTurn(dt)
     self.lastContact=contact
     -- Check BEFORE hand-off clears geometry. Checking only after getDriveData
     -- returns would miss a loss of alignment on the very frame of entry.
-    if self.lowerRequested and not aligned then
+    if self.entryReleased and not aligned then
         self:stopWithReason(string.format('alignment lost before entry (edge %.3f m, angle %.2f degrees)',error,math.deg(angle)))
         return false
     end
@@ -309,6 +309,19 @@ function EnvelopeCourseTurn:endTurn(dt)
         end
         if g_currentMission.time-self.loweringStarted>30000 then self:stopWithReason('implement did not become ready after lowering') end
         return false
+    end
+    -- Lowering changes pitch and the physical marker positions even while the
+    -- tractor is braked. Those intermediate poses are not working entries.
+    -- Keep the original row target and strict tolerance, but assess admission
+    -- only once the hydraulic wait and CP's readiness checks have completed.
+    -- Never recalibrate the target to make a displaced implement appear aligned.
+    if not aligned then
+        self:stopWithReason(string.format('settled implement not aligned after lowering (edge %.3f m, angle %.2f degrees)',error,math.deg(angle)))
+        return false
+    end
+    if not self.entryReleased then
+        self.entryReleased=true
+        self:log('READY: settled edge error %.3f m, angle %.2f degrees, first work corner %.2f m before entry',error,math.deg(angle),-contact)
     end
     self.entrySpeedLimit=3
     -- Do not hand back early: the base resume method lowers implements without

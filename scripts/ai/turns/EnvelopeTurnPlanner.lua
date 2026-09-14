@@ -15,6 +15,9 @@ EnvelopeTurnPlanner = {}
 local E = EnvelopeTurnPlanner
 E.angleTolerance = math.rad(2)
 E.edgeTolerance = 0.1
+-- Reserve half the live allowance for physical tracking and hydraulic settling.
+-- Candidate acceptance must not aim at the same threshold that stops the rig.
+E.planningEdgeTolerance = E.edgeTolerance / 2
 E.reserve = 0.5
 -- Shared with the live lowering gate: align BEFORE stopping, not only at the
 -- later boundary-crossing sample. The tractor brakes towards 0.5 m clearance.
@@ -196,6 +199,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
             gx,gz=path[goalIx].x,path[goalIx].z
         end
         local aligned, error, angle, contact, rear,balanced = E.assess(p,s)
+        aligned=aligned and error<=E.planningEdgeTolerance
         local articulation=math.abs(E.wrap(s.t-s.phi))
         maxArticulation=math.max(maxArticulation,articulation)
         if p.length and articulation > p.maxArticulation then return finish({ok=false,reason='joint angle'}) end

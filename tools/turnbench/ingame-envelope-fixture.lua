@@ -135,6 +135,7 @@ function driveEnvelopeLiveFixture(p)
         f.vehicle.speed=speed*3.6
         f.vehicle.lastSpeed=speed/1000
         f:setPose(s)
+        if p.postPoseFixture then p.postPoseFixture(f) end
         t.ppc:update()
         local gx,gz,forward,limit=t:getDriveData(dt*1000)
         if f.vehicle.stopped then error('runtime stopped at contact '..tostring(t.lastContact)) end

@@ -354,13 +354,47 @@ for _,mirror in ipairs({1,-1}) do
     local result
     repeat result=search:update(256) until result
     assert(result.ok and result.repairedApproach,result.reason)
-    assert(result.attempts<20 and result.entryError<=E.edgeTolerance)
+    -- The reserved tracking margin needs more trials than v0.8's first
+    -- threshold-grazing candidate, but must remain a bounded local correction.
+    assert(result.attempts<32 and result.entryError<=E.planningEdgeTolerance)
     assert(math.abs(result.bias)>0.1 and result.distance<40)
     for i=2,#result.path do
         local a,b=result.path[i-1],result.path[i]
         local _,forward=E.localPoint(b,{x=a.x,z=a.z,t=p.goal.t})
         assert(forward>0) -- steering lead remains an approach, never a second loop
     end
+end
+''')
+
+    def test_live_v09_snapshot_reserves_margin_through_entry(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+-- 23:35:03, 14 September: deployed geometry at the selected internal pivot.
+-- Log replay validates geometry/search only, not GIANTS physics or this field.
+for _,mirror in ipairs({1,-1}) do
+    local p=envelopeFixture(5.6,11.12,1.686,3.86,17.84,-41.5,-1,45.1)
+    p.start={x=-229.737*mirror,z=-33.332,t=math.rad(158.397)*mirror,phi=math.rad(-176.017)*mirror}
+    p.goal={x=-229.703*mirror,z=-50.040,t=-math.pi*mirror}
+    p.hitchX=-0.021*mirror;p.hitchZ=-1.686;p.lookahead=2.695;p.trackingRadius=5.389
+    p.slope=p.slope*mirror
+    p.work={{x=3.277*mirror,z=-2.171,towed=true},{x=-2.276*mirror,z=-2.473,towed=true},
+        {x=3.277*mirror,z=-16.154,towed=true,rear=true},{x=-2.276*mirror,z=-16.154,towed=true,rear=true}}
+    p.workCentreX=(3.277-2.276)/2*mirror+p.hitchX;p.footprint=p.work
+    p.contains=function() return true end
+    local search=E.newApproachSearch(p)
+    local result
+    repeat result=search:update(256) until result
+    assert(result.ok and result.repairedApproach,result.reason)
+    assert(result.attempts<32)
+    local checked=0
+    for _,s in ipairs(result.frames) do
+        local _,error,_,contact=E.assess(p,s)
+        if contact>=E.loweringGateContact then
+            assert(error<=E.planningEdgeTolerance)
+            checked=checked+1
+        end
+    end
+    assert(checked>10)
 end
 ''')
 
@@ -569,6 +603,50 @@ f:setPose(s)
 g_currentMission.time=3000
 assert(not f.turn:endTurn(16))
 assert(f.vehicle.stopped and f.strategy.resumed==0)
+''')
+
+    def test_lowering_transient_waits_but_settled_displacement_fails(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)
+for _,persistent in ipairs({false,true}) do
+    local f=makeEnvelopeLiveFixture(p)
+    f.turn.geometry=assert(EnvelopeTurnGeometry.capture(f.turn))
+    f:setPose({x=p.goal.x,z=-4,t=math.pi,phi=math.pi})
+    g_currentMission.time=0
+    assert(not f.turn:endTurn(16) and f.object.lowerCount==1)
+    -- Lowering can displace markers while the tractor itself stays stationary.
+    for _,node in ipairs({f.object.left,f.object.right,f.object.back}) do node.x=node.x+0.15 end
+    g_currentMission.time=500
+    assert(not f.turn:endTurn(16) and not f.vehicle.stopped)
+    assert(not f.turn.entryReleased and f.strategy.resumed==0)
+    if not persistent then
+        for _,node in ipairs({f.object.left,f.object.right,f.object.back}) do node.x=node.x-0.15 end
+    end
+    g_currentMission.time=2600
+    local canDrive=f.turn:endTurn(16)
+    assert(canDrive==not persistent and f.vehicle.stopped==persistent)
+    assert(f.strategy.resumed==0 and f.object.lowerCount==1)
+end
+''')
+
+    def test_runtime_holds_through_lowering_marker_transient(self):
+        self.lua.execute('''
+for _,length in ipairs({0,11.1}) do
+    local p=envelopeFixture(6,length,1.9,4.6,18.3,0,1,72)
+    local checked=false
+    p.postPoseFixture=function(f)
+        if f.turn.lowerRequested then
+            local age=g_currentMission.time-f.turn.loweringStarted
+            if age>100 and age<1800 then
+                for _,node in ipairs({f.object.left,f.object.right,f.object.back}) do node.x=node.x+0.15 end
+                assert(not f.turn.entryReleased and f.vehicle.speed<0.21)
+                checked=true
+            end
+        end
+    end
+    driveEnvelopeLiveFixture(p)
+    assert(checked)
+end
 ''')
 
     def test_no_last_waypoint_escape_and_cancellation_cleanup(self):

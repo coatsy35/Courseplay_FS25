@@ -3,12 +3,33 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.9**, packaged mod version **8.1.0.109**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.9` records identify it.
+Current test: **v0.10**, packaged mod version **8.1.0.110**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.10` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.10 addresses the v0.9 stop during hydraulic movement. The live log
+recorded lowering at 0.094 m / 0.71 degrees, then stopped 0.54 seconds later at
+0.101 m / 0.70 degrees, before the lowering wait had completed. While lowering,
+the tractor now remains braked and intermediate alignment errors do not abort
+the job. Boundary, articulation and premature entry checks remain active.
+After the configured hydraulic duration and CP readiness checks pass, the
+settled envelope must satisfy the original 0.1 m / 2-degree limits before
+movement is released. Persistent displacement still stops and raises the tools;
+the row target is not recalibrated to hide displacement. A READY log records
+the settled result separately from LOWER and ENTRY.
+
+The planner now reserves half the live lateral allowance for tracking and
+settling: candidates must stay within 0.05 m from the lowering gate through
+entry. This is a modelling margin, not a relaxed runtime threshold or a
+PW-specific dimension. Replays of the latest geometry and its mirror verify
+that a local correction with this margin exists. Tests also apply temporary
+marker movement while stationary, complete runtime entry with mounted/trailed
+tools, and reject movement that persists after lowering. Offline testing cannot
+establish how far the live implement will settle; the first v0.10 game test is
+still required. Width/overlap-based live tolerances remain future work.
 
 Version 0.9 follows the v0.8 live attempt: the local correction was found in
 five trials, but lowering stopped at 0.154 m lateral error / 0.63 degrees.
@@ -269,7 +290,7 @@ python tools/turnbench/build_ingame_test.py
 ```
 
 These are offline checks, **not an in-game physics or collision certification**.
-The first live run of v0.9 is still needed. Field-density data does not describe every
+The first live run of v0.10 is still needed. Field-density data does not describe every
 hedge/obstacle; CP's normal proximity controller remains active. A stopped job
 does not imply that a different family of turn could never fit that headland.
 
