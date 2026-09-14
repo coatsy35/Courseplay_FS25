@@ -48,14 +48,17 @@ function G.tracker(p,path)
     local ppc=PurePursuitController(proxy)
     ppc.shortLookaheadDistance=p.lookahead
     ppc:setShortLookaheadDistance()
-    ppc:setCourse(Course(proxy,path,true))
-    ppc:initialize(1)
     -- Prediction is deliberately silent; per-sample PPC logging with debug on
     -- would produce thousands of records for each rejected candidate.
     ppc.debug=function() end
     ppc.debugSparse=function() end
     ppc.showDebugTable=function() end
     ppc.showGoalpointDiag=function() end
+    for _,wp in ipairs({ppc.currentWpNode,ppc.relevantWpNode,ppc.nextWpNode,ppc.goalWpNode}) do
+        wp.logChanges=false
+    end
+    ppc:setCourse(Course(proxy,path,true))
+    ppc:initialize(1)
     local tracker={}
     function tracker:sample(s)
         setTranslation(node,s.x,getTerrainHeightAtWorldPos(g_currentMission.terrainRootNode,s.x,0,s.z),s.z)
@@ -260,11 +263,16 @@ function G.capture(turn)
     local dx,dz=E.localPoint(exit,p.goal)
     p.slope=math.abs(dx)>0.5 and dz/dx or 0
     if math.abs(p.slope)>2 then return nil,'row endpoints do not define a supported pike' end
-    local ahead=context:getDistanceToFieldEdge(node)
-    local _,startZ=E.localPoint(p.start,exit)
     -- This distance only seeds candidate placement. Every accepted body sample
-    -- must also satisfy the actual polygon/density checks below.
-    p.headland=math.max(0,math.min(150,(ahead or 0)+startZ)/math.sqrt(1+p.slope*p.slope))
+    -- must also satisfy the actual polygon/density checks below. Retain the
+    -- outgoing measurement after rotation: the tractor now faces INTO the field
+    -- and a new forward query measures a different edge entirely.
+    if turn.headlandSeed then p.headland=turn.headlandSeed
+    else
+        local ahead=context:getDistanceToFieldEdge(node)
+        local _,startZ=E.localPoint(p.start,exit)
+        p.headland=math.max(0,math.min(150,(ahead or 0)+startZ)/math.sqrt(1+p.slope*p.slope))
+    end
     local polygon=vehicle.cpGetFieldPolygon and vehicle:cpGetFieldPolygon()
     local islands=vehicle.cpGetIslandPolygons and vehicle:cpGetIslandPolygons() or {}
     if not polygon or #polygon<3 then return nil,'field polygon unavailable; generate the course on this field first' end

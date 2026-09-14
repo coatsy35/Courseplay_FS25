@@ -317,3 +317,76 @@ function E.plan(p)
     repeat result=search:update(256) until result
     return result
 end
+
+-- Repair an incoming approach after a tool changes working position. This
+-- family only progresses towards the row: it cannot send a deployed plough
+-- around another bulb. Tangent lengths vary with the remaining distance,
+-- rather than prescribing a long straight or a model-specific correction.
+function E.newApproachSearch(p)
+    local factors={0.3,0.4,0.2,0.5,0.1,0.6,0.8,1,1.2}
+    local straights={0,2,4,8}
+    local ai,bi,si,attempts=1,1,1,0
+    local simulation,path,verified
+    local lastReason='no forward approach'
+    local function advance()
+        bi=bi+1
+        if bi>#factors then bi=1;ai=ai+1 end
+        if ai>#factors then ai=1;si=si+1 end
+    end
+    local function makeApproach()
+        local finish=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.front-straights[si])
+        local _,remaining=E.localPoint(finish,{x=p.start.x,z=p.start.z,t=p.goal.t})
+        if remaining<=0 or math.abs(E.wrap(p.start.t-p.goal.t))>=math.pi/2 then return nil end
+        local a=E.point(p.start.x,p.start.z,p.start.t,0,remaining*factors[ai])
+        local b=E.point(finish.x,finish.z,p.goal.t,0,-remaining*factors[bi])
+        local points={}
+        local steps=math.max(2,math.ceil(remaining*8))
+        for i=0,steps do
+            local u=i/steps;local v=1-u
+            local q={x=v^3*p.start.x+3*v*v*u*a.x+3*v*u*u*b.x+u^3*finish.x,
+                z=v^3*p.start.z+3*v*v*u*a.z+3*v*u*u*b.z+u^3*finish.z}
+            if #points>0 then
+                local previous=points[#points]
+                local dx,dz=E.localPoint(q,{x=previous.x,z=previous.z,t=p.goal.t})
+                -- Disallow backwards progress and sideways hooks. Physical
+                -- steering limits and the actual tracked footprint are checked
+                -- by the same fine simulation used for the original turn.
+                if dz<=0 or math.abs(dx)>dz then return nil end
+            end
+            points[#points+1]=q
+        end
+        for d=0.5,straights[si]+math.max(12,math.abs(p.slope)*p.width+5),0.5 do
+            points[#points+1]=E.point(finish.x,finish.z,p.goal.t,0,d)
+        end
+        return points
+    end
+    return {update=function(_,budget)
+        if attempts==0 and not E.checkFootprint(p,p.start) then
+            return {ok=false,reason='local approach: starting footprint lacks field clearance',attempts=0}
+        end
+        if si>#straights then return {ok=false,reason='local approach: '..lastReason,attempts=attempts} end
+        if not simulation then
+            attempts=attempts+1
+            path=makeApproach()
+            if not path then advance();return nil end
+            simulation=E.newSimulation(p,path,2,0.15,false,false)
+            verified=false
+        end
+        local result=simulation:update(budget)
+        if not result then return nil end
+        if result.ok and not verified then
+            simulation=E.newSimulation(p,path,2,0.075,true,true)
+            verified=true;return nil
+        end
+        simulation=nil
+        if result.ok then
+            result.attempts,result.straight,result.bend=attempts,straights[si],0
+            result.radius,result.extension,result.bias=p.radius,0,0
+            result.repairedApproach=true
+            return result
+        end
+        lastReason=result.reason
+        advance()
+        return nil
+    end}
+end

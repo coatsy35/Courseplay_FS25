@@ -270,6 +270,7 @@ assert(f.vehicle.stopped and f.object.lowerCount==0 and f.strategy.resumed==0)
     def test_invalid_remaining_approach_is_replanned_before_driving(self):
         self.lua.execute('''
 local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)
+p.start={x=p.goal.x,z=15,t=math.pi,phi=math.pi}
 local f=makeEnvelopeLiveFixture(p)
 local t=f.turn
 t.states.ENVELOPE_PLANNING={name='PLANNING'}
@@ -285,10 +286,53 @@ repeat
     assert(speed==0 and f.object.lowerCount==0)
     updates=updates+1
 until t.state~=t.states.ENVELOPE_PLANNING or updates>10000
-assert(t.state==t.states.TURNING and t.result.ok and not t.result.retainedApproach)
+assert(t.state==t.states.TURNING and t.result.ok and t.result.repairedApproach)
 assert(updates>1 and not t.geometry.activeTracker)
 t:release()
 t.ppc:delete()
+''')
+
+    def test_live_v05_rotation_snapshot_has_a_local_entry_correction(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+-- Recorded at 17:17:52 on 14 September, after v0.5 rotated the PW.
+-- Field vertices were not logged: this is a tracking/alignment replay, not
+-- a reconstruction of that field's boundary or GIANTS' tyre/joint physics.
+local p=envelopeFixture(5.6,11.31,1.35,3.62,17.277,-41.5,-1,45.1)
+p.start={x=-229.380,z=-34.264,t=math.rad(163.897),phi=math.rad(169.825)}
+p.goal={x=-229.703,z=-50.040,t=-math.pi}
+p.hitchX=-0.02;p.hitchZ=-1.35;p.lookahead=2.695;p.trackingRadius=5.389
+p.work={{x=2.776,z=-3.157,towed=true},{x=-2.714,z=-2.274,towed=true},
+ {x=2.776,z=-15.927,towed=true,rear=true},{x=-2.714,z=-15.927,towed=true,rear=true}}
+p.workCentreX=(2.776-2.714)/2+p.hitchX
+p.footprint=p.work
+p.contains=function() return true end
+local search=E.newApproachSearch(p)
+local result
+repeat result=search:update(256) until result
+assert(result.ok and result.repairedApproach,result.reason)
+assert(result.entryError<=E.edgeTolerance and result.distance<40)
+for i=2,#result.path do
+    local a,b=result.path[i-1],result.path[i]
+    local _,forward=E.localPoint(b,{x=a.x,z=a.z,t=p.goal.t})
+    assert(forward>0) -- no second loop or backwards hook
+end
+-- The same correction must fail when its actual footprint has no clearance.
+p.contains=function() return false end
+search=E.newApproachSearch(p)
+repeat result=search:update(256) until result
+assert(not result.ok)
+''')
+
+    def test_remeasurement_keeps_outgoing_headland_depth(self):
+        self.lua.execute('''
+local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,1,50.4))
+local q=assert(EnvelopeTurnGeometry.capture(f.turn))
+f.turn.headlandSeed=q.headland
+f:setPose({x=5.6,z=20,t=math.pi,phi=math.pi})
+f.context.getDistanceToFieldEdge=function() error('must not measure into field after rotation') end
+local working=assert(EnvelopeTurnGeometry.capture(f.turn))
+assert(working.headland==q.headland)
 ''')
 
     def test_projected_geometry_matches_live_markers_on_both_rolled_sides(self):

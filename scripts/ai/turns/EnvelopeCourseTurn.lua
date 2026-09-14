@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.5'
+EnvelopeCourseTurn.TEST_VERSION = '0.6'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -96,6 +96,7 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         self:log('measuring %s envelope',self.needsWorkingGeometry and 'centred-turn' or 'working')
         local p,reason=EnvelopeTurnGeometry.capture(self)
         if not p then return {ok=false,reason=reason} end
+        self.headlandSeed=self.headlandSeed or p.headland
         self.geometry=p
         self:logGeometry(p)
         if remainingPath then
@@ -111,8 +112,9 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
                     result.retainedApproach=true
                     return result
                 end
-                self:log('working-position approach needs replanning: %s',tostring(result.reason))
-                self.planner=EnvelopeTurnPlanner.newSearch(p)
+                self:log('working-position approach needs local correction: %s, predicted edge error %s m',
+                    tostring(result.reason),tostring(result.error))
+                self.planner=EnvelopeTurnPlanner.newApproachSearch(p)
                 return nil
             end}
         else self.planner=EnvelopeTurnPlanner.newSearch(p) end
@@ -198,7 +200,9 @@ function EnvelopeCourseTurn:updatePlanner()
     self.ppc:setCourse(self.turnCourse)
     self.ppc:initialize(1)
     self.state=self.states.TURNING
-    if result.retainedApproach then
+    if result.repairedApproach then
+        self:log('SELECTED local entry correction: %d trials, predicted edge error %.3f m; no second loop',result.attempts,result.entryError)
+    elseif result.retainedApproach then
         self:log('VALIDATED remaining working-position approach: predicted edge error %.3f m',result.entryError)
     else
         self:log('SELECTED steering-led forward turn: %d trials, radius %.2f, bend %.1f, straight %.1f, bias %.3f, outward %.1f, predicted edge error %.3f m',

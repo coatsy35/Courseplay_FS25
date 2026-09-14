@@ -3,8 +3,8 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.5**, packaged mod version **8.1.0.105**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.5` records identify it.
+Current test: **v0.6**, packaged mod version **8.1.0.106**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.6` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
@@ -16,8 +16,28 @@ tighter turns without the tractor's rear wheel touching the plough. The previous
 test incorrectly moved the plough to its next working side before planning.
 This version measures the centred outline, then uses the stock controller to
 rotate on the final approach. It stops during rotation, remeasures the working
-position and validates the remaining approach, searching again if necessary.
+position and validates the remaining approach.
 No new fixed turning radius or model-specific dimensions are introduced.
+
+Version 0.6 addresses the live v0.5 sequence recorded on 14 September: the first
+loop completed, rotation changed the working markers, remaining-approach
+validation failed, and a full new loop was selected. That second loop failed
+live entry alignment (8.535 m / 30.96 degrees), despite passing the predictor.
+The initial loop family and its side selection are unchanged.
+
+After rotation, the planner now first validates the existing approach, then
+searches only local forward cubic corrections towards the row. It cannot launch
+a second full loop with the deployed plough. The corrections retain the radius,
+articulation, boundary and strict entry checks. If none passes, the job stops.
+The initial outgoing headland estimate is retained: remeasuring along the
+inward-facing tractor had incorrectly increased it from 45.1 m to 112.3 m.
+Private prediction waypoint logging is disabled even with CP debug enabled.
+
+An offline replay of the recorded post-rotation position and working markers
+finds a local correction with 0.045 m predicted entry error. The log did not
+include field vertices, so this validates the alignment calculation only. It
+does not establish that the live rig will follow it or that it fits that field;
+the runtime still checks the detected polygon, islands and field density.
 
 The v0.4 live attempt stopped before path search because its loaded course had
 no field polygon. Version 0.5 invokes CP's existing asynchronous field detector
@@ -186,7 +206,7 @@ python tools/turnbench/build_ingame_test.py
 ```
 
 These are offline checks, **not an in-game physics or collision certification**.
-The first live run of v0.5 is still needed. Field-density data does not describe every
+The first live run of v0.6 is still needed. Field-density data does not describe every
 hedge/obstacle; CP's normal proximity controller remains active. A stopped job
 does not imply that a different family of turn could never fit that headland.
 
