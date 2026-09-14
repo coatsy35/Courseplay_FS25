@@ -335,6 +335,59 @@ local working=assert(EnvelopeTurnGeometry.capture(f.turn))
 assert(working.headland==q.headland)
 ''')
 
+    def test_rotating_tool_direction_frame_controls_geometry_and_entry(self):
+        self.lua.execute('''
+local E,G=EnvelopeTurnPlanner,EnvelopeTurnGeometry
+for _,skew in ipairs({-12.3,12.3}) do
+    local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)
+    local f=makeEnvelopeLiveFixture(p)
+    local correct=f.object.steeringAxleNode
+    -- A skewed body reference must not become the direction to align with the
+    -- row. Real tools expose a dedicated travel frame for exactly this case.
+    local body={x=correct.x,z=correct.z,t=correct.t+math.rad(skew)}
+    f.object.steeringAxleNode=body
+    f.object.getAIToolReverserDirectionNode=function() return correct end
+    local pivot={x=0.5,z=16,t=0}
+    f.object.getAITurnRadiusLimitation=function() return nil,pivot end
+    local q=assert(G.capture(f.turn))
+    assert(q.trailerNode==correct and math.abs(q.length-p.length)<1e-8)
+    assert(math.abs(q.declaredPivotX-0.5)<1e-8)
+    assert(math.abs(math.deg(q.directionOffset)+skew)<1e-6)
+    for i,m in ipairs(q.work) do
+        assert(math.abs(m.x-p.work[i].x)<1e-8 and math.abs(m.z-p.work[i].z)<1e-8)
+    end
+    f:setPose({x=p.goal.x,z=-4,t=math.pi,phi=math.pi})
+    body.x,body.z,body.t=correct.x,correct.z,correct.t+math.rad(skew)
+    local aligned,error,angle=G.assessLive(q,f.vehicle)
+    assert(aligned and error<1e-8 and angle<1e-8)
+    -- Demonstrate the old false rejection from the same physical markers.
+    f.object.getAIToolReverserDirectionNode=function() return nil end
+    local wrong=assert(G.capture(f.turn))
+    aligned,error,angle=G.assessLive(wrong,f.vehicle)
+    assert(not aligned and angle>math.rad(12))
+    assert(G.trailerDirectionNode(f.object)==body) -- ordinary tools retain fallback
+end
+''')
+
+    def test_skewed_tool_reference_completes_runtime_entry(self):
+        self.lua.execute('''
+for _,side in ipairs({-1,1}) do
+    local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,side,50.4)
+    p.configureFixture=function(f)
+        local direction=f.object.steeringAxleNode
+        local body={x=direction.x,z=direction.z,t=direction.t+side*math.rad(12.3)}
+        f.object.steeringAxleNode=body
+        f.object.getAIToolReverserDirectionNode=function() return direction end
+        local setPose=f.setPose
+        f.setPose=function(self,state)
+            setPose(self,state)
+            body.x,body.z,body.t=direction.x,direction.z,direction.t+side*math.rad(12.3)
+        end
+    end
+    driveEnvelopeLiveFixture(p)
+end
+''')
+
     def test_projected_geometry_matches_live_markers_on_both_rolled_sides(self):
         self.lua.execute('''
 -- Full orthogonal yaw/pitch/roll transforms, unlike the ordinary flat fixture.

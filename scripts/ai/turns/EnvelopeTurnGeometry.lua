@@ -13,6 +13,16 @@ function G.pose(node)
     return {x=x,z=z,t=math.atan2(dx,dz)}
 end
 
+-- Match stock AIReverseDriver: an implement may provide a direction frame
+-- which remains correct when its body is offset or a reversible plough rolls.
+-- steeringAxleNode alone can point along that skewed body rather than the
+-- wheels' travel direction. Use ONE frame for prediction and live admission.
+function G.trailerDirectionNode(object)
+    local explicit=object.getAIToolReverserDirectionNode and object:getAIToolReverserDirectionNode()
+    if explicit and explicit~=0 then return explicit,'implement direction node' end
+    return object.steeringAxleNode,'steering axle node'
+end
+
 -- The numerical model is horizontal. Project WORLD positions into a yaw-only
 -- frame: localToLocal includes pitch/roll, so a raised or flipped plough would
 -- otherwise acquire different lengths and mirrored marker offsets.
@@ -101,7 +111,7 @@ function G.supported(vehicle)
         end
     end
     if trailer then
-        if not trailer.steeringAxleNode or not trailer:getActiveInputAttacherJoint() then
+        if not G.trailerDirectionNode(trailer) or not trailer:getActiveInputAttacherJoint() then
             return false,'missing trailer pivot or steering axle'
         end
         if trailer.spec_articulatedAxis and trailer.spec_articulatedAxis.componentJoint then
@@ -154,13 +164,24 @@ function G.capture(turn)
     local hitchLocal
     if trailer then
         local input=trailer:getActiveInputAttacherJoint()
-        local hx,hz=G.planarPoint(input.node,trailer.steeringAxleNode)
+        local direction,source=G.trailerDirectionNode(trailer)
+        local hx,hz=G.planarPoint(input.node,direction)
         hitchLocal={x=hx,z=hz}
         p.hitchX,p.hitchZ=G.planarPoint(input.node,node)
         p.length=hz
         p.axleOffsetX=hx
-        p.start.phi=G.pose(trailer.steeringAxleNode).t
-        p.trailerNode=trailer.steeringAxleNode
+        p.start.phi=G.pose(direction).t
+        p.trailerNode=direction
+        p.directionSource=source
+        p.directionOffset=trailer.steeringAxleNode and E.wrap(p.start.phi-G.pose(trailer.steeringAxleNode).t) or 0
+        -- Record a separately declared internal pivot as well. It lets live
+        -- traces distinguish reference-frame errors from a drawbar model that
+        -- needs an additional body; do not silently treat that joint as a
+        -- tractor-fixed coupling without checking its constraints.
+        if trailer.getAITurnRadiusLimitation then
+            local _,pivot=trailer:getAITurnRadiusLimitation()
+            if pivot and pivot~=0 then p.declaredPivotX,p.declaredPivotZ=G.planarPoint(pivot,node) end
+        end
         -- A lateral axle offset is valid for a passive trailer. Its yaw rate
         -- depends on the longitudinal hitch-to-axle lever hz; hx affects the
         -- axle position/forward speed and is retained in every marker offset.
@@ -181,7 +202,7 @@ function G.capture(turn)
     local front=-math.huge
     for _,object in pairs(vehicle:getChildVehicles()) do
         local towed=object==trailer
-        local reference=towed and trailer.steeringAxleNode or node
+        local reference=towed and p.trailerNode or node
         local hl=towed and hitchLocal or nil
         -- CP's scanner includes the unfolded physical machine. Enlarge it with
         -- AI work markers too: collision boxes may omit non-colliding tines.

@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.6'
+EnvelopeCourseTurn.TEST_VERSION = '0.7'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -123,6 +123,13 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
 end
 
 function EnvelopeCourseTurn:logGeometry(p)
+    if p.directionSource then
+        self:log('trailer reference: %s, heading difference from steering axle %.3f degrees',p.directionSource,math.deg(p.directionOffset))
+    end
+    if p.declaredPivotX then
+        self:log('declared turn pivot relative to tractor: %.3f/%.3f; input coupling %.3f/%.3f',
+            p.declaredPivotX,p.declaredPivotZ,p.hitchX,p.hitchZ)
+    end
     self:log('geometry: radius %.2f, width %.2f, hitch %.2f/%.2f, axle %.2f (lateral %.2f), front %.2f, pike %.1f degrees, headland seed %.1f',
         p.radius,p.width,p.hitchX,p.hitchZ,p.length or 0,p.axleOffsetX or 0,p.front,math.deg(math.atan(p.slope)),p.headland)
     self:log('snapshot: start %.3f/%.3f heading %.3f tool %.3f, goal %.3f/%.3f heading %.3f, lookahead %.3f, tractor radius %.3f',
@@ -183,7 +190,9 @@ function EnvelopeCourseTurn:updatePlanner()
     repeat
         ok,result=pcall(self.planner.update,self.planner,10)
         if not ok then self:stopWithReason('planner error: '..tostring(result)); return end
-    until result or getTimeSec()-started>=0.004
+    -- Planning is stationary. Give it up to 8 ms per update rather than 4 ms;
+    -- retain small sample batches so the UI and cancellation stay responsive.
+    until result or getTimeSec()-started>=0.008
     if not result then return end
     self.planner=nil
     if not result.ok then self:stopWithReason(result.reason); return end

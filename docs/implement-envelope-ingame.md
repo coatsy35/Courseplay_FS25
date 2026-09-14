@@ -3,12 +3,34 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.6**, packaged mod version **8.1.0.106**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.6` records identify it.
+Current test: **v0.7**, packaged mod version **8.1.0.107**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.7` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.7 follows stock `AIReverseDriver`'s direction-reference choice for
+rotating/offset implements: prefer the tool's `getAIToolReverserDirectionNode()`
+and fall back to `steeringAxleNode`. Measurements, trailer propagation, footprint
+and live entry assessment now share that selected reference. Previously they
+unconditionally used the ordinary steering-axle node, which need not point in
+the wheels' travel direction on a reversible plough. No fixed angular correction
+or model-specific value is applied. The log reports the selected source and its
+heading difference, plus any separately declared turning-radius pivot.
+
+The installed PW model declares a dedicated reverser node beside its wheel-axis
+assembly; stock CP explicitly prefers that reference for rotating ploughs. In
+the v0.6 live attempt the predictor expected 0.047 m error but entry was rejected
+at 2.625 m / 10.22 degrees. This build corrects the reference selection; its live
+effect remains to be verified. Tests cover both signs of a skewed ordinary node,
+correct marker projection, the old false alignment rejection, and complete
+runtime entry with the explicit direction node. These are still planar tests.
+
+Stationary planning now has an 8 ms rather than 4 ms per-update budget, retaining
+small sample batches and cancellation. This should reduce waiting; individual
+engine calls can still exceed the budget. It does not change the approach speed
+or loosen the alignment thresholds.
 
 Version 0.5 restores stock CP plough centring through the main turn. CP's
 `PlowController:onFinishRow` explicitly centres reversible ploughs to permit
@@ -126,7 +148,7 @@ The cubic curvature bound prevents commanding a tighter radius than the selected
 candidate allows. Each candidate uses the production CP pursuit controller for
 goal-point selection and a planar tractor/passive-trailer motion model. Coarse
 0.15 m steps are rechecked at 0.075 m before acceptance. Calculation yields
-between batches with a 4 ms update budget; individual engine calls can exceed
+between batches with an 8 ms update budget; individual engine calls can exceed
 that budget. Equipment is scanned before planning and again after plough rotation.
 
 The steering-goal conversion follows the curvature interface documented by
@@ -206,7 +228,7 @@ python tools/turnbench/build_ingame_test.py
 ```
 
 These are offline checks, **not an in-game physics or collision certification**.
-The first live run of v0.6 is still needed. Field-density data does not describe every
+The first live run of v0.7 is still needed. Field-density data does not describe every
 hedge/obstacle; CP's normal proximity controller remains active. A stopped job
 does not imply that a different family of turn could never fit that headland.
 
