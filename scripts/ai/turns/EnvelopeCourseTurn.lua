@@ -144,6 +144,13 @@ function EnvelopeCourseTurn:endTurn(dt)
     -- earlier in a curve would freeze a trailer before it could straighten.
     self.entrySpeedLimit=math.min(5,3.6*math.sqrt(math.max(0,2*(-contact-0.5))))
     if not self.lowerRequested then
+        -- Alignment acquired AFTER entering unworked ground is too late. A
+        -- delayed callback or braking overshoot must not silently create a gap
+        -- by lowering at that new position. Allow only the sampling tolerance.
+        if contact>0.1 then
+            self:stopWithReason('working edge passed entry before lowering was requested')
+            return false
+        end
         if contact>-0.65 then
             if not aligned then
                 self:stopWithReason(string.format('entry not aligned (edge %.3f m, angle %.2f degrees)',error,math.deg(angle)))
@@ -158,6 +165,10 @@ function EnvelopeCourseTurn:endTurn(dt)
     self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(),false)
     local hydraulicReady=g_currentMission.time-self.loweringStarted >= self.driveStrategy:getLoweringDurationMs()
     if not hydraulicReady or not self.driveStrategy:getCanContinueWork() then
+        if contact>0.1 then
+            self:stopWithReason('working edge passed entry before the implement was ready')
+            return false
+        end
         if g_currentMission.time-self.loweringStarted>30000 then self:stopWithReason('implement did not become ready after lowering') end
         return false
     end

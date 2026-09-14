@@ -96,8 +96,13 @@ Dubins solver, pursuit controller and work-start handler through the bench's
 GIANTS boundary adapters. Tests cover the PW's straight/pike/large-headland cases,
 6 m/12 m drills on 10/25/45-degree short-to-long pikes, insufficient headland,
 concave boundaries/islands, coupling/marker measurements, exposed yaw limits,
-live lateral misalignment, mounted tools, opposite turn directions, hydraulic waiting, successful fieldwork hand-off,
-last-waypoint protection and cancellation cleanup.
+live lateral misalignment, mounted tools, opposite turn directions, hydraulic
+waiting, successful fieldwork hand-off, entry crossed before lowering/readiness,
+last-waypoint protection and cancellation cleanup. Radius tests exercise the
+actual CP resolver with the XML value and changed overrides, including 5 m;
+the tractor's larger minimum still takes precedence. No PW-specific radius is
+embedded in the runtime planner. Constructor and coroutine tests also cover
+stationary preparation and prediction-node cleanup.
 
 Run from the checkout with the bench Python environment:
 

@@ -1,6 +1,7 @@
 """Run the shipped Lua planner through CP's real Dubins solver, without GIANTS."""
 import math
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from engine import Bridge, Scenario
 
@@ -16,6 +17,7 @@ require('PurePursuitController')
 require('EnvelopeTurnPlanner')
 require('EnvelopeTurnGeometry')
 require('EnvelopeCourseTurn')
+productionTurningRadius = AIUtil.getTurningRadius
 """)
         self.lua.execute('''
 function envelopeFixture(width,length,hitch,front,back,angle,rows,headland)
@@ -191,6 +193,86 @@ assert(not EnvelopeTurnGeometry.enabled(f.vehicle,f.context))
             with self.subTest(values=values):
                 p=self.lua.globals().envelopeFixture(*values)
                 self.lua.globals().driveEnvelopeLiveFixture(p)
+
+    def test_actual_cp_radius_resolution_and_xml_override_reach_planner(self):
+        config = ET.parse(Path(__file__).resolve().parents[2]/'config/VehicleConfigurations.xml')
+        pw = next(v for v in config.iter('Vehicle') if v.get('name') == 'pw10012.xml')
+        self.lua.globals().pwRadius = float(pw.get('turnRadius'))
+        self.lua.execute('''
+local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4))
+CpUtil.debugVehicleIf=function() end
+f.object.getName=function() return 'PW 100-12' end
+f.vehicle.maxTurningRadius=6
+f.vehicle.getAIMinTurningRadius=function() return 7 end
+g_vehicleConfigurations.get=function(_,object,key)
+    if key=='turnRadius' and object==f.object then return pwRadius end
+end
+AIUtil.getTurningRadius=productionTurningRadius
+local q=assert(EnvelopeTurnGeometry.capture(f.turn))
+assert(q.radius==math.max(7,pwRadius))
+-- The XML value is an input, never a PW-specific constant. Exercise changes
+-- in either direction, including a 5 m override below the tractor minimum.
+for _,configuredRadius in ipairs({5,8,11}) do
+    pwRadius=configuredRadius
+    q=assert(EnvelopeTurnGeometry.capture(f.turn))
+    assert(q.radius==math.max(7,configuredRadius))
+end
+-- A larger GIANTS tractor minimum must override the smaller implement radius.
+f.vehicle.getAIMinTurningRadius=function() return 12 end
+q=assert(EnvelopeTurnGeometry.capture(f.turn))
+assert(q.radius==12)
+''')
+
+    def test_crossed_boundary_cannot_trigger_late_lowering_or_handoff(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)
+local f=makeEnvelopeLiveFixture(p)
+f.turn.geometry=assert(EnvelopeTurnGeometry.capture(f.turn))
+-- Already aligned, but the front edge has travelled into the unworked row.
+f:setPose({x=p.goal.x,z=-5.1,t=math.pi,phi=math.pi})
+assert(not f.turn:endTurn(16))
+assert(f.vehicle.stopped and f.object.lowerCount==0 and f.strategy.resumed==0)
+-- Likewise, brake creep during hydraulic travel must not be accepted as entry.
+f=makeEnvelopeLiveFixture(p)
+f.turn.geometry=assert(EnvelopeTurnGeometry.capture(f.turn))
+f:setPose({x=p.goal.x,z=-4,t=math.pi,phi=math.pi})
+g_currentMission.time=0
+assert(not f.turn:endTurn(16) and f.object.lowerCount==1)
+f:setPose({x=p.goal.x,z=-5.1,t=math.pi,phi=math.pi})
+g_currentMission.time=500
+assert(not f.turn:endTurn(16))
+assert(f.vehicle.stopped and f.strategy.resumed==0)
+''')
+
+    def test_constructor_preparation_and_coroutine_lifecycle(self):
+        self.lua.execute('''
+local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4))
+-- Exercise the real inherited constructor, not a manually populated turn table.
+AIUtil.getSteeringParameters=function() return true,13 end
+AIUtil.hasChainedAttachments=function() return false end
+local ppc=PurePursuitController(f.vehicle)
+local proximity={registerBlockingObjectListener=function() end}
+local turn=EnvelopeCourseTurn(f.vehicle,f.strategy,ppc,proximity,f.context,nil,5.6)
+assert(turn.state==turn.states.INITIALIZING)
+g_currentMission.time=0
+turn:startTurn()
+assert(turn.state==turn.states.ENVELOPE_PREPARING)
+f.vehicle.speed=2
+turn:prepare()
+assert(not turn.planner) -- do not measure a moving rig
+f.vehicle.speed=0
+turn:prepare()
+assert(turn.state==turn.states.ENVELOPE_PLANNING and turn.planner)
+function getTimeSec() return os.clock() end
+local updates=0
+repeat turn:updatePlanner(); updates=updates+1
+until turn.state~=turn.states.ENVELOPE_PLANNING or updates>10000
+assert(turn.state==turn.states.TURNING and turn.result.ok)
+assert(updates>1) -- numerical search really yielded between updates
+assert(not turn.planner and not turn.geometry.activeTracker)
+turn:release()
+ppc:delete()
+''')
 
 if __name__ == '__main__':
     unittest.main()
