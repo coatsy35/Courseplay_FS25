@@ -74,6 +74,38 @@ boundary check and show no sampled entry gap. Tests also cover mounted pikes,
 4/6/12 m drills, opposite pike directions, insufficient headland, and a mounted
 K-turn in four 5.6 m headland widths.
 
+## Long pikes: 12 m drill, six skipped rows
+
+The browser fixture `?mode=aligned&case=long-pike-12m` uses a 500 m long,
+400 m wide field with a flat far end. Six intervening rows are skipped: the
+incoming row is 84 m across from the outgoing row. Six headlands (72 m nominal
+depth) are held fixed throughout this sweep. **Whole field** switches between
+the complete field outline and a closer view of the turn; playback remains an
+isolated row-end experiment.
+
+| Angle | Next row end farther out | Absolute entry angle | Modelled envelope depth |
+| --- | ---: | ---: | ---: |
+| 10° | 14.81 m | 0.20° | 29.06 m |
+| 20° | 30.57 m | 0.17° | 28.45 m |
+| 25° | 39.17 m | 0.11° | 28.28 m |
+| 30° | 48.50 m | 0.01° | 28.28 m |
+| 35° | 58.82 m | 0.20° | 28.22 m |
+| 40° | 70.48 m | 0.53° | 28.03 m |
+| 45° | 84.00 m | 1.11° | 27.77 m |
+
+All seven short-to-long cases complete browser playback with aligned entry,
+hydraulic readiness, no sampled entry gaps and no modelled boundary violation.
+Each uses a steering-led forward turn with a 5.4 m final straight. The greatest
+working-edge error is 3.82 cm at 40°; maximum articulation is 62.1° at 45°.
+These are observed results, not a proof of the worst possible angle or minimum
+headland requirement.
+
+The 45° long-to-short control also passes, but uses 35 m envelope depth and has
+1.15° entry angle with 5.64 cm working-edge error. Direction alone does not make
+a turn easier. The coverage simulation continues far enough to finish the full
+20 m sample at both sides of the sloping working edge, including the 45° case.
+`tools/turnbench/long-pike-angles-test.cjs` checks all eight cases in the browser.
+
 ## Remaining limits and next integration
 
 - The 85° articulation ceiling is a provisional test limit, not a captured safe

@@ -104,6 +104,7 @@ $("show-clearance").onchange = () => {
   draw();
 };
 let configuring = false;
+$("whole-field").onchange = () => { fit(); draw(); };
 function refreshConfiguration() {
   const dirty = JSON.stringify(scenario()) !== preparedConfiguration;
   if (dirty || configuring || selected()?.preview) setPlaying(false);
@@ -256,6 +257,7 @@ async function run(event) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Simulation failed");
     result = data;
+    $("whole-field-label").hidden = !data.planner;
     document.querySelector('[data-view="experiment"]').textContent = data.planner ? "Aligned entry" : "Extra clearance";
     preparedConfiguration = configuration;
     document.querySelectorAll("[data-view]").forEach((b) => {
@@ -502,7 +504,7 @@ function fit() {
   if (selected().layout) {
     // Bounds already include the entire generated course and polygon.
   } else if (selected().field?.boundary) {
-    if (result.planner) {
+    if (result.planner && !$("whole-field").checked) {
       const r=selected(), xs=r.frames.map(f=>f.x);
       const west=Math.max(r.field.west,Math.min(...xs)-12);
       const east=Math.min(r.field.east,Math.max(...xs)+12);
@@ -601,6 +603,10 @@ function draw() {
       polygon(island, "#e5ddc9", "#987a54", 1.5);
     for (const h of run.field.headlands) line([...h, h[0]], "#bdcec2", 1);
     for (const row of run.field.rowSegments) line(row, "#899e95", 1, [4, 5]);
+    for (const row of run.field.skippedRowSegments || []) {
+      line(row,"#b2b9b5",1,[2,6]);
+      label("skip",row[1][0],row[1][1]-5,"#89958d","center");
+    }
   } else if (run.field) {
     const field = run.field;
     polygon(
@@ -1036,7 +1042,7 @@ function updateControls() {
         ? "Complete CP course preview; choose Full field for playback."
         : "One isolated turn for geometry testing.";
   $("fieldLength").disabled = !field;
-  if (layout || complete) $("fieldLength").disabled = false;
+  if (layout || complete || aligned) $("fieldLength").disabled = false;
   $("fieldWidth").disabled = !(layout || field || complete || aligned);
   $("enforceBoundary").disabled = layout;
   for (const id of [
@@ -1518,6 +1524,14 @@ $("config-search").addEventListener("keydown", (event) => {
 });
 if (new URLSearchParams(location.search).get("mode") === "aligned") {
   $("pattern").value = "aligned";
+  if (new URLSearchParams(location.search).get("case") === "long-pike-12m") {
+    $("whole-field").checked = true;
+    $("preset").value = "drill12";
+    $("preset").dispatchEvent(new Event("change"));
+    for (const [id,value] of Object.entries({fieldLength:500,fieldWidth:400,
+      headlandRows:6,fieldShape:"sloping",edgeAngle:25,slopeSide:"left",side:1,entryRows:7}))
+      $(id).value=String(value);
+  }
   updateControls();
 }
 fetch("/api/implements")

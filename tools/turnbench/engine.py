@@ -175,7 +175,7 @@ class Scenario:
             raise ValueError('Unsupported field shape')
         if p.slopeSide not in ('left', 'right'):
             raise ValueError('Sloping side must be left or right')
-        if p.fieldShape == 'sloping' and p.fieldLength*math.tan(math.radians(p.edgeAngle)) >= p.fieldWidth:
+        if p.fieldShape == 'sloping' and not p.alignedPlanner and p.fieldLength*math.tan(math.radians(p.edgeAngle)) >= p.fieldWidth:
             raise ValueError('The sloping side reaches the opposite boundary. Increase field width, reduce field length or reduce the side angle.')
         if p.pattern and not p.courseLayout and p.fieldLength-2*p.headland < 40:
             raise ValueError('Leave at least 40 m between the headlands for the two 20 m coverage samples')
@@ -388,6 +388,10 @@ def drive_guidance(p,bridge,path,ix,x,z,theta,phi,axle):
 
 def simulate(p, dt=0.025, start=None, stop_distance=25):
     from alignment import assess_envelope
+    if p.approachLength:
+        # The coverage sample extends 20 m from every point on the sloping
+        # edge, not just its centre. Drive far enough to finish its longest side.
+        stop_distance=max(stop_distance,21+abs(p.boundarySlope)*p.width/2)
     bridge = Bridge(p)
     exit_frames, exit_events, exit_gaps = [], [], []
     exit_overshoot, time_offset = 0, 0

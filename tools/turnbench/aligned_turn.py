@@ -17,15 +17,21 @@ def field_for(p):
     target=p.side*(p.rowSpacing or p.width)
     west, east = -p.fieldWidth/2, p.fieldWidth/2
     top = p.headland*math.hypot(1,slope)
-    # Include the tractor ahead of a trailing work marker at the end of the
-    # 25 m working sample. The test window must not invent a nearby far hedge.
-    bottom = -max(60,p.back+30,p.front+35)
+    # Keep the far end level: a sloping headland then produces genuinely short
+    # and long working rows. The highest outer corner sets overall field length.
+    bottom = top+max(slope*west,slope*east)-p.fieldLength
+    if bottom > -max(p.back+25,p.front+30):
+        raise ValueError('Increase field length to leave room for the working sample and the whole combination')
+    row_steps=round(abs(target)/p.width)
+    skipped=([[[p.side*i*p.width,bottom],[p.side*i*p.width,slope*p.side*i*p.width]]
+              for i in range(1,row_steps)] if abs(row_steps*p.width-abs(target))<1e-6 else [])
     return dict(west=west,east=east,south=bottom,north=top,
                 rows=[0,target],order=[1,2],
-                boundary=[[west,bottom+slope*west],[east,bottom+slope*east],
+                skippedRowSegments=skipped,
+                boundary=[[west,bottom],[east,bottom],
                           [east,top+slope*east],[west,top+slope*west]],
                 headlands=[[[west,slope*west],[east,slope*east]]],
-                rowSegments=[[[x,bottom+slope*x],[x,slope*x]]
+                rowSegments=[[[x,bottom],[x,slope*x]]
                              for x in (0,target)], islands=[])
 
 

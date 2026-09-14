@@ -69,6 +69,26 @@ class AlignedTurnTests(unittest.TestCase):
                                 hitch=2,front=11,back=12,clearance=13,drill=True,
                                 headlandRows=math.ceil(50/width),fieldShape='sloping'))
 
+    def test_long_25_degree_pike_12m_drill_skipping_six_rows(self):
+        run=self.verify_run(Scenario(alignedPlanner=True,width=12,length=9,hitch=2,
+                            front=11,back=12,clearance=13,drill=True,headlandRows=6,
+                            fieldShape='sloping',edgeAngle=25,fieldLength=500,
+                            fieldWidth=400,rowSpacing=7*12,allowReverse=True))
+        self.assertAlmostEqual(run['planner']['rowEndDifference'],39.17,places=2)
+        self.assertEqual(len(run['field']['skippedRowSegments']),6)
+        first,second=run['field']['rowSegments']
+        self.assertEqual(second[0][1],first[0][1])
+        self.assertGreater(second[1][1]-second[0][1],first[1][1]-first[0][1])
+        boundary=run['field']['boundary']
+        self.assertAlmostEqual(max(v[1] for v in boundary)-min(v[1] for v in boundary),500)
+
+    def test_45_degree_wide_pike_finishes_the_entire_coverage_sample(self):
+        run=self.verify_run(Scenario(alignedPlanner=True,width=12,length=9,hitch=2,
+                            front=11,back=12,clearance=13,drill=True,headlandRows=6,
+                            fieldShape='sloping',edgeAngle=45,fieldLength=500,
+                            fieldWidth=400,rowSpacing=84,allowReverse=True))
+        self.assertEqual(run['metrics']['missedArea'],0)
+
     def test_insufficient_headland_is_not_accepted(self):
         result=compare(asdict(replace(PW,headlandRows=3)))
         self.assertFalse(result['planner']['feasible'])

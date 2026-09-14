@@ -254,6 +254,15 @@ and 2 m backwards from the reference point, plus the implement envelope. It is a
 extent, not the minimum required headland. Empty entry metrics and `complete: false` mean the
 run did not finish in the bounded 240-second horizon.
 
+For the long-pike drill fixture, open
+`http://127.0.0.1:56514/?mode=aligned&case=long-pike-12m`: 500 × 400 m field,
+12 m drill, 25° pike and six skipped rows (84 m between driven rows).
+Use **Whole field** to see the entire outline, or clear it to inspect the turn.
+Field length remains editable. This mode plays the row-end experiment only.
+The browser regression `long-pike-angles-test.cjs` covers 10–45° short-to-long
+and a 45° long-to-short control; results are recorded in
+`docs/envelope-turn-planner.md`.
+
 ## Next validation steps
 
 Retain this as a permanent development/configuration tool. Planned extensions, not yet implemented:
