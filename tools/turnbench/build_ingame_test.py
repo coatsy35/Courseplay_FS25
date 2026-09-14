@@ -1,12 +1,14 @@
 """Build a distinctly named envelope-turn test mod from tracked runtime files.
 
-The shared release builder remains unchanged. Only the packaged manifest title
-and experimental setting default differ from source; all Lua is packaged verbatim.
+The shared release builder remains unchanged. Only the packaged manifest title,
+version, description and experimental setting default differ from source;
+all Lua is packaged verbatim.
 No live mod or implement-directory test archive is overwritten.
 """
 import argparse
 import hashlib
 import importlib.util
+import re
 from pathlib import Path
 import tempfile
 import xml.etree.ElementTree as ET
@@ -14,6 +16,11 @@ from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[2]
 ZIP_NAME = 'FS25_Courseplay_EnvelopeTurnsTest.zip'
+TEST_VERSION = re.search(r"EnvelopeCourseTurn.TEST_VERSION = '([0-9.]+)'",
+    (ROOT/'scripts/ai/turns/EnvelopeCourseTurn.lua').read_text(encoding='utf-8')).group(1)
+TEST_TITLE = f'CoursePlay - Envelope Turns Test v{TEST_VERSION}'
+# Separate numeric mod version also appears in GIANTS' available-mod log.
+MOD_VERSION = '8.1.0.' + str(100 + int(TEST_VERSION.split('.')[-1]))
 spec = importlib.util.spec_from_file_location('cp_build_mod', ROOT / '.github/scripts/build_mod.py')
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
@@ -22,7 +29,8 @@ spec.loader.exec_module(builder)
 def test_manifest(data):
     root = ET.fromstring(data)
     for title in root.findall('./title/*'):
-        title.text = (title.text or 'CoursePlay') + ' - Envelope Turns Test'
+        title.text = (title.text or 'CoursePlay') + f' - Envelope Turns Test v{TEST_VERSION}'
+    root.find('version').text = MOD_VERSION
     description = root.find('./description/en')
     if description is not None:
         description.text = ('Experimental envelope-aligned row turns. Enable only this Courseplay version '
@@ -62,7 +70,8 @@ def build(output):
             assert result.testzip() is None
             assert not any('implementprofile' in name.lower() for name in result.namelist()), 'Directory code must remain on its separate branch'
             manifest = ET.fromstring(result.read('modDesc.xml'))
-            assert manifest.findtext('title/en') == 'CoursePlay - Envelope Turns Test'
+            assert manifest.findtext('title/en') == TEST_TITLE
+            assert manifest.findtext('version') == MOD_VERSION
             for name in ('EnvelopeTurnPlanner', 'EnvelopeTurnGeometry', 'EnvelopeCourseTurn'):
                 path = f'scripts/ai/turns/{name}.lua'
                 assert result.read(path) == (ROOT/path).read_bytes()
@@ -73,7 +82,7 @@ def build(output):
                     ET.fromstring(result.read(name))
         ready.replace(output)
     checksum = hashlib.sha256(output.read_bytes()).hexdigest()
-    return {'file': str(output), 'version': version, 'sha256': checksum}
+    return {'file': str(output), 'test_version': TEST_VERSION, 'version': MOD_VERSION, 'source_version': version, 'sha256': checksum}
 
 
 if __name__ == '__main__':

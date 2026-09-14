@@ -2,6 +2,8 @@
 -- corners, ordinary Dubins/Reeds-Shepp turns and WorkStartHandler unchanged.
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
+-- Temporary test-build label; the packager uses the same value for its title.
+EnvelopeCourseTurn.TEST_VERSION = '0.3'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -16,7 +18,7 @@ end
 function EnvelopeCourseTurn:log(format,...)
     -- One record per transition, independent of the debug channel: a tester
     -- must be able to tell a selected new turn from a stock CP fallback.
-    Logging.info('[CP envelope] %s: '..format,CpUtil.getName(self.vehicle),...)
+    Logging.info('[CP envelope] v%s %s: '..format,EnvelopeCourseTurn.TEST_VERSION,CpUtil.getName(self.vehicle),...)
 end
 
 function EnvelopeCourseTurn:startTurn()
@@ -61,29 +63,27 @@ function EnvelopeCourseTurn:prepare()
         return
     end
     self.state=self.states.ENVELOPE_PLANNING
-    self.planner=coroutine.create(function()
+    -- Geometry is captured once on the first planning update. The search owns
+    -- explicit resumable state because FS25 does not expose Lua coroutines.
+    self.planner={update=function()
         local p,reason=EnvelopeTurnGeometry.capture(self)
         if not p then return {ok=false,reason=reason} end
         self.geometry=p
         self:log('geometry: radius %.2f, width %.2f, hitch %.2f/%.2f, axle %.2f, front %.2f, pike %.1f degrees, headland seed %.1f',
             p.radius,p.width,p.hitchX,p.hitchZ,p.length or 0,p.front,math.deg(math.atan(p.slope)),p.headland)
-        local samples=0
-        p.yield=function()
-            samples=samples+1
-            if samples%10==0 then coroutine.yield() end
-        end
-        return EnvelopeTurnPlanner.plan(p)
-    end)
+        self.planner=EnvelopeTurnPlanner.newSearch(p)
+        return nil
+    end}
 end
 
 function EnvelopeCourseTurn:updatePlanner()
     local started=getTimeSec()
     local ok,result
     repeat
-        ok,result=coroutine.resume(self.planner)
+        ok,result=pcall(self.planner.update,self.planner,10)
         if not ok then self:stopWithReason('planner error: '..tostring(result)); return end
-    until coroutine.status(self.planner)=='dead' or getTimeSec()-started>=0.004
-    if coroutine.status(self.planner)~='dead' then return end
+    until result or getTimeSec()-started>=0.004
+    if not result then return end
     self.planner=nil
     if not result.ok then self:stopWithReason(result.reason); return end
     self.result=result

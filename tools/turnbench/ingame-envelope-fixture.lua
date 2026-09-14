@@ -95,7 +95,7 @@ function driveEnvelopeLiveFixture(p)
     assert(result.ok,result.reason)
     t.ppc=PurePursuitController(f.vehicle)
     t.ppc:setShortLookaheadDistance()
-    t.planner=coroutine.create(function() return result end)
+    t.planner={update=function() return result end}
     function getTimeSec() return os.clock() end
     t:updatePlanner()
     local s={x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi}

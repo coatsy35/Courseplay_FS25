@@ -147,8 +147,9 @@ end
 
 -- A spatial-step pursuit model predicts trailer off-tracking. It is a candidate
 -- filter, not GIANTS physics: execution checks live markers again before work.
--- A coroutine hook bounds the amount of calculation done in a game update.
-function E.simulate(p, path, tailStart, step, boundary, collect)
+-- Explicit resumable state: FS25 removes Lua's coroutine library. Each update
+-- advances a bounded number of samples and retains the tracker between frames.
+function E.newSimulation(p, path, tailStart, step, boundary, collect)
     local tracker=p.newTracker and p.newTracker(path)
     local function finish(result)
         if tracker then tracker:delete() end
@@ -161,8 +162,11 @@ function E.simulate(p, path, tailStart, step, boundary, collect)
     local maxDistance = 0
     for i=2,#path do maxDistance=maxDistance+math.sqrt((path[i].x-path[i-1].x)^2+(path[i].z-path[i-1].z)^2) end
     maxDistance = math.min(2000, maxDistance * 1.5 + 20)
+    return {update=function(_,budget)
+    local samples=0
     while travelled < maxDistance do
-        if p.yield then p.yield() end
+        if samples>=budget then return nil end
+        samples=samples+1
         local gx,gz
         if tracker then
             ix,gx,gz=tracker:sample(s)
@@ -221,52 +225,89 @@ function E.simulate(p, path, tailStart, step, boundary, collect)
         travelled=travelled+step
     end
     return finish({ok=false,reason='tracking did not finish',rearError=rearError})
+    end}
+end
+
+function E.simulate(p,path,tailStart,step,boundary,collect)
+    local simulation=E.newSimulation(p,path,tailStart,step,boundary,collect)
+    local result
+    repeat result=simulation:update(256) until result
+    return result
+end
+
+-- Search stages preserve the original zero/left/right/root-solved candidate
+-- order without retaining a Lua call stack across game updates.
+function E.newSearch(p)
+    local straight=math.max(4,math.min(12,(p.headland-2*p.radius)*0.1))
+    local extensions=straight>6 and {8,16,0,4,24} or {0,4,8,16}
+    local bends,factors={8,12,16,20,28,36},{1.1,1.25,1}
+    local bi,fi,ei=1,1,1
+    local attempts,lastReason=0,'no candidate'
+    local stage,bias,iterations='zero',0,0
+    local lo,hi,a,b,simulation,path,tail,verified
+    local initial=true
+    local function nextGroup()
+        ei=ei+1
+        if ei>#extensions then ei=1; fi=fi+1 end
+        if fi>#factors then fi=1; bi=bi+1 end
+        stage,bias,iterations='zero',0,0
+    end
+    return {update=function(_,budget)
+        if initial then
+            initial=false
+            if not E.checkFootprint(p,p.start) then
+                return {ok=false,reason='starting footprint lacks field clearance',attempts=0}
+            end
+        end
+        if bi>#bends then return {ok=false,reason=lastReason or 'no aligned candidate',attempts=attempts} end
+        local bend,radius,extension=bends[bi],p.radius*factors[fi],extensions[ei]
+        local result
+        if not simulation then
+            path,tail=E.makePath(p,straight+bend,straight,radius,extension,bias)
+            attempts=attempts+1
+            verified=false
+            if path then simulation=E.newSimulation(p,path,tail,0.15,false,false)
+            else result={ok=false,reason='no analytic path'} end
+        end
+        result=result or simulation:update(budget)
+        if not result then return nil end
+        if result.ok and not verified then
+            simulation=E.newSimulation(p,path,tail,0.075,true,true)
+            verified=true
+            return nil
+        end
+        simulation=nil
+        if result.ok then
+            result.attempts,result.straight,result.bend=attempts,straight,bend
+            result.radius,result.extension,result.bias=radius,extension,bias
+            return result
+        end
+        lastReason=result.reason
+        local err=result.rearError
+        if stage=='zero' then
+            hi=math.min(6,bend*bend/(6*radius)*0.95); lo=-hi
+            stage,bias='left',lo
+        elseif stage=='left' then
+            a=err; stage,bias='right',hi
+        elseif stage=='right' then
+            b=err
+            if a and b and a*b<0 then stage='root'; bias=lo-a*(hi-lo)/(b-a)
+            else nextGroup() end
+        else
+            iterations=iterations+1
+            if not err or iterations>=6 then nextGroup()
+            else
+                if a*err<=0 then hi,b=bias,err else lo,a=bias,err end
+                bias=lo-a*(hi-lo)/(b-a)
+            end
+        end
+        return nil
+    end}
 end
 
 function E.plan(p)
-    if not E.checkFootprint(p,p.start) then return {ok=false,reason='starting footprint lacks field clearance',attempts=0} end
-    local straight=math.max(4,math.min(12,(p.headland-2*p.radius)*0.1))
-    local extensions=straight>6 and {8,16,0,4,24} or {0,4,8,16}
-    local attempts,lastReason=0,'no candidate'
-    for _,bend in ipairs({8,12,16,20,28,36}) do
-        for _,factor in ipairs({1.1,1.25,1}) do
-            local radius=p.radius*factor
-            for _,extension in ipairs(extensions) do
-                local limit=math.min(6,bend*bend/(6*radius)*0.95)
-                local winner
-                local function trial(bias)
-                    local path,tail=E.makePath(p,straight+bend,straight,radius,extension,bias)
-                    attempts=attempts+1
-                    if not path then return nil end
-                    local result=E.simulate(p,path,tail,0.15,false,false)
-                    lastReason=result.reason
-                    if result.ok then
-                        result=E.simulate(p,path,tail,0.075,true,true)
-                        lastReason=result.reason
-                        if result.ok then
-                            result.attempts,result.straight,result.bend=attempts,straight,bend
-                            result.radius,result.extension,result.bias=radius,extension,bias
-                            winner=result
-                        end
-                    end
-                    return result.rearError
-                end
-                trial(0)
-                if winner then return winner end
-                local lo,hi=-limit,limit
-                local a,b=trial(lo),trial(hi)
-                if winner then return winner end
-                if a and b and a*b < 0 then
-                    for _=1,6 do
-                        local bias=lo-a*(hi-lo)/(b-a)
-                        local err=trial(bias)
-                        if winner then return winner end
-                        if not err then break end
-                        if a*err<=0 then hi,b=bias,err else lo,a=bias,err end
-                    end
-                end
-            end
-        end
-    end
-    return {ok=false,reason=lastReason or 'no aligned candidate',attempts=attempts}
+    local search=E.newSearch(p)
+    local result
+    repeat result=search:update(256) until result
+    return result
 end

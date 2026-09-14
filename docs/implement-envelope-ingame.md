@@ -3,6 +3,13 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
+Current test: **v0.3**, packaged mod version **8.1.0.103**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.3` records identify it.
+The earlier unnumbered builds used 8.1.0.3. This revision fixes their live
+`coroutine.create/resume` crash: FS25 does not expose that library. The search
+and simulation now retain explicit state between updates. All integration
+tests run with `coroutine=nil`, including the complete startup path.
+
 ## Architecture
 
 The shared Dubins solver has **not** been changed. The implementation has three
@@ -101,7 +108,7 @@ waiting, successful fieldwork hand-off, entry crossed before lowering/readiness,
 last-waypoint protection and cancellation cleanup. Radius tests exercise the
 actual CP resolver with the XML value and changed overrides, including 5 m;
 the tractor's larger minimum still takes precedence. No PW-specific radius is
-embedded in the runtime planner. Constructor and coroutine tests also cover
+embedded in the runtime planner. Constructor and incremental-search tests cover
 stationary preparation and prediction-node cleanup.
 
 Run from the checkout with the bench Python environment:

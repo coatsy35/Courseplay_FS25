@@ -18,6 +18,8 @@ require('EnvelopeTurnPlanner')
 require('EnvelopeTurnGeometry')
 require('EnvelopeCourseTurn')
 productionTurningRadius = AIUtil.getTurningRadius
+-- FS25 does not expose this desktop Lua library. Keep it absent for ALL tests.
+coroutine=nil
 """)
         self.lua.execute('''
 function envelopeFixture(width,length,hitch,front,back,angle,rows,headland)
@@ -244,7 +246,34 @@ assert(not f.turn:endTurn(16))
 assert(f.vehicle.stopped and f.strategy.resumed==0)
 ''')
 
-    def test_constructor_preparation_and_coroutine_lifecycle(self):
+    def test_planner_failure_stops_once_without_repeating_frame_errors(self):
+        self.lua.execute('''
+local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4))
+local calls=0
+f.turn.states.ENVELOPE_PLANNING={name='PLANNING'}
+function getTimeSec() return os.clock() end
+f.turn.state=f.turn.states.ENVELOPE_PLANNING
+f.turn.planner={update=function() calls=calls+1; error('injected engine failure') end}
+f.turn:getDriveData(16)
+f.turn:getDriveData(16)
+assert(calls==1 and f.vehicle.stopped and not f.turn.planner)
+assert(f.turn.state==f.turn.states.ENVELOPE_STOPPED)
+''')
+
+    def test_simulation_limits_samples_per_update(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)
+local calls=0
+p.newTracker=function() return {
+    sample=function(_,s) calls=calls+1; return 1,s.x,s.z+10 end,
+    delete=function() end
+} end
+local simulation=EnvelopeTurnPlanner.newSimulation(p,{{x=0,z=0},{x=0,z=100}},2,0.15,false,false)
+assert(simulation:update(3)==nil and calls==3)
+assert(simulation:update(5)==nil and calls==8)
+''')
+
+    def test_constructor_preparation_and_incremental_lifecycle(self):
         self.lua.execute('''
 local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4))
 -- Exercise the real inherited constructor, not a manually populated turn table.

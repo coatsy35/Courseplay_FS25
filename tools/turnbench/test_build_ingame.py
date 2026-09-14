@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET
 from lupa.lua51 import LuaRuntime
-from build_ingame_test import ROOT, ZIP_NAME, build, test_manifest, test_settings
+from build_ingame_test import ROOT, ZIP_NAME, TEST_TITLE, MOD_VERSION, build, test_manifest, test_settings
 
 
 class EnvelopePackageTests(unittest.TestCase):
@@ -11,7 +11,8 @@ class EnvelopePackageTests(unittest.TestCase):
         manifest = (ROOT/'modDesc.xml').read_bytes()
         settings = (ROOT/'config/VehicleSettingsSetup.xml').read_bytes()
         patched = ET.fromstring(test_manifest(manifest))
-        self.assertEqual(patched.findtext('title/en'), 'CoursePlay - Envelope Turns Test')
+        self.assertEqual(patched.findtext('title/en'), TEST_TITLE)
+        self.assertEqual(patched.findtext('version'), MOD_VERSION)
         self.assertEqual(ET.fromstring(manifest).findtext('title/en'), 'CoursePlay')
         path = ".//Setting[@name='envelopeAlignedTurns']"
         self.assertEqual(ET.fromstring(test_settings(settings)).find(path).get('defaultBool'), 'true')
