@@ -13,12 +13,36 @@ function G.pose(node)
     return {x=x,z=z,t=math.atan2(dx,dz)}
 end
 
+-- The numerical model is horizontal. Project WORLD positions into a yaw-only
+-- frame: localToLocal includes pitch/roll, so a raised or flipped plough would
+-- otherwise acquire different lengths and mirrored marker offsets.
+function G.planarPoint(source,reference,x,y,z)
+    local wx,_,wz=localToWorld(source,x or 0,y or 0,z or 0)
+    return E.localPoint({x=wx,z=wz},G.pose(reference))
+end
+
+-- GIANTS driveToPoint derives curvature from a goal in AISteeringNode space.
+-- PPC tracks AIDirectionNode instead. Return an equivalent steering goal so
+-- both prediction and execution request the SAME bounded curvature, even when
+-- the tractor has a different steering-node origin or a tighter steering lock.
+-- This changes only this turn's goal; GIANTS retains steering slew/physics.
+function G.driveGoal(p,vehicle,gx,gz)
+    local state=G.pose(vehicle:getAIDirectionNode())
+    local k=E.pursuitCurvature(p,state,gx,gz)
+    local distance=math.min(4,p.lookahead,p.radius)
+    local x=0.5*k*distance*distance
+    local z=math.sqrt(math.max(0,distance*distance-x*x))
+    local node=vehicle:getAISteeringNode()
+    local wx,_,wz=localToWorld(node,x,0,z)
+    return wx,wz,k
+end
+
 -- Use production PPC's segment/goal-point selection in the candidate predictor.
 -- A private direction node avoids moving any real vehicle during calculation.
 -- The proxy is deliberately tiny: no AI job, callbacks or implement commands.
 function G.tracker(p,path)
     local node=CpUtil.createNode('envelopePrediction',p.start.x,p.start.z,p.start.t)
-    local proxy={maxTurningRadius=p.radius,getName=function() return 'Envelope prediction' end,
+    local proxy={maxTurningRadius=p.trackingRadius or p.radius,getName=function() return 'Envelope prediction' end,
         getAIDirectionNode=function() return node end,stopCurrentAIJob=function() end,
         getCpSettings=function() return {} end}
     local ppc=PurePursuitController(proxy)
@@ -92,7 +116,7 @@ function G.supported(vehicle)
 end
 
 local function markerAt(node,reference,towed,hitchLocal,rear)
-    local x,_,z=localToLocal(node,reference,0,0,0)
+    local x,z=G.planarPoint(node,reference)
     return {x=x-(hitchLocal and hitchLocal.x or 0),z=z-(hitchLocal and hitchLocal.z or 0),
         towed=towed,rear=rear,node=node}
 end
@@ -117,6 +141,7 @@ function G.capture(turn)
     if not supported then return nil,trailer end
     local node=vehicle:getAIDirectionNode()
     local p={start=G.pose(node),goal=G.pose(context.workStartNode),radius=AIUtil.getTurningRadius(vehicle),
+        trackingRadius=vehicle.maxTurningRadius,
         width=turn.workWidth,lookahead=turn.ppc.shortLookaheadDistance or 3,
         hitchX=0,hitchZ=0,work={},footprint={},objects={},loweringLead=0.5,
         -- This is a conservative numerical ceiling, NOT a drawbar collision
@@ -126,14 +151,18 @@ function G.capture(turn)
     local hitchLocal
     if trailer then
         local input=trailer:getActiveInputAttacherJoint()
-        local hx,_,hz=localToLocal(input.node,trailer.steeringAxleNode,0,0,0)
+        local hx,hz=G.planarPoint(input.node,trailer.steeringAxleNode)
         hitchLocal={x=hx,z=hz}
-        p.hitchX,_,p.hitchZ=localToLocal(input.node,node,0,0,0)
+        p.hitchX,p.hitchZ=G.planarPoint(input.node,node)
         p.length=hz
+        p.axleOffsetX=hx
         p.start.phi=G.pose(trailer.steeringAxleNode).t
         p.trailerNode=trailer.steeringAxleNode
-        if not finite(p.length) or p.length<0.5 or math.abs(hx)>0.25 then
-            return nil,'unsupported offset axle or invalid hitch-to-axle length'
+        -- A lateral axle offset is valid for a passive trailer. Its yaw rate
+        -- depends on the longitudinal hitch-to-axle lever hz; hx affects the
+        -- axle position/forward speed and is retained in every marker offset.
+        if not finite(hx) or not finite(p.length) or p.length<0.5 then
+            return nil,string.format('invalid horizontal hitch-to-axle geometry (lateral %s, longitudinal %s)',tostring(hx),tostring(hz))
         end
         for _,attachment in ipairs(vehicle:getAttachedImplements()) do
             if attachment.object==trailer then
@@ -170,7 +199,7 @@ function G.capture(turn)
         local zMax,zMin,xMax,xMin=-math.huge,math.huge,-math.huge,math.huge
         for _,x in ipairs({sl,ss}) do
             for _,z in ipairs({sf,sr}) do
-                local rx,_,rz=localToLocal(object.rootNode,reference,x,0,z)
+                local rx,rz=G.planarPoint(object.rootNode,reference,x,0,z)
                 xMin,xMax=math.min(xMin,rx),math.max(xMax,rx)
                 zMin,zMax=math.min(zMin,rz),math.max(zMax,rz)
             end

@@ -3,12 +3,29 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.3**, packaged mod version **8.1.0.103**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.3` records identify it.
-The earlier unnumbered builds used 8.1.0.3. This revision fixes their live
+Current test: **v0.4**, packaged mod version **8.1.0.104**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.4` records identify it.
+The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.4 projects all measurements from world positions into horizontal
+heading frames. Previously, local 3D pitch/roll contaminated the planar lengths
+and marker offsets. Passive lateral axle offsets are now retained, rather than
+rejected above 0.25 m; the longitudinal hitch lever controls trailer yaw while
+the lateral offset remains in the body/marker positions. Tests cover both rolled
+plough sides, pitch and offset axles.
+
+Prediction and live execution now share a curvature calculation. The new turn
+returns an equivalent goal in GIANTS' AI steering-node frame, enforcing CP's
+resolved combination radius even when the tractor can steer more tightly. This
+also handles a steering-node origin different from the PPC direction node. The
+prediction PPC uses the actual tractor radius for its waypoint-passing tests.
+The original engine still owns steering slew and physical movement; instantaneous
+planar prediction does not reproduce every hydraulic, tyre or soil effect.
+Version 0.3's live entry failure is not considered resolved until rechecked in
+game. Geometry snapshots and two-second TRACK records support that comparison.
 
 ## Runtime compatibility
 
@@ -69,6 +86,11 @@ goal-point selection and a planar tractor/passive-trailer motion model. Coarse
 0.15 m steps are rechecked at 0.075 m before acceptance. Calculation yields
 between batches with a 4 ms update budget; individual engine calls can exceed
 that budget. Actual equipment scanning happens once per turn.
+
+The steering-goal conversion follows the curvature interface documented by
+[GIANTS' FS25 AIVehicleUtil](https://gdn.giants-software.com/documentation_scripting_fs25.php?category=91&class=881&version=script).
+No shared GIANTS function or stock CP turn is patched. Outer field polygon,
+island and density checks are unchanged.
 
 Accepted candidates require all sampled work-edge errors <=0.1 m, heading error
 <=2 degrees and clearance of the scanned tractor/implement perimeter. Concave

@@ -99,6 +99,74 @@ q,reason=EnvelopeTurnGeometry.capture(f.turn)
 assert(not q and reason:find('field polygon'))
 ''')
 
+    def test_projected_geometry_matches_live_markers_on_both_rolled_sides(self):
+        self.lua.execute('''
+-- Full orthogonal yaw/pitch/roll transforms, unlike the ordinary flat fixture.
+local flatDirection=localDirectionToWorld
+function localDirectionToWorld(n,x,y,z)
+    local roll,pitch=n.roll or 0,n.pitch or 0
+    x,y=x*math.cos(roll)-y*math.sin(roll),x*math.sin(roll)+y*math.cos(roll)
+    y,z=y*math.cos(pitch)-z*math.sin(pitch),y*math.sin(pitch)+z*math.cos(pitch)
+    return flatDirection(n,x,y,z)
+end
+function localToWorld(n,x,y,z)
+    local a,b,c=localDirectionToWorld(n,x,y,z)
+    return n.x+a,(n.y or 0)+b,n.z+c
+end
+function getWorldTranslation(n) return n.x,n.y or 0,n.z end
+for _,side in ipairs({-1,1}) do
+    local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,side,50.4)
+    p.axleOffsetX=side*0.8
+    local f=makeEnvelopeLiveFixture(p)
+    f.object.rootNode.roll=side==1 and math.pi or 0
+    f.object.rootNode.pitch=math.rad(12*side)
+    f.object.rootNode.y=1.2
+    f.object.input.node.y=0.8
+    local q,reason=EnvelopeTurnGeometry.capture(f.turn)
+    assert(q,reason)
+    assert(math.abs(q.length-p.length)<1e-8)
+    assert(math.abs(q.axleOffsetX-p.axleOffsetX)<1e-8)
+    local _,error,angle,contact=EnvelopeTurnPlanner.assess(q,q.start)
+    local _,liveError,liveAngle,liveContact=EnvelopeTurnGeometry.assessLive(q,f.vehicle)
+    assert(math.abs(error-liveError)<1e-8)
+    assert(math.abs(angle-liveAngle)<1e-8)
+    assert(math.abs(contact-liveContact)<1e-8)
+end
+''')
+
+    def test_pw_both_directions_with_tighter_tractor_and_offset_axle(self):
+        self.lua.execute('''
+for _,side in ipairs({-1,1}) do
+    local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25*side,side,50.4)
+    p.vehicleRadius=5
+    p.axleOffsetX=0.8*side
+    driveEnvelopeLiveFixture(p)
+end
+''')
+
+    def test_live_goal_preserves_predicted_curvature_with_offset_steering_node(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,1,50.4)
+local f=makeEnvelopeLiveFixture(p)
+-- A tractor capable of a 5 m turn still receives the combination's 9 m limit.
+f.vehicle.maxTurningRadius=5
+for _,heading in ipairs({0,0.7,-1.4}) do
+    f:setPose({x=12,z=30,t=heading,phi=heading})
+    local steering=EnvelopeTurnPlanner.point(12,30,heading,0.4,1.7)
+    steering.t=heading
+    f.vehicle.getAISteeringNode=function() return steering end
+    for _,goal in ipairs({{x=5,z=2},{x=-5,z=2},{x=1,z=20},{x=0,z=20}}) do
+        local world=EnvelopeTurnPlanner.point(12,30,heading,goal.x,goal.z)
+        local gx,gz,k=EnvelopeTurnGeometry.driveGoal(p,f.vehicle,world.x,world.z)
+        local x,_,z=worldToLocal(steering,gx,0,gz)
+        -- The curvature GIANTS derives from driveToPoint's steering-local goal.
+        local received=2*x/(x*x+z*z)
+        assert(math.abs(received-k)<1e-10)
+        assert(math.abs(received)<=1/p.radius+1e-10)
+    end
+end
+''')
+
     def test_live_lower_gate_waits_and_does_not_lower_displaced_tool(self):
         self.lua.execute('''
 local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)

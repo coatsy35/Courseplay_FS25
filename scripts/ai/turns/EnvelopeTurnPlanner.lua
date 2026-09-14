@@ -32,6 +32,14 @@ function E.localPoint(p, reference)
         dx * math.sin(reference.t) + dz * math.cos(reference.t)
 end
 
+-- Shared by prediction and live target conversion. CP's combination radius is
+-- a minimum for this manoeuvre, not the tractor's unrestricted steering lock.
+function E.pursuitCurvature(p,state,gx,gz)
+    local dx,dz=gx-state.x,gz-state.z
+    return math.max(-1/p.radius,math.min(1/p.radius,
+        2*(dx*math.cos(state.t)-dz*math.sin(state.t))/math.max(0.01,dx*dx+dz*dz)))
+end
+
 function E.marker(p, state, marker)
     if marker.towed then
         local hitch = E.point(state.x, state.z, state.t, p.hitchX, p.hitchZ)
@@ -207,9 +215,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
             end
         end
         if ix >= #path then break end
-        local dx,dz=gx-s.x,gz-s.z
-        local k=math.max(-1/p.radius,math.min(1/p.radius,
-            2*(dx*math.cos(s.t)-dz*math.sin(s.t))/math.max(0.01,dx*dx+dz*dz)))
+        local k=E.pursuitCurvature(p,s,gx,gz)
         local oldHitch=E.point(s.x,s.z,s.t,p.hitchX,p.hitchZ)
         s.x=s.x+step*math.sin(s.t+k*step/2)
         s.z=s.z+step*math.cos(s.t+k*step/2)

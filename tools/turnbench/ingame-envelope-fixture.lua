@@ -15,9 +15,10 @@ function makeEnvelopeLiveFixture(p)
     object.getActiveInputAttacherJoint=function(self) return self.input end
     object.aiImplementStartLine=function(self) self.lowerCount=self.lowerCount+1 end
     local v={rootNode=node,trailer=p.length and object or nil,speed=0,lastSpeed=0,
-        size={length=6,width=3.8,lengthOffset=1},maxTurningRadius=9,stopped=false,
+        size={length=6,width=3.8,lengthOffset=1},maxTurningRadius=p.vehicleRadius or 9,stopped=false,
         spec_attacherJoints={attacherJoints={{upperRotLimit={0,math.rad(88),0}}}}}
     v.getAIDirectionNode=function() return node end
+    v.getAISteeringNode=function() return node end
     v.getName=function() return 'Live mock' end
     v.getCpSettings=function() return settings end
     v.getLastSpeed=function(self) return self.speed end
@@ -59,7 +60,7 @@ function makeEnvelopeLiveFixture(p)
         node.x,node.z,node.t=s.x,s.z,s.t
         local h=E.point(s.x,s.z,s.t,p.hitchX,p.hitchZ)
         hitch.x,hitch.z,hitch.t=h.x,h.z,s.phi
-        local a=E.point(h.x,h.z,s.phi,0,-(p.length or 0))
+        local a=E.point(h.x,h.z,s.phi,-(p.axleOffsetX or 0),-(p.length or 0))
         axle.x,axle.z,axle.t=a.x,a.z,s.phi
         for i,key in ipairs({'left','right'}) do
             local q=E.marker(p,s,p.work[i])
@@ -119,7 +120,10 @@ function driveEnvelopeLiveFixture(p)
         speed=math.max(0,speed+math.max(-2*dt,math.min(dt,target-speed)))
         local distance=speed*dt
         local dx,dz=gx-s.x,gz-s.z
-        local k=math.max(-1/p.radius,math.min(1/p.radius,
+        -- Physical steering lock belongs to the tractor, not the combination's
+        -- planned radius. The production driveGoal must enforce the latter.
+        local physicalRadius=p.vehicleRadius or p.radius
+        local k=math.max(-1/physicalRadius,math.min(1/physicalRadius,
             2*(dx*math.cos(s.t)-dz*math.sin(s.t))/math.max(0.01,dx*dx+dz*dz)))
         local old=E.point(s.x,s.z,s.t,p.hitchX,p.hitchZ)
         s.x,s.z=s.x+distance*math.sin(s.t+k*distance/2),s.z+distance*math.cos(s.t+k*distance/2)

@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.3'
+EnvelopeCourseTurn.TEST_VERSION = '0.4'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -69,8 +69,13 @@ function EnvelopeCourseTurn:prepare()
         local p,reason=EnvelopeTurnGeometry.capture(self)
         if not p then return {ok=false,reason=reason} end
         self.geometry=p
-        self:log('geometry: radius %.2f, width %.2f, hitch %.2f/%.2f, axle %.2f, front %.2f, pike %.1f degrees, headland seed %.1f',
-            p.radius,p.width,p.hitchX,p.hitchZ,p.length or 0,p.front,math.deg(math.atan(p.slope)),p.headland)
+        self:log('geometry: radius %.2f, width %.2f, hitch %.2f/%.2f, axle %.2f (lateral %.2f), front %.2f, pike %.1f degrees, headland seed %.1f',
+            p.radius,p.width,p.hitchX,p.hitchZ,p.length or 0,p.axleOffsetX or 0,p.front,math.deg(math.atan(p.slope)),p.headland)
+        self:log('snapshot: start %.3f/%.3f heading %.3f tool %.3f, goal %.3f/%.3f heading %.3f, lookahead %.3f, tractor radius %.3f',
+            p.start.x,p.start.z,math.deg(p.start.t),math.deg(p.start.phi),p.goal.x,p.goal.z,math.deg(p.goal.t),p.lookahead,p.trackingRadius or p.radius)
+        for i,m in ipairs(p.work) do
+            self:log('work marker %d: %.3f/%.3f, towed %s, rear %s',i,m.x,m.z,tostring(m.towed),tostring(m.rear))
+        end
         self.planner=EnvelopeTurnPlanner.newSearch(p)
         return nil
     end}
@@ -125,6 +130,16 @@ function EnvelopeCourseTurn:getDriveData(dt)
         if self.lowerRequested and not aligned then
             self:stopWithReason(string.format('alignment lost while lowering (edge %.3f m, angle %.2f degrees)',error,math.deg(angle)))
             return nil,nil,true,0
+        end
+        local px,_,pz=self.ppc:getGoalPointPosition()
+        gx,gz,self.requestedCurvature=EnvelopeTurnGeometry.driveGoal(self.geometry,self.vehicle,px,pz)
+        forward=true
+        -- Sparse live traces make prediction/physics disagreement measurable on
+        -- any implement. Never dump one log line per simulation sample/frame.
+        if not self.nextTrace or g_currentMission.time>=self.nextTrace then
+            self.nextTrace=g_currentMission.time+2000
+            self:log('TRACK: wp %d, pose %.2f/%.2f, tractor %.2f, tool %.2f, contact %.2f, edge %.3f, heading %.2f, curvature %.4f',
+                self.ppc:getCurrentWaypointIx(),state.x,state.z,math.deg(state.t),math.deg(state.phi),contact,error,math.deg(angle),self.requestedCurvature)
         end
     end
     return gx,gz,forward,math.min(speed or self:getForwardSpeed(),8,self.entrySpeedLimit or math.huge)
