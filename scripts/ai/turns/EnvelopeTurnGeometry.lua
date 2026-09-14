@@ -187,15 +187,37 @@ function G.capture(turn)
         -- even with another reference supplied. Scan in its native frame and
         -- explicitly transform every corner; never treat root-relative extents
         -- as tractor-/axle-relative dimensions.
-        local sf,sr,sl,ss=scanner:scan(object)
+        local centred=false
+        for _,controller in pairs(turn.driveStrategy.controllers) do
+            if controller.implement==object and controller.isRotatablePlow and controller:isRotatablePlow() then
+                centred=turn.needsWorkingGeometry and not controller:isRotationActive() and not controller:isFullyRotated()
+            end
+        end
+        local sf,sr,sl,ss
+        local complete=false
+        if centred and scanner._measureDimension then
+            -- The nominal working width defeats the benefit of centring.
+            -- Use current collision extents only when ALL four probes hit;
+            -- the scanner's default value on a missed probe is not a size.
+            complete=true
+            local function measure(distance,axis)
+                local value=scanner:_measureDimension(object,nil,distance,distance>0 and 0.1 or -0.1,axis)
+                complete=complete and scanner.scannedVehicleFound
+                return value
+            end
+            sf,sr,sl,ss=measure(50,'z'),measure(-50,'z'),measure(50,'x'),measure(-50,'x')
+            complete=complete and sf>sr and sl>ss
+        else sf,sr,sl,ss=scanner:scan(object) end
         if not (finite(sf) and finite(sr) and finite(sl) and finite(ss)) then
             return nil,'invalid scanned equipment bounds'
         end
         local size=object.size or {}
-        sf=math.max(sf,(size.length or 0)/2+(size.lengthOffset or 0))
-        sr=math.min(sr,-(size.length or 0)/2+(size.lengthOffset or 0))
-        sl=math.max(sl,(size.width or 0)/2)
-        ss=math.min(ss,-(size.width or 0)/2)
+        if not (centred and complete) then
+            sf=math.max(sf,(size.length or 0)/2+(size.lengthOffset or 0))
+            sr=math.min(sr,-(size.length or 0)/2+(size.lengthOffset or 0))
+            sl=math.max(sl,(size.width or 0)/2)
+            ss=math.min(ss,-(size.width or 0)/2)
+        end
         local zMax,zMin,xMax,xMin=-math.huge,math.huge,-math.huge,math.huge
         for _,x in ipairs({sl,ss}) do
             for _,z in ipairs({sf,sr}) do

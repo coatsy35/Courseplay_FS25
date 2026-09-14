@@ -3,12 +3,26 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.4**, packaged mod version **8.1.0.104**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.4` records identify it.
+Current test: **v0.5**, packaged mod version **8.1.0.105**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.5` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.5 restores stock CP plough centring through the main turn. CP's
+`PlowController:onFinishRow` explicitly centres reversible ploughs to permit
+tighter turns without the tractor's rear wheel touching the plough. The previous
+test incorrectly moved the plough to its next working side before planning.
+This version measures the centred outline, then uses the stock controller to
+rotate on the final approach. It stops during rotation, remeasures the working
+position and validates the remaining approach, searching again if necessary.
+No new fixed turning radius or model-specific dimensions are introduced.
+
+The v0.4 live attempt stopped before path search because its loaded course had
+no field polygon. Version 0.5 invokes CP's existing asynchronous field detector
+when the polygon is missing or belongs to another field. It waits for the
+completed boundary and islands before planning; failed detection still stops.
 
 Version 0.4 projects all measurements from world positions into horizontal
 heading frames. Previously, local 3D pitch/roll contaminated the planar lengths
@@ -64,9 +78,17 @@ normal row-turn choice, including K turns and pathfinder turns.
 
 After finishing the row, CP's existing work-end handler raises the implement.
 Its configured late-raise behaviour still waits for the rear working marker.
-The new strategy stops, places a reversible plough on the next working side
-while raised, and measures that position. This intentionally checks the larger
-working-side footprint instead of assuming a narrow, centred plough body.
+The new strategy stops, waits for stock plough centring to finish, and measures
+that position. A centred plough uses the actual collision outline plus current
+AI markers only when all four size probes hit. If any probe misses, the nominal
+dimensions remain a conservative fallback. The working width still defines row
+spacing; it does not force a centred plough to have its deployed body width.
+
+On the final approach, CP's unmodified plough controller decides when to rotate
+to the next side (within 30 degrees of the incoming direction). Lowering remains
+disabled. The tractor stops while rotation completes, then the new geometry is
+checked against the remaining path. It cannot resume from an unchecked working
+position or lower against the saved centred marker positions.
 
 The tractor radius comes from `AIUtil.getTurningRadius`, retaining GIANTS/CP
 calculations and vehicle-configuration overrides. A PW profile is not embedded
@@ -85,7 +107,7 @@ candidate allows. Each candidate uses the production CP pursuit controller for
 goal-point selection and a planar tractor/passive-trailer motion model. Coarse
 0.15 m steps are rechecked at 0.075 m before acceptance. Calculation yields
 between batches with a 4 ms update budget; individual engine calls can exceed
-that budget. Actual equipment scanning happens once per turn.
+that budget. Equipment is scanned before planning and again after plough rotation.
 
 The steering-goal conversion follows the curvature interface documented by
 [GIANTS' FS25 AIVehicleUtil](https://gdn.giants-software.com/documentation_scripting_fs25.php?category=91&class=881&version=script).
@@ -122,8 +144,9 @@ For a vehicle already saved with this setting, its saved choice takes precedence
 
 1. Attach and unfold the PW 100-12, with its normal CP `pw10012.xml` override.
 2. Check **CP vehicle settings → Implement → Aligned implement row turns (test)**.
-3. Generate a course on the current field, initially with nine headlands and
-   adjacent up/down rows. The adapter needs that field's detected polygon.
+3. Generate or load a course on the current field, initially with nine headlands
+   and adjacent up/down rows. Missing field geometry is detected automatically
+   while the vehicle waits at the turn.
 4. Test straight ends, short-to-long pikes, then the same equipment with a
    larger headland. Compare with the setting off if desired.
 5. For wider pike tests, use 6 m/12 m drills, skip six rows and start at short work.
@@ -147,17 +170,23 @@ actual CP resolver with the XML value and changed overrides, including 5 m;
 the tractor's larger minimum still takes precedence. No PW-specific radius is
 embedded in the runtime planner. Constructor and incremental-search tests cover
 stationary preparation and prediction-node cleanup.
+Additional tests use CP's actual `PlowController` to verify centring, delayed
+working-side rotation, changed marker offsets and entry after expansion on
+25-degree and 41.5-degree pikes. They also cover collision-probe fallback,
+asynchronous field detection, rotation timeout and stationary replanning of an
+invalid remaining approach. Angled test headlands use perpendicular depth, as
+CP's polygon offsets do, rather than reducing usable depth with the field angle.
 
 Run from the checkout with the bench Python environment:
 
 ```powershell
 python -m unittest discover -s tools/turnbench -p test_ingame_envelope.py -v
-python -m unittest discover -s .github/scripts -p test_build_mod.py -v
+python -m unittest discover -s tools/turnbench -p test_build_ingame.py -v
 python tools/turnbench/build_ingame_test.py
 ```
 
 These are offline checks, **not an in-game physics or collision certification**.
-The first live run is still needed. Field-density data does not describe every
+The first live run of v0.5 is still needed. Field-density data does not describe every
 hedge/obstacle; CP's normal proximity controller remains active. A stopped job
 does not imply that a different family of turn could never fit that headland.
 
@@ -172,6 +201,8 @@ and an 85-degree numerical ceiling. Missing joint data does not prove clearance
 between the drawbar and tyres; body-to-body interference and extra internal
 implement joints still need a richer model. The 0.1 m/2-degree thresholds and
 0.5 m reserve are test parameters, not agricultural or regulatory standards.
+The rotation sweep itself is not simulated; the rig stops for rotation and the
+completed working pose is measured before it drives again.
 
 Future work: calibrate against recorded live tracking, add joint/body collision
 constraints and chained/steered models, integrate checked compact reversing

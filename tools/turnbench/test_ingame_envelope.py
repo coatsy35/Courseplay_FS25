@@ -99,6 +99,198 @@ q,reason=EnvelopeTurnGeometry.capture(f.turn)
 assert(not q and reason:find('field polygon'))
 ''')
 
+    def test_loaded_course_detects_boundary_once_and_waits_for_islands(self):
+        self.lua.execute('''
+local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4))
+local polygon=f.vehicle:cpGetFieldPolygon()
+local calls,running=0,false
+f.vehicle.cpGetFieldPolygon=function() return nil end
+f.vehicle.cpIsFieldBoundaryDetectionRunning=function() return running end
+f.vehicle.cpDetectFieldBoundary=function(_,x,z) calls=calls+1; running=true end
+g_currentMission.time=0
+assert(not f.turn:ensureFieldBoundary() and calls==1)
+assert(not f.turn:ensureFieldBoundary() and calls==1 and not f.vehicle.stopped)
+f.vehicle.cpGetFieldPolygon=function() return polygon end
+-- A polygon delivered while the detector is running is not final yet.
+assert(not f.turn:ensureFieldBoundary())
+running=false
+assert(f.turn:ensureFieldBoundary() and not f.vehicle.stopped)
+-- A different field's cached polygon must not be used for this course.
+f.turn.boundaryStarted=nil
+f.vehicle.cpGetFieldPolygon=function() return {{x=1000,z=1000},{x=1100,z=1000},{x=1000,z=1100}} end
+assert(not f.turn:ensureFieldBoundary() and calls==2)
+running=false
+f.vehicle.cpGetFieldPolygon=function() return nil end
+assert(not f.turn:ensureFieldBoundary() and f.vehicle.stopped)
+''')
+
+    def load_stock_plough_fixture(self):
+        self.lua.execute('''
+package.path=ROOT..'/scripts/ai/controllers/?.lua;'..package.path
+require('ImplementController')
+require('PlowController')
+function addStockPloughFixture(f)
+    local o=f.object
+    o.spec_plow={rotationPart={turnAnimation='turn'}}
+    o.animation,o.playing,o.sideCommands=0.5,false,0
+    o.getIsAnimationPlaying=function(self) return self.playing end
+    o.getAnimationTime=function(self) return self.animation end
+    o.getIsPlowRotationAllowed=function() return true end
+    o.setRotationMax=function(self,side)
+        self.sideCommands=self.sideCommands+1
+        self.targetAnimation=side and 1 or 0
+        self.playing=true
+        self.animationEnd=g_currentMission.time+500
+    end
+    local c=PlowController(f.vehicle,o)
+    c.debug=function() end
+    f.strategy.controllers={c}
+    f.controller=c
+    f.strategy.raiseControllerEvent=function(_,event,...)
+        if event==AIDriveStrategyCourse.onTurnEndProgressEvent then c:onTurnEndProgress(...) end
+        if event==AIDriveStrategyCourse.onLoweringEvent then c:onLowering() end
+    end
+    PlowCenterTurnEvent={sendEvent=function(implement) implement.animation=0.5; implement.playing=true end}
+    f.turn.states.ENVELOPE_ROTATING={name='ROTATING'}
+    f.turn.states.ENVELOPE_PLANNING={name='PLANNING'}
+    f.turn.states.ENVELOPE_PREPARING={name='PREPARING'}
+    return c
+end
+''')
+
+    def test_stock_plough_stays_centred_until_the_approach(self):
+        self.load_stock_plough_fixture()
+        self.lua.execute('''
+local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4))
+local c=addStockPloughFixture(f)
+g_currentMission.time=0
+c:onFinishRow(false) -- actual CP controller centres at row end
+f.turn:startTurn()
+f.turn:prepare()
+assert(not f.turn.planner and f.object.sideCommands==0)
+f.object.playing=false
+f.turn:prepare()
+assert(f.turn.planner and f.turn.needsWorkingGeometry and f.object.sideCommands==0)
+assert(not c:isFullyRotated()) -- still centred, not on either working side
+f.turn:release()
+''')
+
+    def test_centred_collision_outline_is_smaller_with_safe_scan_fallback(self):
+        self.load_stock_plough_fixture()
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)
+for _,m in ipairs(p.work) do m.x=m.x*0.1 end -- centred soil markers
+local f=makeEnvelopeLiveFixture(p)
+addStockPloughFixture(f)
+f.turn.needsWorkingGeometry=true
+local scannerFactory=VehicleSizeScanner
+local missed=false
+VehicleSizeScanner=function()
+    local scanner=scannerFactory()
+    scanner._measureDimension=function(self,object,reference,distance,last,axis)
+        self.scannedVehicleFound=not (missed and axis=='x' and distance<0)
+        return (distance>0 and 1 or -1)*(axis=='x' and 0.5 or 4)
+    end
+    return scanner
+end
+local function trailerWidth(q)
+    local lo,hi=math.huge,-math.huge
+    for _,m in ipairs(q.footprint) do
+        if m.towed then lo,hi=math.min(lo,m.x),math.max(hi,m.x) end
+    end
+    return hi-lo
+end
+local q=assert(EnvelopeTurnGeometry.capture(f.turn))
+assert(trailerWidth(q)<1.01)
+missed=true
+q=assert(EnvelopeTurnGeometry.capture(f.turn))
+assert(trailerWidth(q)>=5.6-1e-8) -- never trust a missed collision probe
+''')
+
+    def test_stock_plough_rotation_and_remeasured_entry_complete(self):
+        self.load_stock_plough_fixture()
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,1,50.4)
+local completedFixture
+p.configureFixture=function(f)
+    addStockPloughFixture(f)
+    f.turn.needsWorkingGeometry=true
+    completedFixture=f
+end
+p.tickFixture=function(f)
+    if f.object.playing and g_currentMission.time>=f.object.animationEnd then
+        f.object.animation=f.object.targetAnimation
+        f.object.playing=false
+        -- The working side changes the marker offsets. The entry must be
+        -- remeasured, not lowered against the saved centred marker positions.
+        for _,m in ipairs(p.work) do m.x=m.x+0.2 end
+    end
+end
+driveEnvelopeLiveFixture(p)
+assert(completedFixture.object.sideCommands==1)
+assert(not completedFixture.turn.needsWorkingGeometry)
+assert(completedFixture.object.lowerCount==1)
+''')
+
+    def test_narrow_centred_plough_expands_before_pike_entry(self):
+        self.load_stock_plough_fixture()
+        self.lua.execute('''
+for _,angle in ipairs({25,-41.5}) do
+    local p=envelopeFixture(5.6,11.31,1.3,4.6,18.3,angle,angle>0 and 1 or -1,50.4)
+    for _,m in ipairs(p.work) do m.x=m.x*0.1 end
+    p.configureFixture=function(f)
+        addStockPloughFixture(f)
+        f.turn.needsWorkingGeometry=true
+    end
+    p.tickFixture=function(f)
+        if f.object.playing and g_currentMission.time>=f.object.animationEnd then
+            f.object.animation=f.object.targetAnimation
+            f.object.playing=false
+            for _,m in ipairs(p.work) do m.x=m.x/0.1 end
+        end
+    end
+    driveEnvelopeLiveFixture(p)
+end
+''')
+
+    def test_rotation_timeout_never_lowers_or_resumes(self):
+        self.load_stock_plough_fixture()
+        self.lua.execute('''
+local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4))
+addStockPloughFixture(f)
+f.turn.needsWorkingGeometry=true
+f.turn.state=f.turn.states.ENVELOPE_ROTATING
+f.turn.rotationStarted=0
+f.object.playing=true
+g_currentMission.time=31000
+f.turn:updateRotation()
+assert(f.vehicle.stopped and f.object.lowerCount==0 and f.strategy.resumed==0)
+''')
+
+    def test_invalid_remaining_approach_is_replanned_before_driving(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)
+local f=makeEnvelopeLiveFixture(p)
+local t=f.turn
+t.states.ENVELOPE_PLANNING={name='PLANNING'}
+t.ppc=PurePursuitController(f.vehicle)
+t.ppc:setShortLookaheadDistance()
+function getTimeSec() return os.clock() end
+-- This stale approach drives straight out of the field. Fresh working
+-- geometry must reject it and search a checked replacement while stationary.
+t:startPlanning({{x=0,z=p.start.z},{x=0,z=200}})
+local updates=0
+repeat
+    local _,_,_,speed=t:getDriveData(16)
+    assert(speed==0 and f.object.lowerCount==0)
+    updates=updates+1
+until t.state~=t.states.ENVELOPE_PLANNING or updates>10000
+assert(t.state==t.states.TURNING and t.result.ok and not t.result.retainedApproach)
+assert(updates>1 and not t.geometry.activeTracker)
+t:release()
+t.ppc:delete()
+''')
+
     def test_projected_geometry_matches_live_markers_on_both_rolled_sides(self):
         self.lua.execute('''
 -- Full orthogonal yaw/pitch/roll transforms, unlike the ordinary flat fixture.

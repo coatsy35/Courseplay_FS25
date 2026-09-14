@@ -26,15 +26,18 @@ function makeEnvelopeLiveFixture(p)
     v.getChildVehicles=function() return {v,object} end
     v.stopCurrentAIJob=function(self) self.stopped=true end
     v.raiseStateChange=function() end
+    -- Headland rows specify perpendicular depth, as with CP's polygon offsets.
+    -- A sloping edge needs a larger z-intercept for the same usable depth.
+    local edgeZ=p.headland*math.sqrt(1+p.slope*p.slope)
     v.cpGetFieldPolygon=function() return {{x=-200,z=-450},{x=200,z=-450},
-        {x=200,z=p.headland+p.slope*200},{x=-200,z=p.headland-p.slope*200}} end
+        {x=200,z=edgeZ+p.slope*200},{x=-200,z=edgeZ-p.slope*200}} end
     v.cpGetIslandPolygons=function() return {} end
     local context={workStartNode={x=p.goal.x,z=p.goal.z,t=p.goal.t},
         workEndNode={x=0,z=0,t=0},turnEndWpNode={node={x=p.goal.x,z=p.goal.z,t=p.goal.t}},
         turnStartWpIx=20,turnEndWpIx=21}
     context.isHeadlandCorner=function() return false end
     context.shouldPlowBeOnTheLeft=function() return false end
-    context.getDistanceToFieldEdge=function() return p.headland-p.start.z end
+    context.getDistanceToFieldEdge=function() return edgeZ-p.start.z end
     local strategy={controllers={},events=0,raised=0,resumed=0}
     strategy.raiseControllerEvent=function(self) self.events=self.events+1 end
     strategy.raiseImplements=function(self) self.raised=self.raised+1 end
@@ -91,6 +94,7 @@ function driveEnvelopeLiveFixture(p)
     local E=EnvelopeTurnPlanner
     local f=makeEnvelopeLiveFixture(p)
     local t=f.turn
+    if p.configureFixture then p.configureFixture(f) end
     t.geometry=assert(EnvelopeTurnGeometry.capture(t))
     local result=EnvelopeTurnPlanner.plan(t.geometry)
     assert(result.ok,result.reason)
@@ -104,6 +108,7 @@ function driveEnvelopeLiveFixture(p)
     for tick=1,16000 do
         local dt=0.05
         g_currentMission.time=tick*dt*1000
+        if p.tickFixture then p.tickFixture(f) end
         f.vehicle.speed=speed*3.6
         f.vehicle.lastSpeed=speed/1000
         f:setPose(s)
