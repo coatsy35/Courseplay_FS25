@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.10'
+EnvelopeCourseTurn.TEST_VERSION = '0.11'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -92,12 +92,14 @@ end
 
 function EnvelopeCourseTurn:startPlanning(remainingPath)
     self.state=self.states.ENVELOPE_PLANNING
+    self.planningStarted=g_currentMission.time
     self.planner={update=function()
         self:log('measuring %s envelope',self.needsWorkingGeometry and 'centred-turn' or 'working')
         local p,reason=EnvelopeTurnGeometry.capture(self)
         if not p then return {ok=false,reason=reason} end
         self.headlandSeed=self.headlandSeed or p.headland
         self.geometry=p
+        p.approachHint=self.driveStrategy.envelopeApproachHints and self.driveStrategy.envelopeApproachHints[EnvelopeTurnPlanner.approachSide(p)]
         self:logGeometry(p)
         if remainingPath then
             -- Rotation may change hitch/axle/soil-marker positions. Validate
@@ -215,13 +217,14 @@ function EnvelopeCourseTurn:updatePlanner()
     self.ppc:initialize(1)
     self.state=self.states.TURNING
     if result.repairedApproach then
-        self:log('SELECTED local entry correction: %d trials, lateral lead %.3f m, predicted edge error %.3f m; no second loop',result.attempts,result.bias,result.entryError)
+        self:log('SELECTED local entry correction: %d trials, lateral lead %.3f m, predicted edge error %.3f m, worst admission error %.3f m, reused shape %s; no second loop',result.attempts,result.bias,result.entryError,result.maxEntryError or result.entryError,tostring(result.usedHint or false))
     elseif result.retainedApproach then
         self:log('VALIDATED remaining working-position approach: predicted edge error %.3f m',result.entryError)
     else
         self:log('SELECTED steering-led forward turn: %d trials, radius %.2f, bend %.1f, straight %.1f, bias %.3f, outward %.1f, predicted edge error %.3f m',
             result.attempts,result.radius,result.bend,result.straight,result.bias,result.extension,result.entryError)
     end
+    if self.planningStarted then self:log('planning completed in %.2f seconds',(g_currentMission.time-self.planningStarted)/1000) end
     -- Reuse CP's per-object commands/controller events/state changes, but let
     -- this strategy own the stricter admission test. This is an INSTANCE method;
     -- the global WorkStartHandler and other turn strategies are unaffected.
@@ -328,6 +331,15 @@ function EnvelopeCourseTurn:endTurn(dt)
     -- an envelope check. Here every tool is ready AND live-aligned at contact.
     if contact>=0 then
         self:log('ENTRY: live edge error %.3f m, angle %.2f degrees; resuming fieldwork',error,math.deg(angle))
+        -- Save only the shape of a turn which actually reached working entry.
+        -- A later turn must rebuild and validate it with its own live geometry.
+        local r,p=self.result,self.geometry
+        if r and r.repairedApproach and r.factorA and r.factorB then
+            self.driveStrategy.envelopeApproachHints=self.driveStrategy.envelopeApproachHints or {}
+            self.driveStrategy.envelopeApproachHints[EnvelopeTurnPlanner.approachSide(p)]={
+                factorA=r.factorA,factorB=r.factorB,straightRatio=r.straight/p.width,
+                biasRatio=r.bias/(p.width*EnvelopeTurnPlanner.approachSide(p))}
+        end
         self.geometry=nil
         self:resumeFieldworkAfterTurn(self.turnContext.turnEndWpIx)
     end

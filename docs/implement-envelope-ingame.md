@@ -3,12 +3,39 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.10**, packaged mod version **8.1.0.110**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.10` records identify it.
+Current test: **v0.11**, packaged mod version **8.1.0.111**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.11` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.11 follows two confirmed v0.10 working entries (0.041 m and 0.044 m
+live error) and a third local-search failure. Post-turnover searches took about
+9.9 s, 1.9 s and 12.4 s respectively, separately from the roughly seven-second
+stock turnover. The third exhausted 96 trials with a reported 0.050059 m error.
+The exact geometry replay also reproduces exhaustion before this change.
+
+Local repair now evaluates the worst working-corner error over the complete
+lowering/entry interval. It minimises that error with a bounded golden-section
+search rather than solving signed mean error at a candidate-dependent first
+failure point. Failed trials remain failed even if they align later. Changes
+to the incoming tangent are tried before lengthening the straight. The 5 cm
+margin is now a preferred target; a finely verified repair may use up to 7.5 cm,
+leaving at least 2.5 cm before the unchanged live 10 cm limit. Physical heading,
+boundary and joint checks remain mandatory. This avoids treating tiny misses
+of an optimisation target as proof that no acceptable path exists.
+
+Replays of all three deployed snapshots and their mirrors pass: 14, 4 and 28
+trials respectively, versus 53, 5 and exhaustion at 96. These are geometry-only
+replays: they do not establish live execution or field-boundary feasibility.
+After a successful live entry, the strategy retains dimensionless shape
+parameters for that turn direction. A later turn rebuilds that guess from its
+current pose and width and runs coarse/fine validation; rejected guesses fall
+back to the normal local search. No path, field clearance or model identity is
+cached as approved. The log reports shape reuse, worst admission error and
+planning duration. Rotation must still finish before measuring its final shape;
+this reduces calculation delay rather than driving an unchecked rotating tool.
 
 Version 0.10 addresses the v0.9 stop during hydraulic movement. The live log
 recorded lowering at 0.094 m / 0.71 degrees, then stopped 0.54 seconds later at
@@ -290,7 +317,7 @@ python tools/turnbench/build_ingame_test.py
 ```
 
 These are offline checks, **not an in-game physics or collision certification**.
-The first live run of v0.10 is still needed. Field-density data does not describe every
+The first live run of v0.11 is still needed. Field-density data does not describe every
 hedge/obstacle; CP's normal proximity controller remains active. A stopped job
 does not imply that a different family of turn could never fit that headland.
 

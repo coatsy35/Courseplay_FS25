@@ -18,6 +18,10 @@ E.edgeTolerance = 0.1
 -- Reserve half the live allowance for physical tracking and hydraulic settling.
 -- Candidate acceptance must not aim at the same threshold that stops the rig.
 E.planningEdgeTolerance = E.edgeTolerance / 2
+-- The preferred margin is an optimisation target. Local repair may retain a
+-- finely verified result with at least a quarter of the live allowance spare.
+-- Do not turn a fraction of a millimetre above the target into "no path".
+E.repairEdgeTolerance = E.edgeTolerance * 0.75
 E.reserve = 0.5
 -- Shared with the live lowering gate: align BEFORE stopping, not only at the
 -- later boundary-crossing sample. The tractor brakes towards 0.5 m clearance.
@@ -77,7 +81,7 @@ function E.assess(p, state)
         end
     end
     return error <= E.edgeTolerance and angle <= E.angleTolerance,
-        error, angle, contact, rearError,(minError+maxError)/2
+        error, angle, contact, rearError,(minError+maxError)/2,minError,maxError
 end
 
 local function segmentDistanceSquared(p, a, b)
@@ -165,7 +169,7 @@ end
 -- filter, not GIANTS physics: execution checks live markers again before work.
 -- Explicit resumable state: FS25 removes Lua's coroutine library. Each update
 -- advances a bounded number of samples and retains the tracker between frames.
-function E.newSimulation(p, path, tailStart, step, boundary, collect)
+function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEntry)
     local tracker=p.newTracker and p.newTracker(path)
     local function finish(result)
         if tracker then tracker:delete() end
@@ -174,6 +178,12 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
     local s = {x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi or p.start.t}
     local ix, travelled, entered, alignmentLead = 1, 0, false, 0
     local loweringGatePassed=false
+    -- Local steering correction needs an objective over the SAME interval for
+    -- every candidate. Stopping at its first failed sample changes the measured
+    -- position with the bias, making optimisation chase a moving threshold.
+    -- Continue failed alignment trials through entry, retaining every violation;
+    -- this never bypasses acceptance, articulation or boundary checks.
+    local entryFailure,entryMin,entryMax=nil,math.huge,-math.huge
     local frames = collect and {} or nil
     local maxArticulation, contactError, rearError = 0, math.huge, nil
     local maxDistance = 0
@@ -198,8 +208,8 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
             while goalIx<#path and (path[goalIx].x-s.x)^2+(path[goalIx].z-s.z)^2<p.lookahead^2 do goalIx=goalIx+1 end
             gx,gz=path[goalIx].x,path[goalIx].z
         end
-        local aligned, error, angle, contact, rear,balanced = E.assess(p,s)
-        aligned=aligned and error<=E.planningEdgeTolerance
+        local aligned, error, angle, contact, rear,balanced,minError,maxError = E.assess(p,s)
+        aligned=aligned and error<=(optimiseEntry and E.repairEdgeTolerance or E.planningEdgeTolerance)
         local articulation=math.abs(E.wrap(s.t-s.phi))
         maxArticulation=math.max(maxArticulation,articulation)
         if p.length and articulation > p.maxArticulation then return finish({ok=false,reason='joint angle'}) end
@@ -209,14 +219,19 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
         end
         if ix >= tailStart then
             alignmentLead = aligned and (alignmentLead+step) or 0
+            if optimiseEntry and contact>=E.loweringGateContact then
+                entryMin,entryMax=math.min(entryMin,minError),math.max(entryMax,maxError)
+            end
             if contact>=E.loweringGateContact and not loweringGatePassed then
                 if not aligned then
-                    return finish({ok=false,reason='lowering approach alignment',error=error,rearError=rear,alignmentError=balanced})
+                    if optimiseEntry then entryFailure='lowering approach alignment'
+                    else return finish({ok=false,reason='lowering approach alignment',error=error,rearError=rear,alignmentError=balanced}) end
                 end
                 loweringGatePassed=true
             end
             if loweringGatePassed and not aligned then
-                return finish({ok=false,reason='alignment lost after lowering gate',error=error,rearError=rear,alignmentError=balanced})
+                if optimiseEntry then entryFailure=entryFailure or 'alignment lost after lowering gate'
+                else return finish({ok=false,reason='alignment lost after lowering gate',error=error,rearError=rear,alignmentError=balanced}) end
             end
             if contact >= -0.1 and not entered then
                 entered=true
@@ -224,13 +239,19 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
                 -- Hydraulic travel is handled by stopping BEFORE first contact.
                 -- We still need a short aligned window in which to stop/lower.
                 if not aligned or alignmentLead < p.loweringLead then
-                    return finish({ok=false,reason='entry alignment',error=error,rearError=rear,alignmentError=balanced})
+                    if optimiseEntry then entryFailure=entryFailure or 'entry alignment'
+                    else return finish({ok=false,reason='entry alignment',error=error,rearError=rear,alignmentError=balanced}) end
                 end
             end
-            if entered and not aligned then return finish({ok=false,reason='alignment lost',rearError=rear}) end
+            if entered and not aligned and not optimiseEntry then return finish({ok=false,reason='alignment lost',rearError=rear}) end
             if entered and contact > 4 then
+                if entryFailure then
+                    return finish({ok=false,reason=entryFailure,error=math.max(math.abs(entryMin),math.abs(entryMax)),
+                        rearError=rearError,alignmentError=(entryMin+entryMax)/2})
+                end
                 return finish({ok=true,path=path,tailStart=tailStart,frames=frames,entryError=contactError,
-                    maxArticulation=maxArticulation,distance=travelled,rearError=rearError})
+                    maxArticulation=maxArticulation,distance=travelled,rearError=rearError,
+                    maxEntryError=optimiseEntry and math.max(math.abs(entryMin),math.abs(entryMax)) or nil})
             end
         end
         if ix >= #path then break end
@@ -341,30 +362,48 @@ end
 -- family only progresses towards the row: it cannot send a deployed plough
 -- around another bulb. Tangent lengths vary with the remaining distance,
 -- rather than prescribing a long straight or a model-specific correction.
+function E.approachSide(p)
+    return E.wrap(p.start.t-p.goal.t)<0 and -1 or 1
+end
+
 function E.newApproachSearch(p)
     local factors={0.1,0.2,0.3,0.4,0.5,0.6}
-    local straights={2,0,4,8}
+    local straights={4,2,0,8}
     local ai,bi,si,attempts=1,1,1,0
-    local simulation,path,verified
+    local simulation,path,verified,fineGroup
     local bias,stage,iterations=0,'zero',0
-    local lo,hi,loError,hiError,zeroError,biasLimit
+    local lo,hi,c,d,fc,fd,biasLimit
+    local golden=(math.sqrt(5)-1)/2
+    -- A previous completed turn supplies a starting guess, never a reusable
+    -- approved path. Rebuild it from the new pose/width and validate it afresh.
+    local hint=p.approachHint
+    local usingHint=hint and hint.factorA and hint.factorB and hint.straightRatio and hint.biasRatio
+        and hint.factorA>=0.1 and hint.factorA<=0.6 and hint.factorB>=0.1 and hint.factorB<=0.6
+        and hint.straightRatio>=0 and hint.straightRatio*p.width<=12 and math.abs(hint.biasRatio)<=0.5
+    if usingHint then bias=hint.biasRatio*p.width*E.approachSide(p) end
     local bestError=math.huge
+    local bestVerified
     local lastReason='no forward approach'
     local function advance()
-        -- Interleave remaining straight lengths so a bounded search samples
-        -- each one instead of spending its whole budget on the first length.
-        si=si+1
-        if si>#straights then si=1;bi=bi+1 end
-        if bi>#factors then bi=1;ai=ai+1 end
+        -- Vary the pull-in tangent before extending the straight: changing the
+        -- steering lead can settle a long trailer without a longer run-in.
+        bi=bi+1
+        if bi>#factors then bi=1;si=si+1 end
+        if si>#straights then si=1;ai=ai+1 end
         bias,stage,iterations=0,'zero',0
+        fineGroup=false
     end
     local function makeApproach()
-        local finish=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.front-straights[si])
+        local straight=usingHint and hint.straightRatio*p.width or straights[si]
+        local factorA=usingHint and hint.factorA or factors[ai]
+        local factorB=usingHint and hint.factorB or factors[bi]
+        local finish=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.front-straight)
         local _,remaining=E.localPoint(finish,{x=p.start.x,z=p.start.z,t=p.goal.t})
         if remaining<=0 or math.abs(E.wrap(p.start.t-p.goal.t))>=math.pi/2 then return nil end
         biasLimit=math.min(p.width/2,remaining*remaining/(24*p.radius),3)
-        local a=E.point(p.start.x,p.start.z,p.start.t,0,remaining*factors[ai])
-        local b=E.point(finish.x,finish.z,p.goal.t,0,-remaining*factors[bi])
+        if math.abs(bias)>biasLimit then return nil end
+        local a=E.point(p.start.x,p.start.z,p.start.t,0,remaining*factorA)
+        local b=E.point(finish.x,finish.z,p.goal.t,0,-remaining*factorB)
         local points={}
         local steps=math.max(2,math.ceil(remaining*8))
         for i=0,steps do
@@ -389,7 +428,7 @@ function E.newApproachSearch(p)
             end
             points[#points+1]=q
         end
-        for d=0.5,straights[si]+math.max(12,math.abs(p.slope)*p.width+5),0.5 do
+        for d=0.5,straight+math.max(12,math.abs(p.slope)*p.width+5),0.5 do
             points[#points+1]=E.point(finish.x,finish.z,p.goal.t,0,d)
         end
         return points
@@ -401,60 +440,65 @@ function E.newApproachSearch(p)
         -- Recovery at row entry must remain bounded; an exhausted search must
         -- not leave the tractor parked for minutes or launch another full loop.
         if ai>#factors or (attempts>=96 and not simulation) then
+            if bestVerified then bestVerified.attempts=attempts;return bestVerified end
             return {ok=false,reason='local approach: '..lastReason,attempts=attempts,bestError=bestError}
         end
         local result
         if not simulation then
             attempts=attempts+1
             path=makeApproach()
-            if path then simulation=E.newSimulation(p,path,2,0.15,false,false)
+            if path then simulation=E.newSimulation(p,path,2,fineGroup and 0.075 or 0.15,fineGroup or false,fineGroup or false,true)
             else result={ok=false,reason='local curve exceeds forward approach bounds'} end
-            verified=false
+            verified=fineGroup or false
         end
         result=result or simulation:update(budget)
         if not result then return nil end
         if result.ok and not verified then
-            simulation=E.newSimulation(p,path,2,0.075,true,true)
-            verified=true;return nil
+            simulation=E.newSimulation(p,path,2,0.075,true,true,true)
+            verified,fineGroup=true,true;return nil
         end
         simulation=nil
         if result.ok then
-            result.attempts,result.straight,result.bend=attempts,straights[si],0
+            result.attempts,result.straight,result.bend=attempts,usingHint and hint.straightRatio*p.width or straights[si],0
             result.radius,result.extension,result.bias=p.radius,0,bias
             result.repairedApproach=true
-            return result
+            result.factorA,result.factorB=usingHint and hint.factorA or factors[ai],usingHint and hint.factorB or factors[bi]
+            result.usedHint=usingHint and true or false
+            if not bestVerified or result.maxEntryError<bestVerified.maxEntryError then bestVerified=result end
+            if usingHint or result.maxEntryError<=E.planningEdgeTolerance then return result end
         end
-        lastReason=result.reason
-        bestError=math.min(bestError,result.error or math.huge)
-        -- Balance the most negative/positive working-edge displacement, rather
-        -- than forcing just one rear corner onto its line. That can leave the
-        -- front outside tolerance until too late to stop before work entry.
-        -- Solve this signed error rather than trying
-        -- hundreds of nearly identical cubic curves. Fine verification still
-        -- requires every working edge and the full footprint to pass.
-        local err=result.alignmentError or result.rearError
+        if usingHint then
+            usingHint=false;bias,stage,iterations,fineGroup=0,'zero',0,false
+            return nil
+        end
+        lastReason=result.reason or 'preferred alignment margin not reached'
+        bestError=math.min(bestError,result.maxEntryError or result.error or math.huge)
+        -- Minimise the worst edge error over the whole admission interval.
+        -- A zero of signed average error need not minimise the worst corner:
+        -- front/rear extrema respond differently to a steering lead.
+        local objective=result.maxEntryError or result.error or math.huge
         if stage=='zero' then
             if not path then advance();return nil end
-            zeroError=err
             lo,hi=-biasLimit,biasLimit
-            stage,bias='left',lo
-        elseif stage=='left' then
-            loError=err;stage,bias='right',hi
-        elseif stage=='right' then
-            hiError=err
-            -- One extreme can exceed the forward-only shape bounds. Keep the
-            -- valid zero-bias sample as a bracket endpoint on the other side.
-            if not loError and zeroError then lo,loError=0,zeroError end
-            if not hiError and zeroError then hi,hiError=0,zeroError end
-            if loError and hiError and loError*hiError<0 then
-                stage='root';bias=lo-loError*(hi-lo)/(hiError-loError)
-            else advance() end
+            c,d=hi-golden*(hi-lo),lo+golden*(hi-lo)
+            fc,fd=nil,nil
+            stage,bias='c',c
         else
+            if stage=='c' then fc=objective else fd=objective end
+            if not fd then stage,bias='d',d;return nil end
             iterations=iterations+1
-            if not err or iterations>=6 then advance()
+            if iterations>=12 or hi-lo<0.001 then
+                if bestVerified then bestVerified.attempts=attempts;return bestVerified end
+                advance();return nil
+            end
+            if fc<fd then
+                hi,d,fd=d,c,fc
+                c=hi-golden*(hi-lo)
+                stage,bias='c',c
             else
-                if loError*err<=0 then hi,hiError=bias,err else lo,loError=bias,err end
-                bias=lo-loError*(hi-lo)/(hiError-loError)
+                lo,c,fc=c,d,fd
+                d=lo+golden*(hi-lo)
+                stage,bias='d',d
             end
         end
         return nil

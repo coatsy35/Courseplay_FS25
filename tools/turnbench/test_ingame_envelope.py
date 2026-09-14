@@ -356,7 +356,7 @@ for _,mirror in ipairs({1,-1}) do
     assert(result.ok and result.repairedApproach,result.reason)
     -- The reserved tracking margin needs more trials than v0.8's first
     -- threshold-grazing candidate, but must remain a bounded local correction.
-    assert(result.attempts<32 and result.entryError<=E.planningEdgeTolerance)
+    assert(result.attempts<32 and result.maxEntryError<=E.repairEdgeTolerance)
     assert(math.abs(result.bias)>0.1 and result.distance<40)
     for i=2,#result.path do
         local a,b=result.path[i-1],result.path[i]
@@ -390,11 +390,61 @@ for _,mirror in ipairs({1,-1}) do
     for _,s in ipairs(result.frames) do
         local _,error,_,contact=E.assess(p,s)
         if contact>=E.loweringGateContact then
-            assert(error<=E.planningEdgeTolerance)
+            assert(error<=E.repairEdgeTolerance)
             checked=checked+1
         end
     end
     assert(checked>10)
+end
+''')
+
+    def test_three_live_v10_turns_and_revalidated_shape_hint(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+-- The two completed turns and third failure from 14 September, 23:46-23:51.
+-- Recorded geometry, not a reconstruction of the physical field or tyres.
+local rows={
+    {start={x=-229.719,z=-33.374,t=158.642,phi=-176.134},goal={x=-229.703,z=-50.040,t=-180},
+        hx=-0.021,hz=-1.686,length=11.12,front=-3.86,slope=-41.5,left=3.276,right=-2.276,lz=-2.170,rz=-2.474,bz=-16.154},
+    {start={x=-234.584,z=-160.779,t=20.491,phi=6.450},goal={x=-235.315,z=-144.370,t=0},
+        hx=0.023,hz=-1.644,length=11.09,front=-3.79,slope=17.3,left=-3.262,right=2.287,lz=-2.144,rz=-2.464,bz=-16.114},
+    {start={x=-240.616,z=-24.312,t=163.938,phi=-177.927},goal={x=-240.912,z=-40.060,t=-180},
+        hx=-0.021,hz=-1.689,length=11.12,front=-3.86,slope=-41.7,left=3.277,right=-2.275,lz=-2.169,rz=-2.473,bz=-16.153}}
+local function run(p)
+    local search=E.newApproachSearch(p);local r
+    repeat r=search:update(256) until r
+    return r
+end
+for _,mirror in ipairs({1,-1}) do
+    for _,row in ipairs(rows) do
+        local p=envelopeFixture(5.6,row.length,-row.hz,-row.front,18,row.slope,-1,45)
+        p.start={x=row.start.x*mirror,z=row.start.z,t=math.rad(row.start.t)*mirror,phi=math.rad(row.start.phi)*mirror}
+        p.goal={x=row.goal.x*mirror,z=row.goal.z,t=math.rad(row.goal.t)*mirror}
+        p.hitchX=row.hx*mirror;p.hitchZ=row.hz;p.front=row.front;p.slope=p.slope*mirror
+        p.lookahead=2.695;p.trackingRadius=5.389
+        p.work={{x=row.left*mirror,z=row.lz,towed=true},{x=row.right*mirror,z=row.rz,towed=true},
+            {x=row.left*mirror,z=row.bz,towed=true,rear=true},{x=row.right*mirror,z=row.bz,towed=true,rear=true}}
+        p.workCentreX=(row.left+row.right)/2*mirror+p.hitchX;p.footprint=p.work
+        p.contains=function() return true end
+        local r=run(p)
+        assert(r.ok and r.attempts<=32,r.reason)
+        assert(r.maxEntryError<=E.repairEdgeTolerance)
+        -- The retained worst error includes every fine admission sample.
+        for _,s in ipairs(r.frames) do
+            local aligned,error,_,contact=E.assess(p,s)
+            if contact>=E.loweringGateContact then assert(aligned and error<=r.maxEntryError+1e-9) end
+        end
+        p.approachHint={factorA=r.factorA,factorB=r.factorB,straightRatio=r.straight/p.width,
+            biasRatio=r.bias/(p.width*E.approachSide(p))}
+        local cached=run(p)
+        assert(cached.ok and cached.usedHint and cached.attempts==1)
+        -- A cached shape never bypasses a changed boundary.
+        p.contains=function() return false end
+        assert(not run(p).ok)
+        p.contains=function() return true end
+        p.approachHint.straightRatio=10
+        assert(run(p).ok) -- invalid hints are ignored, not treated as geometry
+    end
 end
 ''')
 
