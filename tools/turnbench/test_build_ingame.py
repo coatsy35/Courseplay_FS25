@@ -1,4 +1,4 @@
-"""Package identity, opt-in isolation and Lua 5.1 syntax for the test build."""
+"""Package identity and baseline Lua 5.1 syntax, not FS25/Luau VM validation."""
 from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET

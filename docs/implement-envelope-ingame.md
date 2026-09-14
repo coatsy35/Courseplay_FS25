@@ -10,6 +10,21 @@ The earlier unnumbered builds used 8.1.0.3. This revision fixes their live
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
 
+## Runtime compatibility
+
+FS25 embeds Luau, not standard Lua. The [official Luau repository](https://github.com/luau-lang/luau)
+lists Farming Simulator 2025 among its users. Luau derives from Lua 5.1 and has
+a gradual, optional type system. Luau itself supports coroutines; their absence
+in our live FS25 session is a restriction of GIANTS' embedded environment.
+
+The bench currently executes through Lupa/Lua 5.2, with a separate Lua 5.1
+syntax check. These validate numerical behaviour and baseline syntax, not the
+Luau VM or GIANTS API availability. Removing `coroutine` from those tests covers
+the observed failure but does not reproduce every FS25 restriction. Check
+engine calls against [GIANTS' FS25 API](https://gdn.giants-software.com/documentation_scripting_fs25.php)
+and validate execution in game. Standalone Luau validation remains to be added;
+it would still not replace the GIANTS runtime check.
+
 ## Architecture
 
 The shared Dubins solver has **not** been changed. The implementation has three
