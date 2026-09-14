@@ -23,6 +23,30 @@ function G.trailerDirectionNode(object)
     return object.steeringAxleNode,'steering axle node'
 end
 
+-- A three-point-mounted drawbar can lock yaw at the tractor and turn at an
+-- internal implement joint instead. Only use that declared joint when it
+-- connects directly to the input's tractor-fixed component; otherwise the
+-- single passive-trailer model must retain its ordinary input pivot.
+function G.trailerPivotNode(object,input)
+    local declared
+    if object.getAITurnRadiusLimitation then local _;_,declared=object:getAITurnRadiusLimitation() end
+    local scale=input.upperRotLimitScale and input.upperRotLimitScale[2]
+    if declared and declared~=0 and declared~=input.node and scale==0 and input.rootNode then
+        for _,joint in ipairs(object.componentJoints or {}) do
+            if joint.jointNode==declared then
+                for _,index in ipairs(joint.componentIndices or {}) do
+                    local component=object.components and object.components[index]
+                    if component and component.node==input.rootNode then
+                        local limit=joint.rotLimit and joint.rotLimit[2]
+                        return declared,'internal drawbar joint',limit,declared
+                    end
+                end
+            end
+        end
+    end
+    return input.node,'input coupling',nil,declared
+end
+
 -- The numerical model is horizontal. Project WORLD positions into a yaw-only
 -- frame: localToLocal includes pitch/roll, so a raised or flipped plough would
 -- otherwise acquire different lengths and mirrored marker offsets.
@@ -165,23 +189,22 @@ function G.capture(turn)
     if trailer then
         local input=trailer:getActiveInputAttacherJoint()
         local direction,source=G.trailerDirectionNode(trailer)
-        local hx,hz=G.planarPoint(input.node,direction)
+        local pivot,pivotSource,pivotLimit,declared=G.trailerPivotNode(trailer,input)
+        local hx,hz=G.planarPoint(pivot,direction)
         hitchLocal={x=hx,z=hz}
-        p.hitchX,p.hitchZ=G.planarPoint(input.node,node)
+        p.inputHitchX,p.inputHitchZ=G.planarPoint(input.node,node)
+        p.hitchX,p.hitchZ=G.planarPoint(pivot,node)
+        p.pivotSource=pivotSource
+        if finite(pivotLimit) and math.abs(pivotLimit)>0 then
+            p.maxArticulation=math.min(p.maxArticulation,math.abs(pivotLimit))
+        end
         p.length=hz
         p.axleOffsetX=hx
         p.start.phi=G.pose(direction).t
         p.trailerNode=direction
         p.directionSource=source
         p.directionOffset=trailer.steeringAxleNode and E.wrap(p.start.phi-G.pose(trailer.steeringAxleNode).t) or 0
-        -- Record a separately declared internal pivot as well. It lets live
-        -- traces distinguish reference-frame errors from a drawbar model that
-        -- needs an additional body; do not silently treat that joint as a
-        -- tractor-fixed coupling without checking its constraints.
-        if trailer.getAITurnRadiusLimitation then
-            local _,pivot=trailer:getAITurnRadiusLimitation()
-            if pivot and pivot~=0 then p.declaredPivotX,p.declaredPivotZ=G.planarPoint(pivot,node) end
-        end
+        if declared and declared~=0 then p.declaredPivotX,p.declaredPivotZ=G.planarPoint(declared,node) end
         -- A lateral axle offset is valid for a passive trailer. Its yaw rate
         -- depends on the longitudinal hitch-to-axle lever hz; hx affects the
         -- axle position/forward speed and is retained in every marker offset.

@@ -16,6 +16,9 @@ local E = EnvelopeTurnPlanner
 E.angleTolerance = math.rad(2)
 E.edgeTolerance = 0.1
 E.reserve = 0.5
+-- Shared with the live lowering gate: align BEFORE stopping, not only at the
+-- later boundary-crossing sample. The tractor brakes towards 0.5 m clearance.
+E.loweringGateContact = -0.65
 
 function E.wrap(a)
     return math.atan2(math.sin(a), math.cos(a))
@@ -167,6 +170,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
     end
     local s = {x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi or p.start.t}
     local ix, travelled, entered, alignmentLead = 1, 0, false, 0
+    local loweringGatePassed=false
     local frames = collect and {} or nil
     local maxArticulation, contactError, rearError = 0, math.huge, nil
     local maxDistance = 0
@@ -201,6 +205,15 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect)
         end
         if ix >= tailStart then
             alignmentLead = aligned and (alignmentLead+step) or 0
+            if contact>=E.loweringGateContact and not loweringGatePassed then
+                if not aligned then
+                    return finish({ok=false,reason='lowering approach alignment',error=error,rearError=rear,alignmentError=balanced})
+                end
+                loweringGatePassed=true
+            end
+            if loweringGatePassed and not aligned then
+                return finish({ok=false,reason='alignment lost after lowering gate',error=error,rearError=rear,alignmentError=balanced})
+            end
             if contact >= -0.1 and not entered then
                 entered=true
                 contactError,rearError=error,rear

@@ -86,6 +86,29 @@ function makeEnvelopeLiveFixture(p)
     return f
 end
 
+-- A generic tractor-fixed front yoke with a separate internal yaw joint.
+-- Physics below still use p.hitchX/Z as the TRUE pivot; the visible input
+-- coupling is deliberately elsewhere so the wrong model cannot pass by reuse.
+function addEnvelopeInternalPivotFixture(f,p,inputSetback)
+    local pivot=f.object.input.node
+    local coupling,frontComponent={},{}
+    f.object.input.node=coupling
+    f.object.input.rootNode=frontComponent
+    f.object.input.upperRotLimitScale={1,0,1}
+    f.object.components={{node=f.object.rootNode},{node=frontComponent}}
+    f.object.componentJoints={{jointNode=pivot,componentIndices={1,2},rotLimit={0,math.rad(80),0}}}
+    f.object.getAITurnRadiusLimitation=function() return nil,pivot end
+    local original=f.setPose
+    f.setPose=function(self,state)
+        original(self,state)
+        local q=EnvelopeTurnPlanner.point(state.x,state.z,state.t,p.hitchX,-inputSetback)
+        coupling.x,coupling.z,coupling.t=q.x,q.z,state.t
+        frontComponent.x,frontComponent.z,frontComponent.t=q.x,q.z,state.t
+    end
+    f:setPose(p.start)
+    return pivot,coupling
+end
+
 -- Drive production PPC + production turn state machine with finite acceleration
 -- and hydraulic delay. Only GIANTS' vehicle physics are replaced by a planar
 -- bicycle/passive-trailer update. This catches hand-off and early-stop bugs that

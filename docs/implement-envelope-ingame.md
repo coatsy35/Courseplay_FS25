@@ -3,12 +3,31 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.8**, packaged mod version **8.1.0.108**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.8` records identify it.
+Current test: **v0.9**, packaged mod version **8.1.0.109**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.9` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.9 follows the v0.8 live attempt: the local correction was found in
+five trials, but lowering stopped at 0.154 m lateral error / 0.63 degrees.
+The 0.1 m lateral limit has not been relaxed. A yaw-locked input coupling can
+carry a front drawbar component whose actual yaw pivot is inside the implement.
+The geometry adapter now uses GIANTS' declared turning pivot when its component
+joint connects directly to that tractor-fixed input component. Hitch position,
+axle lever, working markers and footprint all use this same pivot; the exposed
+internal yaw limit also constrains articulation. Ordinary towing hitches retain
+their input pivot. No implement names, measured PW dimensions or fixed angular
+corrections are used to select this behaviour.
+
+Prediction now checks alignment at the same pre-boundary lowering gate as live
+execution, and retains it through entry. A candidate that only straightens
+after that gate is rejected before driving. Generic fixtures independently
+place the coupling and physical pivot, verify invariant marker geometry through
+articulation, and complete entry with 5.6 m, 6 m and 12 m tools. All 33 integration
+tests and three packaging/syntax checks pass. These are planar offline tests;
+the remaining live entry error is not yet confirmed resolved.
 
 Version 0.8 addresses the next v0.7 live failure: after rotation, the tractor
 stayed stationary for 28 seconds while the local cubic family exhausted its
@@ -250,12 +269,13 @@ python tools/turnbench/build_ingame_test.py
 ```
 
 These are offline checks, **not an in-game physics or collision certification**.
-The first live run of v0.8 is still needed. Field-density data does not describe every
+The first live run of v0.9 is still needed. Field-density data does not describe every
 hedge/obstacle; CP's normal proximity controller remains active. A stopped job
 does not imply that a different family of turn could never fit that headland.
 
 Supported prediction is currently a rigid tractor with direct mounted implements
-or one passive rear trailer. Articulated tractors/implements, attachment chains,
+or one passive rear trailer, including a yaw-locked front drawbar with one
+directly connected internal yaw pivot. Articulated tractors, attachment chains,
 multiple wheeled tools and actively steered trailers retain normal CP, with a
 log explanation. This integration adds forward steering-led turns; it does not
 yet integrate the bench's experimental reversing K candidates.

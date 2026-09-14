@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.8'
+EnvelopeCourseTurn.TEST_VERSION = '0.9'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -127,8 +127,8 @@ function EnvelopeCourseTurn:logGeometry(p)
         self:log('trailer reference: %s, heading difference from steering axle %.3f degrees',p.directionSource,math.deg(p.directionOffset))
     end
     if p.declaredPivotX then
-        self:log('declared turn pivot relative to tractor: %.3f/%.3f; input coupling %.3f/%.3f',
-            p.declaredPivotX,p.declaredPivotZ,p.hitchX,p.hitchZ)
+        self:log('selected pivot: %s, %.3f/%.3f; declared %.3f/%.3f; input coupling %.3f/%.3f',
+            p.pivotSource,p.hitchX,p.hitchZ,p.declaredPivotX,p.declaredPivotZ,p.inputHitchX,p.inputHitchZ)
     end
     self:log('geometry: radius %.2f, width %.2f, hitch %.2f/%.2f, axle %.2f (lateral %.2f), front %.2f, pike %.1f degrees, headland seed %.1f',
         p.radius,p.width,p.hitchX,p.hitchZ,p.length or 0,p.axleOffsetX or 0,p.front,math.deg(math.atan(p.slope)),p.headland)
@@ -285,7 +285,7 @@ function EnvelopeCourseTurn:endTurn(dt)
             self:stopWithReason('working edge passed entry before lowering was requested')
             return false
         end
-        if contact>-0.65 then
+        if contact>EnvelopeTurnPlanner.loweringGateContact then
             if self.needsWorkingGeometry then
                 self:stopWithReason('entry reached before plough working position was validated')
                 return false

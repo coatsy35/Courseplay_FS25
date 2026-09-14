@@ -375,6 +375,39 @@ assert(result and not result.ok and result.attempts<=96)
 assert(not p.activeTracker)
 ''')
 
+    def test_internal_pivot_keeps_marker_geometry_constant_through_articulation(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,2.3,4.6,18.3,0,1,50.4)
+local f=makeEnvelopeLiveFixture(p)
+local pivot,input=addEnvelopeInternalPivotFixture(f,p,1.3)
+for _,heading in ipairs({-0.4,0,0.4}) do
+    f:setPose({x=0,z=20.7,t=heading,phi=-heading})
+    local q=assert(EnvelopeTurnGeometry.capture(f.turn))
+    assert(q.pivotSource=='internal drawbar joint')
+    assert(math.abs(q.hitchZ+2.3)<1e-8 and math.abs(q.inputHitchZ+1.3)<1e-8)
+    assert(math.abs(q.length-11.1)<1e-8 and math.abs(q.maxArticulation-math.rad(80))<1e-8)
+    for i,m in ipairs(q.work) do
+        assert(math.abs(m.x-p.work[i].x)<1e-8 and math.abs(m.z-p.work[i].z)<1e-8)
+    end
+end
+-- A declared pivot alone is insufficient: a yawing input or disconnected
+-- component must not be silently flattened into this one-joint model.
+f.object.input.upperRotLimitScale[2]=1
+assert(EnvelopeTurnGeometry.trailerPivotNode(f.object,f.object.input)==input)
+f.object.input.upperRotLimitScale[2]=0
+f.object.input.rootNode={}
+assert(EnvelopeTurnGeometry.trailerPivotNode(f.object,f.object.input)==input)
+''')
+
+    def test_generic_internal_pivot_runtime_entry(self):
+        self.lua.execute('''
+for _,width in ipairs({5.6,6,12}) do
+    local p=envelopeFixture(width,9,2.3,4.6,14,25,width==5.6 and 1 or 7,72)
+    p.configureFixture=function(f) addEnvelopeInternalPivotFixture(f,p,1.3) end
+    driveEnvelopeLiveFixture(p)
+end
+''')
+
     def test_rotating_tool_direction_frame_controls_geometry_and_entry(self):
         self.lua.execute('''
 local E,G=EnvelopeTurnPlanner,EnvelopeTurnGeometry
