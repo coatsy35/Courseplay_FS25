@@ -43,15 +43,7 @@ function envelopeFixture(width,length,hitch,front,back,angle,rows,headland)
     end
     p.contains=function(x,z) return z-slope*x <= headland*math.sqrt(1+slope*slope)-0.5 and
         x>=-200 and x<=200 and z>=-450 end
-    p.dubins=function(start,goal,radius)
-        local path=PathfinderUtil.findAnalyticPathFromStartToGoal(PathfinderUtil.dubinsSolver,
-            State3D(start.x,-start.z,CpMathUtil.angleFromGame(start.t)),
-            State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t)),radius)
-        if not path then return nil end
-        local points={}
-        for _,w in ipairs(path) do points[#points+1]={x=w.x,z=-w.y} end
-        return points
-    end
+    p.dubins=EnvelopeTurnGeometry.analyticPath
     p.newTracker=function(path) return EnvelopeTurnGeometry.tracker(p,path) end
     return p
 end
@@ -75,6 +67,175 @@ end
                     p=self.lua.globals().envelopeFixture(width,9,2,11,12,angle,7,72 if width==12 else 54)
                     r=self.lua.globals().EnvelopeTurnPlanner.plan(p)
                     self.assertTrue(r['ok'],(r['reason'],r['attempts']))
+
+    def test_turn_hint_rebuilds_and_checks_actual_geometry(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,1,50.4)
+local first=E.plan(p)
+assert(first.ok)
+p.turnHint=E.turnHint(p,first)
+local reused=E.plan(p)
+assert(reused.ok and reused.usedTurnHint and reused.attempts==1)
+-- A changed boundary must invalidate even a previously successful shape.
+p.contains=function() return false end
+assert(not E.plan(p).ok)
+''')
+
+    def test_worked_side_bulb_and_mirror_reduce_unworked_excursion(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+for _,mirror in ipairs({1,-1}) do
+    local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,1,50.4)
+    if mirror==-1 then
+        p.goal.x=-p.goal.x;p.slope=-p.slope
+        p.contains=function(x,z) return z-p.slope*x<=50.4*math.sqrt(1+p.slope*p.slope)-0.5 end
+    end
+    local shortest=E.plan(p)
+    assert(shortest.ok)
+    p.workedSide=-mirror
+    local preferred=E.plan(p)
+    assert(preferred.ok and preferred.preferWorked)
+    local function extents(r)
+        local low,high=0,0
+        for i=1,r.tailStart do
+            local x=r.path[i].x*mirror
+            low,high=math.min(low,x),math.max(high,x)
+        end
+        return low,high
+    end
+    local oldLow,oldHigh=extents(shortest)
+    local newLow,newHigh=extents(preferred)
+    assert(newLow<oldLow-3 and newHigh<oldHigh-3)
+    assert(preferred.entryError<=E.planningEdgeTolerance)
+    for _,s in ipairs(preferred.frames) do assert(E.checkFootprint(p,s)) end
+    p.turnHint=E.turnHint(p,preferred)
+    local reused=E.plan(p)
+    assert(reused.ok and reused.usedTurnHint and reused.preferWorked and reused.attempts==1)
+    -- Losing row-side information must invalidate a side-specific hint safely.
+    p.workedSide=nil
+    assert(not E.plan(p).usedTurnHint)
+end
+''')
+
+    def test_worked_side_comes_from_unambiguous_cp_row_attributes(self):
+        self.lua.execute('''
+local G=EnvelopeTurnGeometry
+local f=makeEnvelopeLiveFixture(envelopeFixture(6,9,2,11,12,25,1,54))
+local attributes={leftSideWorked=true,rightSideWorked=false}
+f.turn.fieldWorkCourse={getWaypoint=function(_,ix)
+    assert(ix==f.context.turnStartWpIx)
+    return {attributes=attributes}
+end}
+assert(G.capture(f.turn).workedSide==-1)
+attributes.leftSideWorked=false;attributes.rightSideWorked=true
+assert(G.capture(f.turn).workedSide==1)
+attributes.leftSideWorked=true
+assert(G.capture(f.turn).workedSide==nil)
+attributes.leftSideWorked=nil
+assert(G.capture(f.turn).workedSide==nil)
+''')
+
+    def test_worked_side_preference_falls_back_when_boundary_blocks_it(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,1,50.4)
+p.workedSide=-1
+local contains=p.contains
+p.contains=function(x,z) return x>=-7 and contains(x,z) end
+local r=E.plan(p)
+assert(r.ok and not r.preferWorked,r.reason)
+for _,s in ipairs(r.frames) do assert(E.checkFootprint(p,s)) end
+''')
+
+    def test_worked_side_with_drills_skipped_rows_and_mounted_tool(self):
+        for width, length, rows in [(6, 9, 1), (12, 9, 7), (6, 0, 1)]:
+            with self.subTest(width=width, length=length, rows=rows):
+                p = self.lua.globals().envelopeFixture(width, length, 2, 11, 12, 25, rows, 72)
+                p['workedSide'] = -1
+                r = self.lua.globals().EnvelopeTurnPlanner.plan(p)
+                self.assertTrue(r['ok'], (r['reason'], r['attempts']))
+                self.assertLessEqual(r['entryError'], .05)
+
+    def test_prepare_on_straight_does_not_control_vehicle(self):
+        self.lua.execute('''
+local p=envelopeFixture(6,9,2,11,12,25,1,54)
+local f=makeEnvelopeLiveFixture(p)
+f:setPose({x=0,z=-25,t=0,phi=0})
+f.vehicle.speed=8
+f.context.getDistanceToFieldEdge=function()
+    return p.headland*math.sqrt(1+p.slope*p.slope)-f.vehicle.rootNode.z
+end
+f.turn.workEndHandler=WorkEndHandler(f.vehicle,f.strategy)
+local updates=0
+repeat
+    f.turn:finishRow(16)
+    updates=updates+1
+    assert(not f.vehicle.stopped and f.object.lowerCount==0 and f.strategy.raised==0)
+    assert(not f.turn.result and not f.turn.geometry and not f.turn.planner)
+until f.turn.preparationDone or updates>5000
+assert(f.turn.preparedTurnHint and updates>1)
+assert(not f.turn.preparationGeometry and not f.turn.preparationPlanner)
+-- Rebuild at the actual stopping position, rather than installing the path
+-- predicted while the tractor was still finishing the row.
+f:setPose(p.start)
+local actual=assert(EnvelopeTurnGeometry.capture(f.turn))
+actual.turnHint=f.turn.preparedTurnHint
+local ready=EnvelopeTurnPlanner.plan(actual)
+assert(ready.ok and ready.usedTurnHint)
+-- A separate pending preparation releases its private tracker on cancellation.
+f.turn.preparationDone=false
+f.turn:updatePreparation()
+local q=f.turn.preparationGeometry
+assert(q and q.activeTracker)
+f.turn:release()
+assert(not q.activeTracker and not f.turn.preparationPlanner)
+''')
+
+    def test_speculative_raised_model_matches_equipment_and_mirrors(self):
+        self.lua.execute('''
+local E,G=EnvelopeTurnPlanner,EnvelopeTurnGeometry
+local f=makeEnvelopeLiveFixture(envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,1,50.4))
+local p=assert(G.capture(f.turn))
+p.start.phi=p.start.t+0.15
+local model=G.turnModel(p)
+local q=assert(G.capture(f.turn))
+q.goal.x=-q.goal.x
+assert(G.applyTurnModel(q,model))
+assert(math.abs(E.wrap(q.start.phi-q.start.t)+0.15)<1e-9)
+assert(q.work[1].x==-model.work[1].x and q.work[1]~=model.work[1])
+q.work[1].x=99
+assert(model.work[1].x~=99)
+q=assert(G.capture(f.turn));q.width=q.width+1
+assert(not G.applyTurnModel(q,model))
+q=assert(G.capture(f.turn));q.objects[1].object={}
+assert(not G.applyTurnModel(q,model))
+''')
+
+    def test_radius_between_joint_and_sloping_boundary_limits(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+-- Centred geometry from the sixth v0.11 turn. The synthetic sloping boundary
+-- follows the map edge beside that turn; it is not a GIANTS density replay.
+local p=envelopeFixture(5.6,11.31,1.674,3.47,17.144,18.3,1,45.9)
+p.start={x=-252.118,z=-167.873,t=math.rad(179.936),phi=math.rad(170.705)}
+p.goal={x=-257.716,z=-151.420,t=0}
+p.hitchX=-0.033;p.hitchZ=-1.674;p.lookahead=2.695;p.trackingRadius=5.389
+p.work={{x=0.223,z=-2.587,towed=true},{x=-0.091,z=-1.794,towed=true},
+    {x=0.223,z=-15.470,towed=true,rear=true},{x=-0.091,z=-15.470,towed=true,rear=true}}
+p.workCentreX=(0.223-0.091)/2+p.hitchX;p.footprint={}
+for _,m in ipairs(p.work) do p.footprint[#p.footprint+1]=m end
+for _,x in ipairs({-1.9,1.9}) do for _,z in ipairs({-2,4}) do p.footprint[#p.footprint+1]={x=x,z=z} end end
+p.contains=function(x,z) return z>0.236*(x+250.191)-196.5984+0.7 end
+local r=E.plan(p)
+assert(r.ok,r.reason)
+assert(r.radius>p.radius*1.1 and r.radius<p.radius*1.25)
+assert(r.maxArticulation<=p.maxArticulation)
+for _,s in ipairs(r.frames) do assert(E.checkFootprint(p,s)) end
+p.turnHint=E.turnHint(p,r)
+local nextTurn=E.plan(p)
+assert(nextTurn.ok and nextTurn.attempts==1 and nextTurn.usedTurnHint)
+''')
 
     def test_boundary_rejects_insufficient_room(self):
         p=self.lua.globals().envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,15)

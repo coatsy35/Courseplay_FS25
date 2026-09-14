@@ -172,6 +172,40 @@ local function addRectangle(p,reference,towed,hitchLocal,xMin,xMax,zMin,zMax)
     end
 end
 
+-- CP's generated row attributes describe the PLANNED worked side. They are
+-- not a soil-state sensor (starting halfway through a course can disagree).
+-- Use only an unambiguous side as a preference, never as clearance evidence.
+function G.workedSide(turn)
+    local course=turn.fieldWorkCourse
+    local ix=turn.turnContext.turnStartWpIx
+    local wp=course and course:getWaypoint(ix)
+    local a=wp and wp.attributes
+    if not a then return nil end
+    if a.leftSideWorked==true and a.rightSideWorked==false then return -1 end
+    if a.rightSideWorked==true and a.leftSideWorked==false then return 1 end
+    return nil
+end
+
+-- Restrict only this experimental connection, leaving CP's shared solver
+-- untouched. LRL/RLR place the alternative bulb on opposite sides; the full
+-- trailer simulation still decides whether that connection is acceptable.
+function G.analyticPath(start,goal,radius,loopSide)
+    local solver=PathfinderUtil.dubinsSolver
+    if loopSide then
+        G.loopSolvers=G.loopSolvers or {
+            [-1]=DubinsSolver({DubinsSolver.PathType.LRL}),
+            [1]=DubinsSolver({DubinsSolver.PathType.RLR})}
+        solver=G.loopSolvers[loopSide]
+    end
+    local s=State3D(start.x,-start.z,CpMathUtil.angleFromGame(start.t))
+    local g=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
+    local solution=solver:solve(s,g,radius)
+    if not solution then return nil end
+    local points={}
+    for _,wp in ipairs(solution:getWaypoints(s,radius)) do points[#points+1]={x=wp.x,z=-wp.y} end
+    return points
+end
+
 function G.capture(turn)
     local vehicle,context=turn.vehicle,turn.turnContext
     local supported,trailer=G.supported(vehicle)
@@ -339,17 +373,37 @@ function G.capture(turn)
         cache[key]=valid
         return valid
     end
-    p.dubins=function(start,goal,radius)
-        local path=PathfinderUtil.findAnalyticPathFromStartToGoal(PathfinderUtil.dubinsSolver,
-            State3D(start.x,-start.z,CpMathUtil.angleFromGame(start.t)),
-            State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t)),radius)
-        if not path then return nil end
-        local points={}
-        for _,wp in ipairs(path) do points[#points+1]={x=wp.x,z=-wp.y} end
-        return points
-    end
+    p.workedSide=G.workedSide(turn)
+    p.dubins=G.analyticPath
     p.newTracker=function(path) return G.tracker(p,path) end
     return p
+end
+
+-- Keep only a numerical raised-state model for speculative preparation on a
+-- later row. Equipment identity/width must match; every execution still scans
+-- and validates the real current geometry. No scene nodes are moved here.
+function G.turnModel(p)
+    local model={width=p.width,side=E.turnSide(p),angle=E.wrap(p.start.phi-p.start.t),objects={},work={},footprint={}}
+    for _,key in ipairs({'length','axleOffsetX','hitchX','hitchZ','front','workCentreX'}) do model[key]=p[key] end
+    for i,entry in ipairs(p.objects) do model.objects[i]=entry.object end
+    for _,key in ipairs({'work','footprint'}) do
+        for i,m in ipairs(p[key]) do model[key][i]={x=m.x,z=m.z,towed=m.towed,rear=m.rear} end
+    end
+    return model
+end
+
+function G.applyTurnModel(p,model)
+    if not model or math.abs(model.width-p.width)>0.001 or #model.objects~=#p.objects then return false end
+    for i,entry in ipairs(p.objects) do if entry.object~=model.objects[i] then return false end end
+    local mirror=E.turnSide(p)==model.side and 1 or -1
+    for _,key in ipairs({'length','hitchZ','front'}) do p[key]=model[key] end
+    for _,key in ipairs({'axleOffsetX','hitchX','workCentreX'}) do p[key]=model[key] and model[key]*mirror end
+    p.start.phi=E.wrap(p.start.t+model.angle*mirror)
+    for _,key in ipairs({'work','footprint'}) do
+        p[key]={}
+        for i,m in ipairs(model[key]) do p[key][i]={x=m.x*mirror,z=m.z,towed=m.towed,rear=m.rear} end
+    end
+    return true
 end
 
 -- Live marker positions are compared against their calibrated straight-row

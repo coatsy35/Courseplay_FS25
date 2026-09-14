@@ -1,6 +1,7 @@
 -- Test-only GIANTS boundary. The planner, geometry adapter, PPC, work-start
 -- handler and turn state machine are the production source files shipped in ZIP.
 function makeEnvelopeLiveFixture(p)
+    function getTimeSec() return os.clock() end
     local E=EnvelopeTurnPlanner
     local function setting(value) return {getValue=function() return value end} end
     local settings={turnSpeed=setting(8),fieldSpeed=setting(12),reverseSpeed=setting(4),
@@ -45,6 +46,7 @@ function makeEnvelopeLiveFixture(p)
     strategy.getCanContinueWork=function() return true end
     strategy.isWorking=function() return false end
     strategy.getImplementLowerEarly=function() return true end
+    strategy.getImplementRaiseLate=function() return true end
     strategy.resumeFieldworkAfterTurn=function(self) self.resumed=self.resumed+1 end
     AIDriveStrategyCourse={onTurnEndProgressEvent=1,onLoweringEvent=2}
     AIMessageCpErrorNoPathFound={new=function() return {} end}

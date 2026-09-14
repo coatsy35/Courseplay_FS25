@@ -139,14 +139,14 @@ end
 -- A bounded cubic joins a sideways-biased Dubins endpoint to the incoming row.
 -- Its derivative is zero at both ends. |curvature| <= 6*|bias|/bend^2, allowing
 -- rejection of impossible steering before running the trailer simulation.
-function E.makePath(p, approach, straight, radius, extension, bias)
+function E.makePath(p, approach, straight, radius, extension, bias, loopSide)
     local start = E.point(p.start.x, p.start.z, p.start.t, 0, extension)
     start.t = p.start.t
     local goal = E.point(p.goal.x, p.goal.z, p.goal.t, bias, -p.front - approach)
     goal.t = p.goal.t
     local path = {{x=p.start.x, z=p.start.z}}
     addLine(path, p.start, start)
-    local arc = p.dubins(start, goal, radius)
+    local arc = p.dubins(start, goal, radius, loopSide)
     if not arc or #arc < 2 then return nil end
     for _, wp in ipairs(arc) do
         local last = path[#path]
@@ -286,16 +286,32 @@ end
 function E.newSearch(p)
     local straight=math.max(4,math.min(12,(p.headland-2*p.radius)*0.1))
     local extensions=straight>6 and {8,16,0,4,24} or {0,4,8,16}
-    local bends,factors={8,12,16,20,28,36},{1.1,1.25,1}
+    -- Refine the gap between the first two radii. The smaller can exceed a
+    -- long trailer's joint limit while the larger crosses a sloping boundary;
+    -- that does not mean every radius between them is infeasible.
+    local bends,factors={8,12,16,20,28,36},{1.1,(1.1+1.25)/2,1.25,1}
     local bi,fi,ei=1,1,1
+    -- Try compact worked-side bulbs before the unrestricted shortest path.
+    -- Limit the preference to the first three bend lengths so it cannot spend
+    -- a full second search pursuing increasingly long detours on that side.
+    local preferWorked=p.workedSide==-1 or p.workedSide==1
     local attempts,lastReason=0,'no candidate'
+    local rejections={}
     local stage,bias,iterations='zero',0,0
     local lo,hi,a,b,simulation,path,tail,verified
+    local hint=p.turnHint
+    local usingHint=hint and hint.bendRatio and hint.radiusRatio and hint.biasRatio and hint.extensionRatio
+        and hint.bendRatio>0 and hint.bendRatio<=10 and hint.radiusRatio>=1 and hint.radiusRatio<=2
+        and math.abs(hint.biasRatio)<=2 and hint.extensionRatio>=0 and hint.extensionRatio<=10
+        and hint.workedSideRelative==(p.workedSide and p.workedSide*E.turnSide(p) or nil)
+    if usingHint then bias=hint.biasRatio*p.width*E.turnSide(p) end
     local initial=true
     local function nextGroup()
+        if usingHint then usingHint=false;stage,bias,iterations='zero',0,0;return end
         ei=ei+1
         if ei>#extensions then ei=1; fi=fi+1 end
         if fi>#factors then fi=1; bi=bi+1 end
+        if preferWorked and bi>3 then preferWorked=false;bi,fi,ei=1,1,1 end
         stage,bias,iterations='zero',0,0
     end
     return {update=function(_,budget)
@@ -305,11 +321,15 @@ function E.newSearch(p)
                 return {ok=false,reason='starting footprint lacks field clearance',attempts=0}
             end
         end
-        if bi>#bends then return {ok=false,reason=lastReason or 'no aligned candidate',attempts=attempts} end
-        local bend,radius,extension=bends[bi],p.radius*factors[fi],extensions[ei]
+        if bi>#bends then return {ok=false,reason=lastReason or 'no aligned candidate',attempts=attempts,rejections=rejections} end
+        local bend=usingHint and hint.bendRatio*p.width or bends[bi]
+        local radius=p.radius*(usingHint and hint.radiusRatio or factors[fi])
+        local extension=usingHint and hint.extensionRatio*p.width or extensions[ei]
+        local loopSide=usingHint and hint.preferWorked and p.workedSide or
+            (not usingHint and preferWorked and p.workedSide or nil)
         local result
         if not simulation then
-            path,tail=E.makePath(p,straight+bend,straight,radius,extension,bias)
+            path,tail=E.makePath(p,straight+bend,straight,radius,extension,bias,loopSide)
             attempts=attempts+1
             verified=false
             if path then simulation=E.newSimulation(p,path,tail,0.15,false,false)
@@ -326,9 +346,12 @@ function E.newSearch(p)
         if result.ok then
             result.attempts,result.straight,result.bend=attempts,straight,bend
             result.radius,result.extension,result.bias=radius,extension,bias
+            result.usedTurnHint=usingHint and true or false
+            result.preferWorked=loopSide~=nil
             return result
         end
         lastReason=result.reason
+        rejections[lastReason or 'unknown']=(rejections[lastReason or 'unknown'] or 0)+1
         local err=result.rearError
         if stage=='zero' then
             hi=math.min(6,bend*bend/(6*radius)*0.95); lo=-hi
@@ -349,6 +372,18 @@ function E.newSearch(p)
         end
         return nil
     end}
+end
+
+function E.turnSide(p)
+    local x=E.localPoint(p.goal,p.start)
+    return x<0 and -1 or 1
+end
+
+function E.turnHint(p,result)
+    return {bendRatio=result.bend/p.width,radiusRatio=result.radius/p.radius,
+        biasRatio=result.bias/(p.width*E.turnSide(p)),extensionRatio=result.extension/p.width,
+        preferWorked=result.preferWorked,
+        workedSideRelative=p.workedSide and p.workedSide*E.turnSide(p) or nil}
 end
 
 function E.plan(p)

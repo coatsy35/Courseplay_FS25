@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.11'
+EnvelopeCourseTurn.TEST_VERSION = '0.12'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -42,9 +42,75 @@ end
 function EnvelopeCourseTurn:release()
     if self.geometry and self.geometry.activeTracker then self.geometry.activeTracker:delete() end
     self.planner=nil
+    self:releasePreparation()
+end
+
+function EnvelopeCourseTurn:releasePreparation()
+    if self.preparationGeometry and self.preparationGeometry.activeTracker then self.preparationGeometry.activeTracker:delete() end
+    self.preparationGeometry,self.preparationPlanner=nil,nil
+end
+
+-- CP still owns the actual raise point. This speculative search cannot lower,
+-- raise, steer, stop the job or install a path in the live pursuit controller.
+-- It only supplies a shape guess which is checked again after centring.
+function EnvelopeCourseTurn:finishRow(dt)
+    self:updatePreparation()
+    CourseTurn.finishRow(self,dt)
+end
+
+function EnvelopeCourseTurn:updatePreparation()
+    if self.preparationDone then return end
+    local started=getTimeSec()
+    local ok,reason=pcall(function()
+        if not self.preparationPlanner then
+            -- Loaded courses can lack their field polygon. Do not start field
+            -- detection here or disrupt working; the ordinary stopped path owns
+            -- that fallback. No speculative work is required for correctness.
+            local polygon=self.vehicle.cpGetFieldPolygon and self.vehicle:cpGetFieldPolygon()
+            if not polygon or #polygon<3 then self.preparationDone=true;return end
+            local p=EnvelopeTurnGeometry.capture(self)
+            if not p then self.preparationDone=true;return end
+            local exit=EnvelopeTurnGeometry.pose(self.turnContext.workEndNode)
+            local offset=0
+            for _,entry in ipairs(p.objects) do
+                local marker=self.driveStrategy:getImplementRaiseLate() and entry.back or entry.left
+                local _,z=EnvelopeTurnGeometry.planarPoint(marker,self.vehicle:getAIDirectionNode())
+                offset=math.max(offset,-z)
+            end
+            -- Predict the straight row-finish pose from the actual chosen raise
+            -- markers. Braking/centring movement can change it, so only reuse
+            -- dimensionless shape parameters, never this predicted path.
+            local predicted=EnvelopeTurnPlanner.point(exit.x,exit.z,exit.t,0,offset)
+            p.start={x=predicted.x,z=predicted.z,t=exit.t,phi=exit.t}
+            local measured=EnvelopeTurnGeometry.applyTurnModel(p,self.driveStrategy.envelopeTurnModel)
+            p.turnHint=self.driveStrategy.envelopeTurnHint
+            self.preparationGeometry=p
+            self.preparationPlanner=EnvelopeTurnPlanner.newSearch(p)
+            self.preparationStarted=g_currentMission.time
+            self:log('preparing candidate while finishing the straight row; previous raised model %s',tostring(measured))
+        end
+        repeat
+            local result=self.preparationPlanner:update(10)
+            if result then
+                if result.ok then
+                    self.preparedTurnHint=EnvelopeTurnPlanner.turnHint(self.preparationGeometry,result)
+                    self:log('straight-row candidate ready: %d trials; actual raised geometry still requires validation',result.attempts)
+                end
+                self.preparationDone=true
+                self:releasePreparation()
+                return
+            end
+        until getTimeSec()-started>=0.002
+    end)
+    if not ok then
+        self.preparationDone=true
+        self:releasePreparation()
+        self:log('discarding speculative preparation: %s',tostring(reason))
+    end
 end
 
 function EnvelopeCourseTurn:prepare()
+    self:updatePreparation()
     if self.vehicle:getLastSpeed()>0.2 then return end
     if not self:ensureFieldBoundary() then return end
     -- AITurn.finishRow already emitted the stock onFinishRow event, which
@@ -91,6 +157,7 @@ function EnvelopeCourseTurn:ensureFieldBoundary()
 end
 
 function EnvelopeCourseTurn:startPlanning(remainingPath)
+    self:releasePreparation()
     self.state=self.states.ENVELOPE_PLANNING
     self.planningStarted=g_currentMission.time
     self.planner={update=function()
@@ -99,6 +166,7 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         if not p then return {ok=false,reason=reason} end
         self.headlandSeed=self.headlandSeed or p.headland
         self.geometry=p
+        p.turnHint=self.preparedTurnHint or self.driveStrategy.envelopeTurnHint
         p.approachHint=self.driveStrategy.envelopeApproachHints and self.driveStrategy.envelopeApproachHints[EnvelopeTurnPlanner.approachSide(p)]
         self:logGeometry(p)
         if remainingPath then
@@ -198,6 +266,7 @@ function EnvelopeCourseTurn:updatePlanner()
     if not result then return end
     self.planner=nil
     if not result.ok then
+        for reason,count in pairs(result.rejections or {}) do self:log('candidate rejections: %s = %d',reason,count) end
         if result.attempts then
             self:log('search exhausted: %d trials, best predicted edge error %s m',result.attempts,tostring(result.bestError))
         end
@@ -221,9 +290,15 @@ function EnvelopeCourseTurn:updatePlanner()
     elseif result.retainedApproach then
         self:log('VALIDATED remaining working-position approach: predicted edge error %.3f m',result.entryError)
     else
+        self.initialTurnHint=EnvelopeTurnPlanner.turnHint(self.geometry,result)
+        self.initialTurnModel=EnvelopeTurnGeometry.turnModel(self.geometry)
         self:log('SELECTED steering-led forward turn: %d trials, radius %.2f, bend %.1f, straight %.1f, bias %.3f, outward %.1f, predicted edge error %.3f m',
             result.attempts,result.radius,result.bend,result.straight,result.bias,result.extension,result.entryError)
+        self:log('planned worked side %s; preferred bulb selected %s',
+            self.geometry.workedSide and (self.geometry.workedSide<0 and 'left' or 'right') or 'unknown',
+            tostring(result.preferWorked or false))
     end
+    if result.usedTurnHint then self:log('turn shape reused and checked against actual raised geometry') end
     if self.planningStarted then self:log('planning completed in %.2f seconds',(g_currentMission.time-self.planningStarted)/1000) end
     -- Reuse CP's per-object commands/controller events/state changes, but let
     -- this strategy own the stricter admission test. This is an INSTANCE method;
@@ -334,6 +409,10 @@ function EnvelopeCourseTurn:endTurn(dt)
         -- Save only the shape of a turn which actually reached working entry.
         -- A later turn must rebuild and validate it with its own live geometry.
         local r,p=self.result,self.geometry
+        if self.initialTurnHint then
+            self.driveStrategy.envelopeTurnHint=self.initialTurnHint
+            self.driveStrategy.envelopeTurnModel=self.initialTurnModel
+        end
         if r and r.repairedApproach and r.factorA and r.factorB then
             self.driveStrategy.envelopeApproachHints=self.driveStrategy.envelopeApproachHints or {}
             self.driveStrategy.envelopeApproachHints[EnvelopeTurnPlanner.approachSide(p)]={

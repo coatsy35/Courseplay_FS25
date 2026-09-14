@@ -3,12 +3,52 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.11**, packaged mod version **8.1.0.111**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.11` records identify it.
+Current test: **v0.12**, packaged mod version **8.1.0.112**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.12` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.12 follows five completed v0.11 entries, with live working-edge errors
+between 0.019 m and 0.063 m, and a sixth turn which exhausted 250 candidates.
+The first bulb still took about 9.5 seconds to calculate on each turn. Replaying
+the sixth snapshot against the nearby sloping map edge reproduces the failure:
+smaller sampled radii violate articulation, while larger ones cross the boundary.
+The search now also tries the midpoint between those radius factors. The replay
+passes in 64 trials, without changing joint limits, boundary reserve or entry
+tolerance. Radius factors apply to CP's resolved combination radius; no implement
+name or fixed measured turning radius selects this behaviour. Exhaustion logs
+now count every rejection reason instead of reporting only the last trial.
+
+Candidate preparation runs during CP's final straight row-finishing phase and
+while a reversible plough centres, with a two-millisecond numerical budget per
+update. Stock CP still controls lifting at its chosen working marker. Preparation
+cannot steer, lower, raise or install a path. After a completed turn the strategy
+retains a numerical raised-state model for the same attached equipment and
+dimensionless bulb parameters, mirrored where appropriate. Every execution
+recaptures the actual stopped geometry and rebuilds and finely validates its
+candidate against the current field. A changed rig, rejected guess or incomplete
+preparation falls back to the ordinary search. An identical validated shape
+replays in one trial. A loaded course without a field polygon still waits for
+normal field detection; short rows and changed geometry may still require
+stopped planning. Post-turnover repair remains separately validated.
+
+The bulb now prefers the worked side where CP's outgoing-row attributes identify
+exactly one worked side. It tries the corresponding alternative three-arc
+Dubins family at compact bend lengths, then falls back to the unrestricted
+search if those candidates do not pass. This leaves CP's shared solver unchanged.
+Both directions retain full footprint, articulation and entry checks. The 25-degree
+pike fixture shifts the bulb about six metres towards the worked side and reduces
+its reach towards the unworked side by about six metres, with the same 5 cm
+planned entry tolerance. Skipped-row drills can fall back when a three-arc bulb
+cannot span the row spacing. CP's attributes reflect planned course order, not
+measured soil coverage; unknown or ambiguous sides do not force a preference.
+Logs identify the side and whether the preferred bulb was actually selected.
+
+All 45 integration tests and three packaging/syntax checks pass. These are offline
+geometry, controller and map-edge regressions. The first v0.12 in-game run is still
+required to confirm execution, the preferred bulb and reduced waiting.
 
 Version 0.11 follows two confirmed v0.10 working entries (0.041 m and 0.044 m
 live error) and a third local-search failure. Post-turnover searches took about
