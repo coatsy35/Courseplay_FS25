@@ -462,6 +462,20 @@ function E.approachSide(p)
     return E.wrap(p.start.t-p.goal.t)<0 and -1 or 1
 end
 
+-- Find the contiguous final run towards the row, ignoring earlier segments
+-- which happen to have the same bearing on the outward part of an approach.
+function E.approachTailStart(p,path)
+    local first=#path
+    for i=#path-1,1,-1 do
+        local dx,dz=path[i+1].x-path[i].x,path[i+1].z-path[i].z
+        if dx*dx+dz*dz>1e-8 then
+            if math.abs(E.wrap(math.atan2(dx,dz)-p.goal.t))>math.rad(30) then break end
+            first=i
+        end
+    end
+    return math.max(2,first)
+end
+
 function E.newApproachSearch(p)
     local factors={0.1,0.2,0.3,0.4,0.5,0.6}
     local straights={4,2,0,8}

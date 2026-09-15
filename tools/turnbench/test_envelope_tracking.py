@@ -7,6 +7,65 @@ class TrackingTests(unittest.TestCase):
     def setUp(self):
         test_ingame_envelope.InGameEnvelopeTests.setUp(self)
 
+    def test_small_drift_is_corrected_before_the_strict_lowering_gate(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,14.3,1,62)
+local f=makeEnvelopeLiveFixture(p);local t=f.turn
+t.geometry=assert(EnvelopeTurnGeometry.capture(t));t.geometry.goal.t=0
+local live={x=.13,z=-8,t=0,phi=0}
+t.result={tailStart=2,path={{x=0,z=-9},{x=0,z=-8},{x=0,z=5}},
+    frames={{ix=2,x=0,z=-8,t=0,phi=0}}}
+t.ppc.getCurrentWaypointIx=function() return 2 end
+local checks=0;t.startPlanning=function(_,remaining) checks=checks+1;assert(#remaining>=2) end
+assert(not t:checkApproachTracking(-8,live))
+assert(checks==1 and t.approachCorrected and f.object.lowerCount==0)
+-- No repeated correction or relaxed admission.
+assert(t:checkApproachTracking(-7,live) and checks==1)
+assert(EnvelopeTurnPlanner.edgeTolerance==.1)
+''')
+
+    def test_drift_check_interpolates_between_prediction_samples(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,14.3,1,62)
+local f=makeEnvelopeLiveFixture(p);local t=f.turn
+t.geometry=assert(EnvelopeTurnGeometry.capture(t));t.geometry.goal.t=0
+t.result={tailStart=2,frames={{ix=2,x=0,z=-8.1,t=-.01,phi=-.01},
+    {ix=3,x=0,z=-7.9,t=.01,phi=.01}}}
+t.ppc.getCurrentWaypointIx=function() return 2 end
+t.startPlanning=function() error('sampling interval is not live drift') end
+assert(t:checkApproachTracking(-8,{x=0,z=-8,t=0,phi=0}))
+assert(not t.approachCorrected)
+''')
+
+    def test_v018_working_approach_replay_with_independent_trailer_response(self):
+        self.lua.execute('''
+for _,side in ipairs({1,-1}) do
+    local p=envelopeFixture(5.6,11.11,1.604,3.76,17.742,14.3,1,62.6)
+    p.start={x=-159.051*side,z=-128.070,t=math.rad(19.635)*side,phi=math.rad(-24.845)*side}
+    p.goal={x=-156.694*side,z=-118.820,t=0}
+    p.hitchX=.012*side;p.axleOffsetX=.03*side;p.slope=p.slope*side
+    p.lookahead=2.695;p.vehicleRadius=5.389;p.physicsLength=10.7
+    p.work={{x=-3.273*side,z=-2.156,towed=true},{x=2.279*side,z=-2.469,towed=true},
+        {x=-3.273*side,z=-16.138,towed=true,rear=true},{x=2.279*side,z=-16.138,towed=true,rear=true}}
+    p.workCentreX=(-3.273+2.279)/2*side+p.hitchX
+    local f=makeEnvelopeLiveFixture(p);local t=f.turn
+    t.entrySlope=p.slope;t.headlandSeed=62.6
+    t.ppc=PurePursuitController(f.vehicle);t.ppc.shortLookaheadDistance=2.695
+    p.planFixture=function()
+        t.geometry=assert(EnvelopeTurnGeometry.capture(t))
+        t.planner=EnvelopeTurnPlanner.newApproachSearch(t.geometry)
+        for i=1,3000 do
+            t:updatePlanner()
+            if not t.planner then return assert(t.result) end
+            assert(not f.vehicle.stopped)
+        end
+        error('logged entry search did not finish')
+    end
+    driveEnvelopeLiveFixture(p,f)
+    assert(f.strategy.resumed==1 and f.object.lowerCount==1 and not f.vehicle.stopped)
+end
+''')
+
     def test_v016_approach_drift_replans_locally_and_completes_both_sides(self):
         self.lua.execute('''
 local E,G=EnvelopeTurnPlanner,EnvelopeTurnGeometry

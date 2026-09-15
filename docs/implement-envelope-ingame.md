@@ -3,8 +3,28 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.18**, packaged mod version **8.1.0.118**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.18` records identify it.
+Current test: **v0.19**, packaged mod version **8.1.0.119**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.19` records identify it.
+
+Version 0.19 addresses the 22:47–22:49 T7.300/PW initial-entry recording.
+Initial entry now waits stationary for GIANTS to allow plough rotation, then
+uses CP's centring event before checking the forward course. It no longer
+deploys the plough and drives close to the crop before checking alignment.
+Existing reverse sections stay with CP; the complete forward approach is
+validated from the stopped pose. A retained stock bulb only marks its final
+incoming section for deployment, not an earlier section facing the same way.
+If that route cannot align, a bounded forward correction is tried before the
+complete recovery planner. The original row and field boundary remain the targets.
+
+The recorded final stop was 0.132 m edge error / 0.58 degrees. The old 0.25 m
+drift trigger exceeded the 0.1 m lowering tolerance. Correction now triggers
+at the 0.05 m planning margin while there is space left, interpolating between
+prediction samples to avoid treating sampling distance as drift. It remains
+limited to one tracking repair before lowering; it cannot launch another bulb.
+Lowering tolerance, CP/XML radius, physical dimensions and boundary reserves
+are unchanged. Tests include the logged working approach mirrored both ways
+with an independently different trailer response. These are offline simulations;
+GIANTS articulation, unfolding collisions and real entry still need an in-game test.
 
 Version 0.18 addresses the T7.300/PW initial-entry failure recorded on 15 September
 at 22:19–22:20. Initial entry bypassed the normal row-finish event, so its recovery

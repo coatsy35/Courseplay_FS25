@@ -1,5 +1,5 @@
--- Initial entry keeps CP's route (including its normal reverse manoeuvres).
--- Only the final, forward working entry is owned by the envelope controller.
+-- Initial entry checks CP's forward route before driving, retaining it when
+-- the combination can align. CP still owns its normal reversing manoeuvres.
 -- If that approach cannot align, the envelope planner checks a complete forward
 -- recovery before driving it. A tractor-only pathfinder goal behind the vehicle
 -- is not proof that the trailer can follow the resulting loop into the row.
@@ -12,7 +12,36 @@ function EnvelopeStartRowOnly:init(vehicle,strategy,ppc,context,course)
     self.entryIx=context.turnEndWpIx
     self.envelopeAlignment=true
     self.recoveryAttempted=false
+    self.initialPrepareStarted=g_currentMission.time
     self:holdLowering()
+end
+
+-- Initial entry has no finishRow event. Prepare the combination before it
+-- follows an alignment path, not after that path has brought it to the crop.
+-- Leave unfolding to GIANTS and use CP's synchronised centring event only when
+-- rotation is permitted. In particular, never deploy a folded plough to measure it.
+function EnvelopeStartRowOnly:prepareInitialPosition()
+    if self.vehicle:getLastSpeed()>0.2 then return false end
+    for _,controller in pairs(self.driveStrategy.controllers) do
+        if controller.isRotatablePlow and controller:isRotatablePlow() then
+            self.initialNeedsWorkingGeometry=true
+            if controller:isRotationActive() or
+                    (controller.getIsPlowRotationAllowed and not controller:getIsPlowRotationAllowed()) then
+                if g_currentMission.time-self.initialPrepareStarted>30000 then
+                    self:fail('initial plough unfolding/centring did not finish')
+                end
+                return false
+            end
+        end
+    end
+    if self.initialNeedsWorkingGeometry and not self.initialCentreRequested then
+        self.initialCentreRequested=true
+        self.driveStrategy:raiseImplements()
+        self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onFinishRowEvent,false)
+        return false -- allow GIANTS to begin the animation before checking it
+    end
+    self.initialPrepared=true
+    return true
 end
 
 function EnvelopeStartRowOnly:holdLowering()
@@ -29,40 +58,16 @@ end
 function EnvelopeStartRowOnly:getDriveData(dt)
     if self.cancelled then return nil,nil,nil,0 end
     if self.guard then return nil,nil,nil,0 end
+    if not self.initialPrepared and not self:prepareInitialPosition() then return nil,nil,nil,0 end
     local reversing=self.ppc:isReversing()
-    if self.state==self.states.DRIVING_TO_ROW then
-        if TurnManeuver.hasTurnControl(self.turnCourse,self.turnCourse:getCurrentWaypointIx(),
-                TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then
-            self.state=self.states.APPROACHING_ROW
-        end
-        return nil,nil,nil,self:getForwardSpeed()
-    end
-    -- CP owns the approach and reverse steering. Wait for the final forward
-    -- leg before measuring a deployed plough; it stays centred while reversing.
+    -- CP retains any reversing section. All-forward approaches are checked
+    -- from the starting pose, while the headland is still available to align.
     if reversing then return nil,nil,nil,self:getForwardSpeed() end
     for i=self.ppc:getCurrentWaypointIx(),self.turnCourse:getNumberOfWaypoints() do
         if self.turnCourse:isReverseAt(i) then return nil,nil,nil,self:getForwardSpeed() end
     end
-    -- Like stock StartRowOnly, only notify the rotation controller on the
-    -- approach. Calling it along the whole initial route deployed the side arm
-    -- whenever a loop temporarily faced the row, before the turn was complete.
-    self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(),false)
-    local ready=true
-    for _,controller in pairs(self.driveStrategy.controllers) do
-        if controller.isRotatablePlow and controller:isRotatablePlow() then
-            if controller:isRotationActive() then
-                self.rotationWaitStarted=self.rotationWaitStarted or g_currentMission.time
-                if g_currentMission.time-self.rotationWaitStarted>30000 then
-                    self:fail('initial plough rotation did not finish')
-                end
-                return nil,nil,nil,0
-            end
-            ready=ready and controller:isRotatedToSide(self.turnContext:shouldPlowBeOnTheLeft())
-        end
-    end
-    if not ready and not self.reachedEnd then return nil,nil,nil,self:getForwardSpeed() end
     if self.vehicle:getLastSpeed()>0.2 then return nil,nil,nil,0 end
-    self:startEntryCheck(not ready)
+    self:startEntryCheck(self.initialNeedsWorkingGeometry or false)
     return nil,nil,nil,0
 end
 
@@ -125,8 +130,10 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
             -- Initial entry has no finishRow transition. Emit the same stock
             -- event explicitly before attempting a bulb: the working-side
             -- plough arm otherwise obstructs the tractor's steering wheels.
-            strategy:raiseImplements()
-            strategy:raiseControllerEvent(AIDriveStrategyCourse.onFinishRowEvent,false)
+            if not g.needsWorkingGeometry then
+                strategy:raiseImplements()
+                strategy:raiseControllerEvent(AIDriveStrategyCourse.onFinishRowEvent,false)
+            end
             g.initialRecoveryPreparing=true
             g.prepareStarted=g_currentMission.time
             g.state=g.states.ENVELOPE_PREPARING

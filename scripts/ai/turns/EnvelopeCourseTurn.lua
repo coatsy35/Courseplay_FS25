@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.18'
+EnvelopeCourseTurn.TEST_VERSION = '0.19'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -177,7 +177,11 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         if remainingPath then
             -- Rotation may change hitch/axle/soil-marker positions. Validate
             -- the actual remaining approach with the freshly measured shape.
-            local simulation=EnvelopeTurnPlanner.newSimulation(p,remainingPath,2,0.075,true,true)
+            -- The initial stock course can contain a bulb before its run-in.
+            -- Only its final incoming section may deploy the plough, even if
+            -- an earlier part of that bulb briefly points towards the row.
+            local tailStart=EnvelopeTurnPlanner.approachTailStart(p,remainingPath)
+            local simulation=EnvelopeTurnPlanner.newSimulation(p,remainingPath,tailStart,0.075,true,true)
             self.planner={update=function(_,budget)
                 local result=simulation:update(budget)
                 if not result then return nil end
@@ -417,12 +421,30 @@ function EnvelopeCourseTurn:checkApproachTracking(contact,live)
                 self.ppc:getCurrentWaypointIx()<self.result.tailStart then return true end
         local reach=math.max(12,2*(p.length or math.abs(p.front)))
         if contact < -reach or contact > -math.max(3,2*p.lookahead) then return true end
-        local nearest,distance=nil,math.huge
-        for _,sample in ipairs(self.result and self.result.frames or {}) do
+        local nearest,nearestIndex,distance=nil,nil,math.huge
+        local frames=self.result and self.result.frames or {}
+        for index,sample in ipairs(frames) do
             local d=(sample.x-live.x)^2+(sample.z-live.z)^2
-            if d<distance then nearest,distance=sample,d end
+            if d<distance then nearest,nearestIndex,distance=sample,index,d end
         end
         if not nearest or nearest.ix<self.result.tailStart then return true end
+        -- Predictions are sampled at 20 cm intervals. Compare at the live
+        -- position along the segment, not a neighbouring sample's longitudinal
+        -- station, so the tighter drift trigger does not react to sampling alone.
+        for i=math.max(1,nearestIndex-1),math.min(#frames-1,nearestIndex) do
+            local a,b=frames[i],frames[i+1]
+            if a.ix>=self.result.tailStart then
+                local dx,dz=b.x-a.x,b.z-a.z
+                local u=math.max(0,math.min(1,((live.x-a.x)*dx+(live.z-a.z)*dz)/math.max(1e-12,dx*dx+dz*dz)))
+                local x,z=a.x+u*dx,a.z+u*dz
+                local d=(x-live.x)^2+(z-live.z)^2
+                if d<distance then
+                    local E=EnvelopeTurnPlanner
+                    nearest={x=x,z=z,t=a.t+u*E.wrap(b.t-a.t),phi=a.phi+u*E.wrap(b.phi-a.phi)}
+                    distance=d
+                end
+            end
+        end
         local deviation=0
         for _,marker in ipairs(p.work) do
             local actual=EnvelopeTurnPlanner.marker(p,live,marker)
@@ -430,7 +452,10 @@ function EnvelopeCourseTurn:checkApproachTracking(contact,live)
             local lateral=(actual.x-predicted.x)*math.cos(p.goal.t)-(actual.z-predicted.z)*math.sin(p.goal.t)
             deviation=math.max(deviation,math.abs(lateral))
         end
-        if deviation<=0.25 then return true end
+        -- A 25 cm trigger was larger than the 10 cm admission allowance: the
+        -- v0.18 run could drift to 13 cm without ever requesting correction.
+        -- Intervene at the planning margin, while steering space remains.
+        if deviation<=EnvelopeTurnPlanner.planningEdgeTolerance then return true end
         self.approachCorrectionPending=true
         self:log('approach differs from prediction by %.3f m at contact %.2f; stopping for one local correction',deviation,contact)
         if self.measuredResponseLength then

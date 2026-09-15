@@ -106,7 +106,8 @@ f.strategy.controllers={{isRotatablePlow=function() return true end,
     isRotationActive=function() return rotating end,isRotatedToSide=function() return not rotating end}}
 t.state=t.states.APPROACHING_ROW
 t:getDriveData(16);assert(not t.guard and f.object.lowerCount==0)
-rotating=false;t:getDriveData(16)
+rotating=false;t:getDriveData(16) -- request centring, then allow one update
+t:getDriveData(16)
 local g=assert(t.guard);assert(f.strategy.aiTurn==g and f.strategy.state==f.strategy.states.TURNING)
 g:getDriveData(16);g:updatePlanner()
 assert(g.geometry and g.geometry.goal.x==0 and g.geometry.goal.z==0)
@@ -275,15 +276,15 @@ f.strategy.raiseControllerEvent=function(self,event,...)
         events=events+1;c:onFinishRow(...)
     else old(self,event,...) end
 end
-t.state=t.states.APPROACHING_ROW;t:getDriveData(16)
+t:getDriveData(16)
+assert(events==1 and f.object.playing and f.object.animation==.5)
+assert(not t.guard and f.object.sideCommands==0)
+t:getDriveData(16);assert(not t.guard)
+f.object.playing=false;t:getDriveData(16)
 local g=assert(t.guard);g.geometry={}
 g:stopWithReason('initial local approach infeasible')
-assert(events==1 and f.object.playing and f.object.animation==.5)
 local planned=0
 g.startPlanning=function() planned=planned+1 end
-g:getDriveData(16)
-assert(planned==0 and f.object.lowerCount==0 and f.object.sideCommands==0)
-f.object.playing=false
 g:getDriveData(16)
 assert(planned==1 and g.needsWorkingGeometry and events==1)
 assert(f.object.lowerCount==0 and f.object.sideCommands==0)
@@ -294,14 +295,38 @@ assert(f.object.lowerCount==0 and f.object.sideCommands==0)
 local f=initialFixture();local t=f.starter
 local rotations=0
 t.workStartHandler.lowerImplementsAsNeeded=function() rotations=rotations+1 end
-t.state=t.states.DRIVING_TO_ROW;t:getDriveData(16)
-assert(rotations==0)
-t.state=t.states.APPROACHING_ROW
 f.ppc.isReversing=function() return true end
 t:getDriveData(16);assert(rotations==0)
 f.ppc.isReversing=function() return false end
-t.startEntryCheck=function() end
-t:getDriveData(16);assert(rotations==1)
+local checks=0;t.startEntryCheck=function() checks=checks+1 end
+t:getDriveData(16);assert(rotations==0 and checks==1)
+assert(t.state==t.states.DRIVING_TO_ROW) -- checked before approaching the crop
+''')
+
+    def test_folded_plough_waits_for_permission_before_centring_or_planning(self):
+        test_ingame_envelope.InGameEnvelopeTests.load_stock_plough_fixture(self)
+        self.lua.execute('''
+local f=initialFixture();local t=f.starter;local c=addStockPloughFixture(f)
+local permitted=false;f.object.getIsPlowRotationAllowed=function() return permitted end
+local events=0;f.strategy.raiseControllerEvent=function(_,event)
+    assert(event==AIDriveStrategyCourse.onFinishRowEvent);events=events+1;c:onFinishRow(false)
+end
+for i=1,10 do t:getDriveData(16) end
+assert(events==0 and not t.guard and f.object.sideCommands==0)
+permitted=true;t:getDriveData(16)
+assert(events==1 and not t.guard and f.object.playing)
+f.object.playing=false;t:getDriveData(16)
+assert(t.guard and t.guard.needsWorkingGeometry and f.object.sideCommands==0)
+''')
+
+    def test_retained_stock_bulb_only_deploys_on_its_final_incoming_section(self):
+        self.lua.execute('''
+local p={goal={t=0}};local E=EnvelopeTurnPlanner
+-- An outward section also faces the row, before turning away and back again.
+local path={{x=0,z=-30},{x=0,z=-20},{x=10,z=-20},{x=10,z=-40},
+    {x=0,z=-40},{x=0,z=-20},{x=0,z=0},{x=0,z=10}}
+assert(E.approachTailStart(p,path)==5)
+assert(E.approachTailStart(p,{{x=0,z=-30},{x=0,z=0},{x=0,z=10}})==2)
 ''')
 
 
