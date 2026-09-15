@@ -3,12 +3,38 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.16**, packaged mod version **8.1.0.116**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.16` records identify it.
+Current test: **v0.17**, packaged mod version **8.1.0.117**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.17` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.17 addresses the v0.16 initial recovery recorded at 21:26-21:27 on
+15 September. One complete loop was selected, but the real plough straightened
+about five degrees faster than predicted despite close tractor-path tracking.
+The unchanged admission check stopped at 0.624 m edge error / 2.44 degrees before
+lowering. Forward hitch-motion samples indicate a response lever near 10.4 m,
+compared with the measured 11.09 m geometric lever. No specific lever is coded.
+
+During a turn, consistent forward-motion samples estimate a separate yaw-response
+lever. A median and dispersion check reject noise/transients; straight, stationary,
+large-step and implausible samples are ignored. The estimate belongs to this turn,
+not an implement-name lookup. Collision bounds, axle/pivot positions, work markers
+and CP's selected turning radius retain their actual measured dimensions.
+
+On the final approach, the controller compares the live work-envelope pose with
+its predicted pose. A discrepancy above 0.25 m triggers one stopped recheck while
+there is still room to steer. This threshold triggers replanning; it is not a
+lowering tolerance. The remaining route is revalidated with the observed response,
+then a bounded forward steering correction is tried if needed. No additional bulb
+or post-lowering retry is allowed. Entries which still cannot align stop normally.
+
+Tests replay the logged approach in both directions and drive a complete recovery
+with independently faster trailer physics. They require one correction, aligned
+entry, one lowering command and unchanged physical geometry. The field and physics
+remain synthetic, so v0.17 still needs an in-game run. All 66 offline checks pass:
+49 planner/runtime, 11 initial-entry, three tracking and three packaging/syntax.
 
 Version 0.16 fixes the initial-entry recovery exposed by the 20:27 v0.15 log
 on 15 September. The first local approach could not align (about 1.66 m edge

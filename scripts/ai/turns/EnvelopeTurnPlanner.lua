@@ -327,7 +327,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
             -- Exact heading evolution for a straight incremental hitch movement.
             local direction=math.atan2(hx,hz)
             local delta=E.wrap(s.phi-direction)
-            s.phi=E.wrap(direction+2*math.atan(math.tan(delta/2)*math.exp(-math.sqrt(hx*hx+hz*hz)/p.length)))
+            s.phi=E.wrap(direction+2*math.atan(math.tan(delta/2)*math.exp(-math.sqrt(hx*hx+hz*hz)/(p.responseLength or p.length))))
         else s.phi=s.t end
         travelled=travelled+step
     end

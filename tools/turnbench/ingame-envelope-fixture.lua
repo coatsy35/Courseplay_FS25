@@ -78,7 +78,8 @@ function makeEnvelopeLiveFixture(p)
     f:setPose(p.start)
     local turn=setmetatable({vehicle=v,turnContext=context,driveStrategy=strategy,
         workWidth=p.width,settings=settings,ppc={shortLookaheadDistance=3},
-        states={ENDING_TURN={name='ENDING_TURN'},TURNING={name='TURNING'},ENVELOPE_STOPPED={name='STOPPED'}},name='test'},EnvelopeCourseTurn)
+        states={ENDING_TURN={name='ENDING_TURN'},TURNING={name='TURNING'},ENVELOPE_STOPPED={name='STOPPED'},
+            ENVELOPE_PREPARING={},ENVELOPE_PLANNING={},ENVELOPE_ROTATING={}},name='test'},EnvelopeCourseTurn)
     turn.state=turn.states.ENDING_TURN
     turn.workStartHandler=WorkStartHandler(v,strategy,context)
     turn.getLowerImplementNode=function() return context.workStartNode end
@@ -164,7 +165,7 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
             local hx,hz=h.x-old.x,h.z-old.z
             local direction=math.atan2(hx,hz)
             s.phi=E.wrap(direction+2*math.atan(math.tan(E.wrap(s.phi-direction)/2)*
-                math.exp(-math.sqrt(hx*hx+hz*hz)/p.length)))
+                math.exp(-math.sqrt(hx*hx+hz*hz)/(p.physicsLength or p.length))))
         elseif not p.length then s.phi=s.t end
     end
     error('runtime did not finish; contact '..tostring(t.lastContact))

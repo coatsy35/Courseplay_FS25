@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.16'
+EnvelopeCourseTurn.TEST_VERSION = '0.17'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -167,6 +167,10 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         if not p then return {ok=false,reason=reason} end
         self.headlandSeed=self.headlandSeed or p.headland
         self.geometry=p
+        -- Only the yaw response changes: collision/work marker positions keep
+        -- their measured physical geometry. Never substitute an observed
+        -- response lever for the real axle/pivot dimensions.
+        p.responseLength=self.measuredResponseLength
         p.turnHint=self.preparedTurnHint or self.driveStrategy.envelopeTurnHint
         p.approachHint=self.driveStrategy.envelopeApproachHints and self.driveStrategy.envelopeApproachHints[EnvelopeTurnPlanner.approachSide(p)]
         self:logGeometry(p)
@@ -331,6 +335,7 @@ function EnvelopeCourseTurn:getDriveData(dt)
     local gx,gz,forward,speed=CourseTurn.getDriveData(self,dt)
     if self.geometry and self.state~=self.states.ENVELOPE_STOPPED then
         local aligned,error,angle,contact,state=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
+        self:observeTrailerResponse(state)
         self.lastContact=contact
         if math.abs(EnvelopeTurnPlanner.wrap(state.t-state.phi))>self.geometry.maxArticulation then
             self:stopWithReason('live articulation exceeds the allowed angle'); return nil,nil,true,0
@@ -356,10 +361,95 @@ function EnvelopeCourseTurn:getDriveData(dt)
     return gx,gz,forward,math.min(speed or self:getForwardSpeed(),8,self.entrySpeedLimit or math.huge)
 end
 
+-- Estimate the passive yaw response from real forward hitch motion. A median
+-- of consistent samples rejects steering transients/noise. Samples close to
+-- straight, stationary, reversing or with an implausible lever are unusable.
+-- This is per turn and never alters CP/XML geometry or the steering radius.
+function EnvelopeCourseTurn:observeTrailerResponse(live)
+    local p=self.geometry
+    if not p.length or self.needsWorkingGeometry or self.lowerRequested then
+        self.responseSample=nil
+        return
+    end
+    local E=EnvelopeTurnPlanner
+    local hitch=E.point(live.x,live.z,live.t,p.hitchX,p.hitchZ)
+    local previous=self.responseSample
+    if not previous then self.responseSample={x=hitch.x,z=hitch.z,phi=live.phi};return end
+    local dx,dz=hitch.x-previous.x,hitch.z-previous.z
+    local distance=math.sqrt(dx*dx+dz*dz)
+    if distance<0.5 then return end
+    self.responseSample={x=hitch.x,z=hitch.z,phi=live.phi}
+    if distance>2 then return end
+    local direction=math.atan2(dx,dz)
+    local before,after=E.wrap(previous.phi-direction),E.wrap(live.phi-direction)
+    if math.abs(before)<math.rad(5) or math.abs(before)>math.rad(80) then return end
+    local ratio=math.tan(after/2)/math.tan(before/2)
+    if ratio<=0 or ratio>=0.999 then return end
+    local length=-distance/math.log(ratio)
+    if length<p.length*0.5 or length>p.length*1.5 then return end
+    self.responseSamples=self.responseSamples or {}
+    local samples=self.responseSamples
+    samples[#samples+1]=length
+    if #samples>40 then table.remove(samples,1) end
+    if #samples<8 then return end
+    local ordered={};for i,v in ipairs(samples) do ordered[i]=v end
+    table.sort(ordered)
+    local median=ordered[math.ceil(#ordered/2)]
+    local spread={};for i,v in ipairs(ordered) do spread[i]=math.abs(v-median) end
+    table.sort(spread)
+    if spread[math.ceil(#spread/2)]<median*0.1 then self.measuredResponseLength=median end
+end
+
+-- The tractor can track perfectly while trailer physics differ from the
+-- passive prediction (tyre scrub, steering axles, suspension). Detect that
+-- discrepancy with room left to change the steering lead, not at lowering.
+-- This is a replanning trigger, never a relaxed working-entry tolerance.
+function EnvelopeCourseTurn:checkApproachTracking(contact,live)
+    if self.lowerRequested or self.approachCorrected then return true end
+    local p=self.geometry
+    if not self.approachCorrectionPending then
+        local reach=math.max(12,2*(p.length or math.abs(p.front)))
+        if contact < -reach or contact > -math.max(3,2*p.lookahead) then return true end
+        local nearest,distance=nil,math.huge
+        for _,sample in ipairs(self.result and self.result.frames or {}) do
+            if sample.ix>=self.result.tailStart then
+                local d=(sample.x-live.x)^2+(sample.z-live.z)^2
+                if d<distance then nearest,distance=sample,d end
+            end
+        end
+        if not nearest then return true end
+        local deviation=0
+        for _,marker in ipairs(p.work) do
+            local actual=EnvelopeTurnPlanner.marker(p,live,marker)
+            local predicted=EnvelopeTurnPlanner.marker(p,nearest,marker)
+            local lateral=(actual.x-predicted.x)*math.cos(p.goal.t)-(actual.z-predicted.z)*math.sin(p.goal.t)
+            deviation=math.max(deviation,math.abs(lateral))
+        end
+        if deviation<=0.25 then return true end
+        self.approachCorrectionPending=true
+        self:log('approach differs from prediction by %.3f m at contact %.2f; stopping for one local correction',deviation,contact)
+        if self.measuredResponseLength then
+            self:log('observed trailer response %.3f m from %d samples; physical lever remains %.3f m',
+                self.measuredResponseLength,#self.responseSamples,p.length)
+        end
+    end
+    if self.vehicle:getLastSpeed()>0.2 then return false end
+    self.approachCorrectionPending=nil
+    self.approachCorrected=true
+    local position=EnvelopeTurnGeometry.pose(self.vehicle:getAIDirectionNode())
+    local remaining={{x=position.x,z=position.z}}
+    for i=math.max(2,self.ppc:getCurrentWaypointIx()),#self.result.path do remaining[#remaining+1]=self.result.path[i] end
+    -- Reuse the working-position repair: first validate the remaining route,
+    -- then a bounded forward correction. It cannot generate a second bulb.
+    self:startPlanning(remaining)
+    return false
+end
+
 function EnvelopeCourseTurn:endTurn(dt)
     if self.needsWorkingGeometry and not self:checkWorkingPosition() then return false end
-    local aligned,error,angle,contact=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
+    local aligned,error,angle,contact,live=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
     self.lastContact=contact
+    if not self.needsWorkingGeometry and not self:checkApproachTracking(contact,live) then return false end
     -- Check BEFORE hand-off clears geometry. Checking only after getDriveData
     -- returns would miss a loss of alignment on the very frame of entry.
     if self.entryReleased and not aligned then
