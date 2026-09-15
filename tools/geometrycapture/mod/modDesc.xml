@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <modDesc descVersion="105">
     <author>DC development</author>
-    <version>0.2.0.0</version>
+    <version>0.3.0.0</version>
     <title><en>Vehicle Geometry Capture</en></title>
-    <description><en>Independent machine geometry and movement capture for the Courseplay turn bench. Ctrl+Shift+G opens a menu with capture and recording buttons. Existing Controls bindings are retained. Exports to modSettings/VehicleGeometryCapture. Development diagnostic; no steering or vehicle settings are changed.</en></description>
+    <description><en>Independent machine geometry and movement capture for the Courseplay turn bench. Movable capture HUD: keep driving with the panel open. Ctrl+Shift+G opens the panel or restores its pointer; existing Controls bindings are retained. Exports to modSettings/VehicleGeometryCapture. Development diagnostic; no steering or vehicle settings are changed.</en></description>
     <iconFilename>icon.dds</iconFilename>
     <multiplayer supported="false"/>
     <extraSourceFiles><sourceFile filename="Geometry.lua"/><sourceFile filename="CaptureScreen.lua"/><sourceFile filename="Capture.lua"/></extraSourceFiles>

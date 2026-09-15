@@ -68,12 +68,20 @@ function g_inputBinding:setActionEventText() end
 function g_inputBinding:setActionEventTextVisibility() end
 function g_inputBinding:removeActionEvent(id) self.removed=self.removed+1;self.actions[id]=nil end
 RenderText={ALIGN_LEFT=0}
+Input={MOUSE_BUTTON_LEFT=1}
+g_screenAspectRatio=16/9
+function drawFilledRect() end
+function setTextBold() end
+function setTextWrapWidth() end
+function getTextWidth(size,text) return #text*size*.3 end
+function g_inputBinding:getShowMouseCursor() return self.cursor or false end
+function g_inputBinding:setShowMouseCursor(value) self.cursor=value end
 function setTextAlignment() end
 function setTextColor() end
 function renderText(x,y,size,text) assert(type(text)=='string') end
 g_gui={getIsGuiVisible=function() return false end,
-    loadGui=function(self,path,name,screen) self.screen=screen end,
-    showDialog=function(self) self.screen:onOpen() end}
+    loadGui=function() error('capture must not load a modal GUI') end,
+    showDialog=function() error('capture must not open a modal GUI') end}
 root={rootNode={x=100,z=200,t=0},configFileName='$data/tractor.xml',configurations={wheels=2},
       size={width=3,length=6},maxTurningRadius=7,isServer=true,attachments={}}
 tool={rootNode={x=100,z=190,t=0},configFileName='$data/pw10012.xml',configurations={workingWidth=1},
@@ -83,6 +91,7 @@ function tool:getName() return 'PW 100-12' end
 function root:getAttachedImplements() return self.attachments end
 function root:getAIDirectionNode() return self.rootNode end
 function root:getAIMinTurningRadius() return 8 end
+root.spec_enterable={cameras={{isRotatable=true},{isRotatable=false}}}
 function tool:getIsLowered() return false end
 function tool:getIsTurnedOn() return false end
 tool.steeringAxleNode={x=100,z=188,t=0}
@@ -93,10 +102,29 @@ tool.spec_workArea={workAreas={{start={x=102.8,z=194,t=0},width={x=97.2,z=194,t=
 function tool:getAIMarkers() local a=self.spec_workArea.workAreas[1];return a.start,a.width,a.height,false,5.6 end
 root.attachments={{object=tool,jointDescIndex=1}}
 g_localPlayer={getCurrentVehicle=function() return root end}
+function clickCaptureButton(id)
+    local c=VehicleGeometryCapture;local s=c.screen;s:layout()
+    for _,b in ipairs(s.buttons) do
+        if b.id==id then
+            c:mouseEvent(b.x+b.w/2,b.y+b.h/2,true,false,1)
+            c:mouseEvent(b.x+b.w/2,b.y+b.h/2,false,true,1)
+            return
+        end
+    end
+    error('button missing: '..id)
+end
 '''
 
 
 class CaptureTests(unittest.TestCase):
+    def test_sources_compile_with_baseline_lua51(self):
+        from lupa.lua51 import LuaRuntime as Lua51
+        lua=Lua51(unpack_returned_tuples=True)
+        check=lua.eval('function(source) local fn,err=loadstring(source);return fn~=nil,err end')
+        for path in MOD.glob('*.lua'):
+            ok,error=check(path.read_text())
+            self.assertTrue(ok,f'{path.name}: {error}')
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -214,36 +242,97 @@ PlayerInputComponent.registerGlobalPlayerActionEvents()
 assert(next(g_inputBinding.actions)==nil)
 ''')
 
-    def test_menu_buttons_select_capture_and_record_without_shortcuts(self):
+    def test_hud_buttons_capture_and_record_with_independent_optional_labels(self):
         self.lua.execute('''
 local c=VehicleGeometryCapture
 c:togglePanel()
 local s=c.screen
-assert(s.isOpen and #s.machineSelector.texts==2)
-s:onMachineChanged(2);s:onCategoryChanged(7);s:onLabelChanged(2)
-assert(c:selection()==tool and c.categoriesByObject[tool]==7 and c.labelIndex==2)
-s:onClickCapture()
-s:onClickRecord()
-assert(c.recording and s.recordButton.text=='Stop recording' and s.machineSelector.disabled)
-s:onMachineChanged(1);assert(c.selected==2)
-s:onClickBack();assert(not s.isOpen and c.recording)
+assert(s.isOpen and g_inputBinding:getShowMouseCursor())
+clickCaptureButton('labels')
+clickCaptureButton('steering');clickCaptureButton('runningGear');clickCaptureButton('pivots')
+assert(c:tags(root).steering==2 and c:tags(root).runningGear==2 and c:tags(root).pivots==2)
+clickCaptureButton('machine');clickCaptureButton('implement');clickCaptureButton('state')
+assert(c:selection()==tool and c:tags(tool).implement==2 and c.labelIndex==2)
+clickCaptureButton('capture');clickCaptureButton('record')
+assert(c.recording)
+clickCaptureButton('machine');assert(c.selected==2)
+clickCaptureButton('drive');assert(s.isOpen and c.recording and not g_inputBinding:getShowMouseCursor())
 c:update(100)
-c:togglePanel();s:onClickRecord()
-assert(not c.recording and s.recordButton.text=='Start recording')
+c:togglePanel();clickCaptureButton('record')
+assert(not c.recording and s.isOpen)
 ''')
         self.assertEqual(len(list(self.folder.glob('*.json'))),3)
         self.assertEqual(len(list(self.folder.glob('*.jsonl'))),1)
 
-    def test_native_menu_callbacks_and_exposed_controls_exist(self):
-        xml=ET.parse(MOD/'CaptureScreen.xml').getroot()
-        ids={node.get('id') for node in xml.iter() if node.get('id')}
-        for name in ('machineSelector','categorySelector','labelSelector','statusText','captureButton','recordButton'):
-            self.assertIn(name,ids)
-        for node in xml.iter():
-            for event in ('onOpen','onClose','onClick'):
-                method=node.get(event)
-                if method:
-                    self.assertTrue(self.lua.eval("type(VGCCaptureScreen['"+method+"'])=='function'"),method)
+    def test_hud_drag_camera_release_and_wheel_passthrough(self):
+        self.lua.execute('''
+local c=VehicleGeometryCapture;c:togglePanel();local s=c.screen
+assert(not root.spec_enterable.cameras[1].isRotatable)
+c:draw();local x,y=s.x,s.y
+c:mouseEvent(x+.05,y+s.h-.02,true,false,1)
+c:mouseEvent(x+.2,y+s.h+.03,false,false,0)
+c:mouseEvent(x+.2,y+s.h+.03,false,true,1)
+assert(math.abs(s.x-x-.15)<.001 and not s.drag)
+assert(not c:mouseEvent(s.x+.1,s.y+.1,true,false,4))
+clickCaptureButton('drive');c:draw()
+assert(s.isOpen and root.spec_enterable.cameras[1].isRotatable)
+assert(not root.spec_enterable.cameras[2].isRotatable)
+assert(not c:mouseEvent(s.x+.1,s.y+.1,true,false,1))
+c:togglePanel();clickCaptureButton('close')
+assert(not s.isOpen and not g_inputBinding:getShowMouseCursor())
+''')
+
+    def test_engine_void_write_flush_and_close_are_successful(self):
+        self.lua.execute('''
+local original=io.open
+io.open=function(path,mode)
+    local file,err=original(path,mode)
+    if not file or mode~='w' then return file,err end
+    return {write=function(_,...) assert(file:write(...)) end,
+        flush=function() assert(file:flush()) end,close=function() assert(file:close()) end}
+end
+local c=VehicleGeometryCapture;c:toggleRecord();assert(c.recording)
+for i=1,55 do c:update(100) end
+c:toggleRecord();assert(not c.recording and not c.message:find('failed'))
+''')
+        rows=[json.loads(line) for line in next(self.folder.glob('*.jsonl')).read_text().splitlines()]
+        self.assertEqual(rows[-1]['samples'],55)
+        self.assertEqual(len(list(self.folder.glob('*.json'))),2)
+
+    def test_explicit_write_and_close_errors_are_not_ignored(self):
+        for operation in ('write','close'):
+            with self.subTest(operation=operation):
+                self.lua.globals().failed_operation=operation
+                self.lua.execute('''
+local c=VehicleGeometryCapture
+c.newFile=function()
+    return {write=function() if failed_operation=='write' then return nil,'disk full' end return true end,
+        close=function() if failed_operation=='close' then return false,'close failed' end return true end},'test.json'
+end
+c:toggleRecord()
+assert(not c.recording and c.message:find('Could not start recording'))
+assert(c.message:find(failed_operation=='write' and 'disk full' or 'close failed'))
+''')
+
+    def test_three_machine_chain_records_every_pivot_context_and_separate_labels(self):
+        self.lua.execute('''
+cart={rootNode={x=100,z=178,t=0},configFileName='$data/cart.xml'}
+function tool:getAttachedImplements() return {{object=cart,jointDescIndex=2}} end
+local c=VehicleGeometryCapture
+c:tags(root).steering=4;c:tags(root).runningGear=4;c:tags(root).pivots=3
+c:tags(tool).implement=4
+c:toggleRecord();assert(c.recording and #c.recording.objects==3)
+c:update(100);c:toggleRecord()
+''')
+        profiles=[json.loads(p.read_text()) for p in self.folder.glob('*.json')]
+        tractor=next(p for p in profiles if p['identity']['model'].endswith('tractor.xml'))
+        self.assertEqual(tractor['labels']['steering'],'articulated')
+        self.assertEqual(tractor['labels']['runningGear'],'four-track')
+        self.assertEqual(tractor['labels']['pivots'],'multiple-pivots')
+        rows=[json.loads(line) for line in next(self.folder.glob('*.jsonl')).read_text().splitlines()]
+        self.assertEqual(len(rows[0]['members']),3)
+        self.assertEqual(rows[0]['members'][2]['parentInstance'],2)
+        self.assertEqual(len(rows[1]['machines']),3)
 
 
 if __name__=='__main__':

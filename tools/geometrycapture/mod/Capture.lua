@@ -4,6 +4,11 @@ VehicleGeometryCapture = {visible=false,selected=1,labelIndex=1,events={},clock=
 local C,G = VehicleGeometryCapture,VGCGeometry
 C.categories={'unclassified','front-wheel-steer','four-wheel-steer','articulated','twin-track',
               'mounted','long-trailed','long-narrow-trailed','wide-short-trailed','multiple-pivots'}
+C.tagFields={'steering','runningGear','implement','pivots'}
+C.tagOptions={steering={'unspecified','front-wheel-steer','four-wheel-steer','articulated','not-applicable'},
+    runningGear={'unspecified','wheeled','twin-track','four-track','not-applicable'},
+    implement={'unspecified','mounted','trailed','long-trailed','long-narrow-trailed','wide-short-trailed','cart','not-applicable'},
+    pivots={'unspecified','single-pivot','multiple-pivots','not-applicable'}}
 C.labels={'unspecified','straight-raised','straight-lowered','plough-A-raised','plough-A-lowered',
           'plough-B-raised','plough-B-lowered','left-turn','right-turn','headland-entry','headland-exit'}
 C.bindings={
@@ -34,6 +39,7 @@ end
 function C:loadMap()
     self.loaded=true
     self.categoriesByObject=setmetatable({},{__mode='k'})
+    self.tagsByObject=setmetatable({},{__mode='k'})
     self.clock,self.serial,self.selected,self.labelIndex=0,0,1,1
     self.folder=getUserProfileAppPath() .. 'modSettings/VehicleGeometryCapture/'
     createFolder(getUserProfileAppPath() .. 'modSettings/')
@@ -58,9 +64,7 @@ function C:loadMap()
     self:registerInputEvents()
     g_inputBinding:endActionEventsModification()
     self.screen=VGCCaptureScreen.new(self)
-    g_gui:loadGui(self.baseDirectory..'CaptureScreen.xml','VGCCaptureScreen',self.screen)
-    self.screen:useNativeBackground()
-    self:notify('Ready. Open Capture: show panel in Controls, or use vgcPanel in the console.')
+    self:notify('Ready. Open Capture: show panel, or use vgcPanel. Labels are optional.')
     self.visible=false
 end
 
@@ -78,8 +82,22 @@ function C:registerInputEvents()
 end
 
 function C:togglePanel()
-    if self.screen.isOpen then self.screen:close()
-    else g_gui:showDialog('VGCCaptureScreen') end
+    if not self.screen.isOpen then self.screen:open()
+    elseif not g_inputBinding:getShowMouseCursor() then self.screen:setPointer(true)
+    else self.screen:close() end
+end
+
+function C:tags(object)
+    local tags=self.tagsByObject[object]
+    if not tags then tags={};self.tagsByObject[object]=tags end
+    return tags
+end
+
+function C:cycleTag(field,step)
+    local object=self:selection()
+    if not object or self.recording then return end
+    local tags=self:tags(object)
+    tags[field]=((tags[field] or 1)-1+(step or 1))%#self.tagOptions[field]+1
 end
 function C:nextMachine()
     if self.recording then return self:notify('Stop recording before changing the selected machine.') end
@@ -91,8 +109,8 @@ function C:nextCategory()
     local object=self:selection()
     if not object then return self:notify('Enter a tractor first.') end
     if self.recording then return self:notify('Stop recording before changing category.') end
-    self.categoriesByObject[object]=(self.categoriesByObject[object] or 1)%#self.categories+1
-    return self:notify('Category: '..self.categories[self.categoriesByObject[object]])
+    self:cycleTag('steering',1)
+    return self:notify('Steering label: '..self.tagOptions.steering[self:tags(object).steering])
 end
 function C:nextLabel()
     if self.recording then return self:notify('Stop recording before changing label.') end
@@ -113,15 +131,28 @@ function C:newFile(stem,extension)
     error('Could not allocate a new capture filename')
 end
 
+-- GIANTS' embedded file wrapper may return no values on a successful close
+-- or flush. Standard Lua returns true. Both are success; explicit false,
+-- nil plus an error, and thrown errors must still fail the capture.
+local function fileOperation(file,operation,...)
+    local result,err=file[operation](file,...)
+    assert(result~=false and not (result==nil and err~=nil),err or ('File '..operation..' failed'))
+    return result
+end
+
 function C:saveObject(object,root)
     local snapshot=G.snapshot(object,self.categories[self.categoriesByObject[object] or 1],self.labels[self.labelIndex])
     snapshot.capturedAt=getDate('%Y-%m-%dT%H:%M:%S')
     snapshot.observedAttachmentContext=G.turnContext(root,object)
+    snapshot.labels={}
+    local tags=self:tags(object)
+    for _,field in ipairs(self.tagFields) do snapshot.labels[field]=self.tagOptions[field][tags[field] or 1] end
     local data=G.json(snapshot)
     local file,path=self:newFile(snapshot.identity.id .. '_' .. snapshot.label,'.json')
-    local ok,err=file:write(data,'\n')
-    local closed,closeError=file:close()
-    assert(ok and closed,err or closeError or 'Could not finish capture file')
+    local ok,err=pcall(fileOperation,file,'write',data,'\n')
+    local closed,closeError=pcall(fileOperation,file,'close')
+    if not ok then error(err) end
+    if not closed then error(closeError) end
     return path
 end
 
@@ -137,9 +168,9 @@ function C:stopRecording(reason)
     if not recording then return end
     self.recording=nil
     local ok,err=pcall(function()
-        assert(recording.file:write(G.json({type='end',reason=reason or 'user',samples=recording.samples,
-            elapsedMs=self.clock-recording.started})..'\n'))
-        assert(recording.file:close())
+        fileOperation(recording.file,'write',G.json({type='end',reason=reason or 'user',samples=recording.samples,
+            elapsedMs=self.clock-recording.started})..'\n')
+        fileOperation(recording.file,'close')
     end)
     if not ok then pcall(recording.file.close,recording.file) end
     return self:notify(ok and ('Recording saved ('..recording.samples..' samples): '..recording.path:match('[^/]+$'))
@@ -164,16 +195,16 @@ function C:toggleRecord()
         end
         local path
         file,path=self:newFile('motion','.jsonl')
-        assert(file:write(G.json({schema='fs25-geometry-motion',schemaVersion=1,type='header',members=members,
+        fileOperation(file,'write',G.json({schema='fs25-geometry-motion',schemaVersion=1,type='header',members=members,
             label=self.labels[self.labelIndex],sampleIntervalMs=100,
-            note='Time-stamped observations, not certified drawbar clearance limits.'})..'\n'))
+            note='Time-stamped observations, not certified drawbar clearance limits.'})..'\n')
         self.recording={file=file,path=path,root=root,objects=objects,started=self.clock,last=self.clock-100,samples=0}
     end)
     if not ok then
         if file then pcall(file.close,file) end
         return self:notify('Could not start recording: '..tostring(err))
     end
-    return self:notify('Recording at up to 10 Hz. Close the menu to drive; reopen it to stop. Maximum 10 minutes.')
+    return self:notify('Recording at up to 10 Hz. Drive normally; press Stop recording when finished. Maximum 10 minutes.')
 end
 
 function C:sample()
@@ -189,16 +220,19 @@ function C:sample()
             markers={left=G.world(left),right=G.world(right),back=G.world(back)},
             relativeToParent=entry.parent and G.node(object.rootNode,entry.parent.rootNode) or G.NULL}
     end
-    assert(r.file:write(G.json(sample)..'\n'))
+    fileOperation(r.file,'write',G.json(sample)..'\n')
     r.samples=r.samples+1
-    if r.samples%50==0 then assert(r.file:flush()) end
+    if r.samples%50==0 then fileOperation(r.file,'flush') end
     r.last=self.clock
 end
 
 function C:update(dt)
     self.clock=self.clock+dt
     local root=self:vehicle()
-    if root~=self.lastVehicle then self.selected=1; self.lastVehicle=root end
+    if root~=self.lastVehicle then
+        if self.screen then self.screen:setPointer(false) end
+        self.selected=1; self.lastVehicle=root
+    end
     local r=self.recording
     if not r then return end
     if root~=r.root then self:stopRecording('vehicle changed'); return end
@@ -218,22 +252,10 @@ function C:update(dt)
 end
 
 function C:draw()
-    if not self.visible or (g_gui and g_gui:getIsGuiVisible()) then return end
-    local object=self:selection()
-    local lines={'VEHICLE GEOMETRY CAPTURE',object and G.identity(object).name or 'Enter a tractor',
-        'Category: '..self.categories[object and self.categoriesByObject[object] or 1],
-        'Label: '..self.labels[self.labelIndex],self.recording and 'RECORDING' or 'Ready',
-        'Capture: show panel opens the menu; all actions have buttons.',
-        'Console: vgcPanel / vgcRecord', 'Use labelled raised/lowered captures on level ground.',
-        self.message or ''}
-    setTextAlignment(RenderText.ALIGN_LEFT)
-    for i,line in ipairs(lines) do
-        local y=.83-i*.025
-        setTextColor(0,0,0,1); renderText(.551,y-.001,.016,line)
-        setTextColor(1,1,1,1); renderText(.55,y,.016,line)
-    end
-    setTextColor(1,1,1,1)
+    if self.screen then self.screen:draw() end
 end
+
+function C:mouseEvent(...) if self.screen then return self.screen:mouseEvent(...) end end
 
 function C:deleteMap()
     self.loaded=false

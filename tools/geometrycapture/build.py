@@ -13,7 +13,7 @@ OUTPUT=ROOT/'dist'/'geometry-capture'/'FS25_VehicleGeometryCapture.zip'
 
 def build(output=OUTPUT):
     descriptor=ET.parse(SOURCE/'modDesc.xml').getroot()
-    names=['modDesc.xml','CaptureScreen.xml']+[node.attrib['filename'] for node in descriptor.findall('./extraSourceFiles/sourceFile')]
+    names=['modDesc.xml']+[node.attrib['filename'] for node in descriptor.findall('./extraSourceFiles/sourceFile')]
     files={name:(SOURCE/name).read_bytes() for name in names}
     files['icon.dds']=(ROOT/'icon_courseplay.dds').read_bytes()
     files['README.txt']=(SOURCE.parent/'README.md').read_bytes()
