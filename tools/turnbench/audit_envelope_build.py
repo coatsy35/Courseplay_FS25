@@ -23,8 +23,14 @@ def audit(archive,output):
            ('steering-lag-0.5s',{'steeringTimeConstant':.5}),
            ('steering-lag-1.0s',{'steeringTimeConstant':1}),
            ('response-10.4m',{'physicsLength':10.4}),('response-11.6m',{'physicsLength':11.6}),
+           ('response-10.4m-left',{'physicsLength':10.4,'side':-1}),
+           ('response-11.6m-left',{'physicsLength':11.6,'side':-1}),
            ('pike-25-lag',{'angle':25,'steeringTimeConstant':.2}),
            ('pike-41.5-lag',{'angle':41.5,'steeringTimeConstant':.2}),
+           ('pike-negative-25-lag',{'angle':-25,'steeringTimeConstant':.2}),
+           ('pike-negative-41.5-lag',{'angle':-41.5,'steeringTimeConstant':.2}),
+           ('pike-negative-41.5-response',{'angle':-41.5,'physicsLength':10.8}),
+           ('pike-positive-41.5-response',{'angle':41.5,'physicsLength':10.8}),
            ('lowering-5cm-sideways',{'lowerShiftX':.05}),
            ('lowering-5cm-forwards',{'lowerShiftZ':.05})]
     with ZipFile(archive) as z:

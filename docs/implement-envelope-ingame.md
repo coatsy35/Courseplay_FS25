@@ -3,12 +3,24 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.20**, packaged mod version **8.1.0.120**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.20` records identify it.
+Current test: **v0.21**, packaged mod version **8.1.0.121**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.21` records identify it.
 
-**Qualification failed on 16 September:** the wider execution sweep finds two
-pre-handover failures despite the original regression suite passing. Hold off
-further in-game testing of v0.20; see [the qualification report](v020-qualification.md).
+Version 0.21 fixes both failures which withdrew v0.20 from testing. Deployment
+now reserves the controller's lookahead and braking distance as well as the
+implement geometry. A short, consistent set of measured yaw samples can inform
+the one allowed tracking correction before the remaining steering space is
+used up. The local search also considers shorter run-ins before exhausting its
+budget on one straight length. It still keeps the plough centred through the
+loop, permits turnover only on the aligned approach, and measures the deployed
+markers before lowering. Working limits remain 0.1 m / two degrees; CP/XML
+radius and physical dimensions remain unchanged.
+
+Validation: 83 distinct offline regression checks and all 22 packaged execution
+cases pass, including both withdrawn-build failures in both turn directions.
+Successful execution cases continue eight metres beyond CP's fieldwork handover.
+See [v0.21 qualification](v021-qualification.md) for evidence and model limits.
+The [v0.20 failure report](v020-qualification.md) remains as the historical record.
 
 Version 0.20 addresses the 23:24–23:25 v0.19 recording. The centred loop
 completed, but deploying the plough changed its work markers and CP offset;

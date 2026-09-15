@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.20'
+EnvelopeCourseTurn.TEST_VERSION = '0.21'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -176,7 +176,14 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
             -- A centred plough's narrow markers hide the early contact of its
             -- unfolded wing on pikes. Reserve that nominal half-width sweep
             -- against the local inner-boundary slope as well as its length.
-            p.deploymentLead=math.max(p.length or 0,front-back)+math.abs(p.slope)*p.width/2
+            -- The deployment point is reached by a moving PPC-controlled
+            -- tractor, not by the static plan endpoint. Leave one lookahead
+            -- plus the stopping distance at our 8 km/h approach cap (using
+            -- the same conservative 1 m/s² deceleration as the entry gate).
+            -- Otherwise turnover/braking consumes the space needed to steer
+            -- the newly measured working envelope onto the original row.
+            local controlReserve=p.lookahead+(8/3.6)^2/2
+            p.deploymentLead=math.max(p.length or 0,front-back)+math.abs(p.slope)*p.width/2+controlReserve
         end
         -- Only the yaw response changes: collision/work marker positions keep
         -- their measured physical geometry. Never substitute an observed
@@ -421,13 +428,20 @@ function EnvelopeCourseTurn:observeTrailerResponse(live)
     local samples=self.responseSamples
     samples[#samples+1]=length
     if #samples>40 then table.remove(samples,1) end
-    if #samples<8 then return end
+    if #samples<3 then return end
     local ordered={};for i,v in ipairs(samples) do ordered[i]=v end
     table.sort(ordered)
     local median=ordered[math.ceil(#ordered/2)]
     local spread={};for i,v in ipairs(ordered) do spread[i]=math.abs(v-median) end
     table.sort(spread)
-    if spread[math.ceil(#spread/2)]<median*0.1 then self.measuredResponseLength=median end
+    -- A short entry may need correcting before eight half-metre samples
+    -- exist. Admit an early estimate only when ALL available samples agree
+    -- within 2%; the longer window retains its robust median/MAD filter.
+    -- This changes prediction only, never the measured collision geometry or
+    -- the 10 cm / 2 degree working-entry gate.
+    local consistent=#samples>=8 and spread[math.ceil(#spread/2)]<median*0.1 or
+        #samples<8 and spread[#spread]<median*0.02
+    if consistent then self.measuredResponseLength=median end
 end
 
 -- The tractor can track perfectly while trailer physics differ from the

@@ -524,6 +524,20 @@ function E.newApproachSearch(p)
     local factors={0.1,0.2,0.3,0.4,0.5,0.6}
     local straights={4,2,0,8}
     local ai,bi,si,attempts=1,1,1,0
+    -- Interleave nearby pull-in tangents and straight lengths. Exhausting all
+    -- six tangents at each straight used the entire 96-trial budget before a
+    -- shorter run-in was considered, even when that was the feasible shape.
+    local families={}
+    for a=1,#factors do
+        for firstB=1,#factors,2 do
+            for s=1,#straights do
+                for b=firstB,math.min(firstB+1,#factors) do
+                    families[#families+1]={a,b,s}
+                end
+            end
+        end
+    end
+    local familyIndex=1
     local simulation,path,verified,fineGroup
     local bias,stage,iterations=0,'zero',0
     local lo,hi,c,d,fc,fd,biasLimit,initialBiasLimit,widened
@@ -540,11 +554,10 @@ function E.newApproachSearch(p)
     local hintMarginError
     local lastReason='no forward approach'
     local function advance()
-        -- Vary the pull-in tangent before extending the straight: changing the
-        -- steering lead can settle a long trailer without a longer run-in.
-        bi=bi+1
-        if bi>#factors then bi=1;si=si+1 end
-        if si>#straights then si=1;ai=ai+1 end
+        familyIndex=familyIndex+1
+        local family=families[familyIndex]
+        if family then ai,bi,si=family[1],family[2],family[3]
+        else ai=#factors+1 end
         bias,stage,iterations=0,'zero',0
         fineGroup=false
         widened=false

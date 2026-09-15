@@ -7,6 +7,27 @@ class TrackingTests(unittest.TestCase):
     def setUp(self):
         test_ingame_envelope.InGameEnvelopeTests.setUp(self)
 
+    def test_early_response_estimate_requires_three_consistent_samples(self):
+        self.lua.execute('''
+for _,consistent in ipairs({true,false}) do
+    local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,14.3,1,62)
+    local f=makeEnvelopeLiveFixture(p);local t=f.turn
+    t.geometry=assert(EnvelopeTurnGeometry.capture(t))
+    local live={x=0,z=0,t=0,phi=math.rad(20)}
+    t:observeTrailerResponse(live)
+    for i=1,3 do
+        local response=not consistent and i==3 and 12 or 10.4
+        live.z=live.z+.55
+        live.phi=2*math.atan(math.tan(live.phi/2)*math.exp(-.55/response))
+        t:observeTrailerResponse(live)
+        if i<3 then assert(not t.measuredResponseLength) end
+    end
+    if consistent then assert(math.abs(t.measuredResponseLength-10.4)<.001)
+    else assert(not t.measuredResponseLength,'noisy short window must not change prediction') end
+    assert(math.abs(t.geometry.length-11.1)<.001,'response estimate changed physical geometry')
+end
+''')
+
     def test_small_drift_is_corrected_before_the_strict_lowering_gate(self):
         self.lua.execute('''
 local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,14.3,1,62)

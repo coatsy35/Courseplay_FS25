@@ -53,6 +53,23 @@ for _,angle in ipairs({-41.5,0,25,41.5}) do
 end
 ''')
 
+    def test_v020_failed_response_cases_reach_fieldwork_on_both_sides(self):
+        self.lua.execute('''
+for _,side in ipairs({1,-1}) do
+    for _,response in ipairs({10.4,11.6}) do
+        local p,f=deploymentFixture(side)
+        p.physicsLength=response
+        attachFieldworkHandover(p,f)
+        driveEnvelopeLiveFixture(p,f)
+        assert(f.strategy.resumed==1 and f.workedDistance>=8)
+        assert(f.object.sideCommands==1 and f.object.lowerCount==1)
+        assert(f.turn.approachCorrected and math.abs(f.turn.measuredResponseLength-response)<.15)
+        assert(f.initialAttempts<=16 and f.turn.result.attempts<=32)
+        assert(math.abs(p.length-11.11)<.001)
+    end
+end
+''')
+
     def test_mounted_and_trailed_drills_keep_the_normal_handover(self):
         self.lua.execute('''
 for _,dimensions in ipairs({{4,0},{6,8},{12,11}}) do
