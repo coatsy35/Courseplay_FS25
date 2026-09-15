@@ -7,12 +7,24 @@ from pathlib import Path
 import threading
 import traceback
 
-from engine import compare, implement_catalogue
+from engine import ROOT, SOURCES, compare, implement_catalogue
 
 STATIC = Path(__file__).resolve().parent / 'web'
 SLOTS = threading.BoundedSemaphore(2)
 FILES = {'/': ('index.html', 'text/html'), '/app.js': ('app.js', 'text/javascript'),
          '/style.css': ('style.css', 'text/css'), '/lucide.min.js': ('lucide.min.js', 'text/javascript')}
+
+
+class ModelSourceError(RuntimeError):
+    """A running server has lost files, for example after a Git branch switch."""
+
+
+def validate_model_sources():
+    missing = [name for name in SOURCES if not (ROOT / name).is_file()]
+    if missing:
+        raise ModelSourceError(
+            'Bench source files are missing: ' + ', '.join(missing) +
+            '. Restart the server from the dedicated codex/turnbench checkout.')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -60,8 +72,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Expected a JSON scenario under 8 KB')
             data = json.loads(self.rfile.read(length))
             with SLOTS:
+                validate_model_sources()
                 result = compare(data)
             self.send(200, json.dumps(result, allow_nan=False).encode())
+        except ModelSourceError as exc:
+            self.send(409, json.dumps({'error':str(exc)}).encode())
         except (ValueError, TypeError) as exc:
             self.send(400, json.dumps({'error':str(exc)}).encode())
         except Exception:
@@ -73,7 +88,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8765)
     args = parser.parse_args()
+    validate_model_sources()
     # Port 0 asks the OS for an available port; occupied ports are never taken over.
     with ThreadingHTTPServer(('127.0.0.1', args.port), Handler) as server:
         print(f'Turn bench: http://127.0.0.1:{server.server_port}', flush=True)
+        print(f'Model source: {ROOT}', flush=True)
         server.serve_forever()

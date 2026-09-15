@@ -25,6 +25,23 @@ model limits and the remaining in-game integration.
 
 ## Run
 
+Keep the bench on its own `codex/turnbench` checkout. A server keeps Python modules
+in memory but reads Lua and model files from disk: switching its checkout to another
+branch while it runs can mix versions or remove required files. The server prints
+its model source directory at startup and reports missing source files explicitly.
+
+This workspace uses `out/turnbench` as the dedicated checkout, with the existing
+Python environment in `out/turnbench-venv`. From the main repository directory:
+
+```powershell
+./out/turnbench-venv/Scripts/python.exe -u out/turnbench/tools/turnbench/server.py --port 56514
+```
+
+Open `http://127.0.0.1:56514`. Keep this checkout on the bench branch and restart
+the server after model-code updates. The live session's logs are in
+`out/turnbench/out/server.stdout.log` and `out/turnbench/out/server.stderr.log`;
+the command above writes logs to its terminal unless redirected.
+
 Requires Python 3.10+ with a Lupa wheel available for that Python/platform. From the repository root:
 
 ```powershell
