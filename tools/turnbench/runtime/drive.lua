@@ -42,6 +42,13 @@ function driveBenchEnvelope(p)
             local search=E.newApproachSearch(t.geometry)
             repeat result=search:update(500) until result
         end
+        if not result.ok then
+            -- Match v0.16's initial-entry recovery: validate the entire turn
+            -- with the measured trailer pose before driving, rather than
+            -- accepting a tractor-only connection and checking at its end.
+            t:log('Initial connection needs complete envelope recovery: %s',result.reason)
+            result=E.plan(t.geometry)
+        end
     else result=E.plan(t.geometry) end
     if not result.ok then
         t.ppc:delete()

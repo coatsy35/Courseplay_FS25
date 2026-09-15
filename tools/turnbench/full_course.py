@@ -99,6 +99,18 @@ def compile_route(p,raw,layout):
             out=heading(source[i-1],start)
             target=source[j]
             incoming=heading(target,source[j+1])
+            if p.runtimeEnvelope and not target['headland']:
+                # The generated connector is a preferred route, not a checked
+                # tractor/trailer turn. Plan from its start with the actual
+                # arriving pose; driving the old tractor-only curve first can
+                # leave the trailer jackknifed before admission even begins.
+                source[i:j]=[dict(start,working=False,phase='Envelope entry',
+                    rowStart=False,rowEnd=False,connecting=False,
+                    envelopeTarget=[target['x'],target['z'],incoming],
+                    envelopeOrigin=[start['x'],start['z'],out],envelopeInitial=True,
+                    row=target.get('row',0),offset=0)]
+                i+=2
+                continue
             # TurnContext:getTurnEndNodeAndOffsets: rear trailed implements
             # receive a straight approach before the work-start marker.
             goal_x,goal_z=corner_bridge.g.connectionGoal(corner_bridge.lua.table_from(asdict(p)),
@@ -108,10 +120,6 @@ def compile_route(p,raw,layout):
             link=[dict({**start,**dict(raw_link[k])},working=False,phase='Connecting turn',
                        rowStart=False,rowEnd=False,connecting=False)
                   for k in range(1,len(raw_link)+1)]
-            if p.runtimeEnvelope and not target['headland']:
-                link.append(dict(link[-1],envelopeTarget=[target['x'],target['z'],incoming],
-                    envelopeOrigin=[target['x'],target['z'],incoming],envelopeInitial=True,
-                    phase='Envelope entry',row=target.get('row',0),offset=0))
             link.append(dict(target,t=incoming,working=False,phase='Connecting turn',
                              rowStart=False,rowEnd=False,connecting=False,offset=0,
                              lower=True,lowerTarget=[target['x'],target['z'],incoming]))

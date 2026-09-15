@@ -94,8 +94,11 @@ shipped in the test mod. Production PPC steers these turns; the production live
 entry gate controls lowering, hydraulic waiting and hand-off. The host replaces
 GIANTS movement with a finite-acceleration bicycle/passive-trailer model and uses
 the configured rectangular work markers. Plough rotation/suspension are not yet
-physically modelled. Headlands and connecting travel retain the stock bench
-adapter; entry from those connectors is checked by the shared runtime.
+physically modelled. Headlands and connections back to them retain the stock
+bench adapter. Connections into centre rows are planned from the actual pose at
+the beginning of the connection. A failed local approach uses the complete
+envelope recovery before driving, matching the v0.16 initial-entry decision;
+this avoids first driving an unchecked curve that leaves the trailer sideways.
 
 The menu also offers **Stock CP / comparison** explicitly. Existing isolated
 aligned-entry experiments remain separate; they are not the shared runtime.

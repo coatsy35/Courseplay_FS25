@@ -1,10 +1,10 @@
 {
-  "version": "0.15",
-  "revision": "7010963e173e156d625a727ed0c7ec73585dbc1c",
+  "version": "0.16",
+  "revision": "a36d5aeec8418b8d9977fb1832bddbb81efef7e8",
   "files": {
     "EnvelopeTurnPlanner.lua": "aec3fec86a346a5a1d779b9f64d126ae2fe1f140bf2303ca01fdd4158c3acc6b",
     "EnvelopeTurnGeometry.lua": "a78b29d5c4b73434c9412222e94e305eb5c48fce172fa374529390a8fe29d007",
-    "EnvelopeCourseTurn.lua": "a8c6843058286bed77157971c9ec1a6f45b181005b62c1eda858c06fcfae15b9"
+    "EnvelopeCourseTurn.lua": "89274ace3e14940711b1621b8f17e465efb05a91990e2a99f518c5402c2c8240"
   },
   "dependencies": {
     "scripts/ai/turns/AITurn.lua": "75c7d352599560e2b39de1f1a0324c5020dc6c26f9b4bb7beeed8b2860ec9ef2",

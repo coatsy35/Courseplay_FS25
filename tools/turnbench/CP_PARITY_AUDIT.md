@@ -4,18 +4,22 @@
 
 Full-field mode now offers an explicit controller choice, defaulting to the
 versioned envelope runtime. Its planner, geometry checks and `EnvelopeCourseTurn`
-entry/lowering state machine are unchanged snapshots from test mod v0.15; CP's
+entry/lowering state machine are unchanged snapshots from test mod v0.16; CP's
 production PPC drives those manoeuvres. Source and dependency hashes are checked
 when loading. See `runtime/manifest.json` and `sync_runtime.py`.
 
 The bench plans at the actual simulated row exit, retains trailer heading across
 passes, and feeds the actual lowered envelope into final coverage. Failed entry
 checks stop that simulated run and preserve their reason. Headland corners and
-section-connecting travel still use the older adapter described below. Their
-arrival at a central row is checked by the envelope entry gate, but stock hybrid
-pathfinding/repositioning and physical plough rotation are not simulated. The
-headland-first PW case currently exposes a rejected connection into the centre;
-this is not presented as successful fieldwork or as a measured in-game result.
+connections back to headlands still use the older adapter described below.
+Connections into central rows are now deferred at their start and planned from
+the arriving tractor/trailer pose. As in v0.16 initial recovery, a failed local
+approach triggers one complete envelope search before movement. The old
+tractor-only connection is not driven first. Stock hybrid obstacle pathfinding
+and physical plough rotation are not simulated. The default PW rectangle with
+nine headlands now completes all 23 central rows; the first entry measures about
+0.05 m edge error and 0.26 degrees. This is an offline result, not an in-game
+measurement. Genuine clearance/alignment failures and coverage gaps stay visible.
 
 The original audit below remains applicable to stock comparison mode and these
 remaining adapters. Runtime row turns supersede its older row-turn limitations.

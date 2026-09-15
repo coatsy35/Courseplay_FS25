@@ -8,7 +8,7 @@ from sync_runtime import validate
 
 class RuntimeDriverTests(unittest.TestCase):
     def test_snapshot_is_intact(self):
-        self.assertEqual(validate()['version'],'0.15')
+        self.assertEqual(validate()['version'],'0.16')
 
     def test_pw_and_drills_use_runtime_entry_gate_on_straight_and_pike(self):
         for width,length,front,back,mounted in ((5.6,11.1,4.6,18.3,False),
@@ -50,6 +50,25 @@ class RuntimeDriverTests(unittest.TestCase):
         self.assertGreater(len(entries),2)
         self.assertLess(r['metrics']['entry']['lateral'],.13)
         self.assertEqual(r['coverage']['missedArea'],r['metrics']['missedArea'])
+
+    def test_headland_first_pw_completes_checked_connection_and_all_centre_rows(self):
+        r=compare(dict(courseLayout=True,fullCourse=True,runtimeEnvelope=True,
+            width=5.6,length=11.1,hitch=1.9,front=4.6,back=18.3,clearance=20.7,
+            lowerSeconds=2.5,tightDistance=1,headlandRows=9,fieldWidth=220,
+            fieldLength=240,headlandFirst=True,drill=False,roundHeadlands=0))['baseline']
+        self.assertTrue(r['metrics']['complete'],r['runtimeFailure'])
+        kinds=[e['kind'] for e in r['events']]
+        self.assertTrue(any(k.startswith('Initial connection needs complete envelope recovery:') for k in kinds))
+        self.assertEqual(sum(k.startswith('ENTRY:') for k in kinds),r['runtimeTurns'])
+        self.assertEqual(sum(k.startswith('LOWER:') for k in kinds),r['runtimeTurns'])
+        self.assertGreater(r['runtimeTurns'],20)
+        self.assertLess(r['metrics']['entry']['lateral'],.13)
+        self.assertEqual(kinds[-1],'Course finished')
+        # Coverage is still measured from actual lowered frames, including
+        # headlands. Finishing the connector must not paint the field complete.
+        self.assertGreater(r['coverage']['missedArea'],0)
+        first_entry=next(e['time'] for e in r['events'] if e['kind'].startswith('ENTRY:'))
+        self.assertTrue(any(f['headland'] and f['lowered'] and f['time']<first_entry for f in r['frames']))
 
 
 if __name__=='__main__': unittest.main()
