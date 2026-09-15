@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.19'
+EnvelopeCourseTurn.TEST_VERSION = '0.20'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -110,7 +110,8 @@ function EnvelopeCourseTurn:updatePreparation()
 end
 
 function EnvelopeCourseTurn:prepare()
-    self:updatePreparation()
+    -- Speculation is useful while finishing a working row. Starting it once
+    -- already stopped immediately discards the same search in startPlanning.
     if self.vehicle:getLastSpeed()>0.2 then return end
     if not self:ensureFieldBoundary() then return end
     -- AITurn.finishRow already emitted the stock onFinishRow event, which
@@ -167,6 +168,16 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         if not p then return {ok=false,reason=reason} end
         self.headlandSeed=self.headlandSeed or p.headland
         self.geometry=p
+        if self.needsWorkingGeometry then
+            local front,back=-math.huge,math.huge
+            for _,m in ipairs(p.work) do
+                front=math.max(front,m.z);back=math.min(back,m.z)
+            end
+            -- A centred plough's narrow markers hide the early contact of its
+            -- unfolded wing on pikes. Reserve that nominal half-width sweep
+            -- against the local inner-boundary slope as well as its length.
+            p.deploymentLead=math.max(p.length or 0,front-back)+math.abs(p.slope)*p.width/2
+        end
         -- Only the yaw response changes: collision/work marker positions keep
         -- their measured physical geometry. Never substitute an observed
         -- response lever for the real axle/pivot dimensions.
@@ -218,9 +229,19 @@ function EnvelopeCourseTurn:logGeometry(p)
     end
 end
 
--- Called only on the final approach. Stock PlowController owns the decision
--- to rotate (near the incoming direction), and receives shouldLower=false.
+-- Called only on the final approach. Hold CP's rotation event until alignment;
+-- the stock PlowController still owns the animation and unfolding permission.
 function EnvelopeCourseTurn:checkWorkingPosition()
+    if not self.rotationStarted then
+        local _,error,angle,_,live=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
+        -- Keep the plough centred throughout the bulb and steering lead.
+        -- Stock CP's 30-degree trigger is deliberately held back until both
+        -- tractor and implement face the incoming row. The upstream deployment
+        -- target leaves room to measure the working markers before lowering.
+        if angle>EnvelopeTurnPlanner.angleTolerance or
+                math.abs(EnvelopeTurnPlanner.wrap(live.t-self.geometry.goal.t))>EnvelopeTurnPlanner.angleTolerance or
+                error>math.min(0.5,self.geometry.width*0.1) then return true end
+    end
     self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onTurnEndProgressEvent,
         self:getLowerImplementNode(),false,false,self.turnContext:shouldPlowBeOnTheLeft())
     local ready,active=true,false
@@ -311,8 +332,13 @@ function EnvelopeCourseTurn:updatePlanner()
     else
         self.initialTurnHint=EnvelopeTurnPlanner.turnHint(self.geometry,result)
         self.initialTurnModel=EnvelopeTurnGeometry.turnModel(self.geometry)
-        self:log('SELECTED steering-led forward turn: %d trials, radius %.2f, bend %.1f, straight %.1f, bias %.3f, outward %.1f, predicted edge error %.3f m',
-            result.attempts,result.radius,result.bend,result.straight,result.bias,result.extension,result.entryError)
+        if result.deploymentLead then
+            self:log('SELECTED centred turn: %d trials, %.2f m deployment lead, raised staging error %.3f m; working entry still requires validation',
+                result.attempts,result.deploymentLead,result.entryError)
+        else
+            self:log('SELECTED steering-led forward turn: %d trials, radius %.2f, bend %.1f, straight %.1f, bias %.3f, outward %.1f, predicted edge error %.3f m',
+                result.attempts,result.radius,result.bend,result.straight,result.bias,result.extension,result.entryError)
+        end
         self:log('planned worked side %s; preferred bulb selected %s',
             self.geometry.workedSide and (self.geometry.workedSide<0 and 'left' or 'right') or 'unknown',
             tostring(result.preferWorked or false))

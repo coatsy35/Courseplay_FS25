@@ -121,28 +121,43 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
     local f=preparedFixture or makeEnvelopeLiveFixture(p)
     local t=f.turn
     if p.configureFixture then p.configureFixture(f) end
-    t.geometry=assert(EnvelopeTurnGeometry.capture(t))
-    local result=p.planFixture and p.planFixture(t.geometry) or EnvelopeTurnPlanner.plan(t.geometry)
-    assert(result.ok,result.reason)
     t.ppc=preparedFixture and t.ppc or PurePursuitController(f.vehicle)
     t.ppc:setShortLookaheadDistance()
-    t.planner={update=function() return result end}
+    t.geometry=assert(EnvelopeTurnGeometry.capture(t))
+    local result
+    if p.planFixture then result=p.planFixture(t.geometry)
+    else
+        g_currentMission.time=0
+        t:startPlanning()
+        for i=1,10000 do
+            t:updatePlanner()
+            if not t.planner then result=t.result;break end
+        end
+        assert(result,'production runtime planning failed')
+    end
+    assert(result.ok,result.reason)
     function getTimeSec() return os.clock() end
-    t:updatePlanner()
+    if t.result~=result then
+        t.planner={update=function() return result end}
+        t:updatePlanner()
+    end
     local s={x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi}
     local speed=0
     for tick=1,16000 do
         local dt=0.05
         g_currentMission.time=tick*dt*1000
         if p.tickFixture then p.tickFixture(f) end
+        if p.stateFixture then p.stateFixture(f,s) end
         f.vehicle.speed=speed*3.6
         f.vehicle.lastSpeed=speed/1000
         f:setPose(s)
         if p.postPoseFixture then p.postPoseFixture(f) end
         t.ppc:update()
-        local gx,gz,forward,limit=t:getDriveData(dt*1000)
-        if f.vehicle.stopped then error('runtime stopped at contact '..tostring(t.lastContact)) end
-        if f.strategy.resumed>0 then
+        local gx,gz,forward,limit
+        if p.driveDataFixture then gx,gz,forward,limit=p.driveDataFixture(f,dt*1000)
+        else gx,gz,forward,limit=t:getDriveData(dt*1000) end
+        if f.vehicle.stopped then error('runtime stopped at contact '..tostring(t.lastContact)..'\n'..table.concat(f.logs or {},'\n')) end
+        if f.strategy.resumed>0 and (not p.afterHandoverFixture or p.afterHandoverFixture(f,s)) then
             assert(f.object.lowerCount==1)
             t.ppc:delete()
             return result

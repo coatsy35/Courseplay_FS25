@@ -3,8 +3,41 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.19**, packaged mod version **8.1.0.119**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.19` records identify it.
+Current test: **v0.20**, packaged mod version **8.1.0.120**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.20` records identify it.
+
+Version 0.20 addresses the 23:24–23:25 v0.19 recording. The centred loop
+completed, but deploying the plough changed its work markers and CP offset;
+all 96 final corrections failed. A replay of that late working pose still
+failed with 3,680 candidates, so increasing retries was not a solution.
+
+Centred manoeuvres now aim at a raised deployment point before the original
+work boundary. Its lead comes from the measured implement length/work-marker
+span plus the nominal half-width projected onto the angled inner boundary.
+It does not alter the original working row, CP/XML radius or live admission
+tolerances. Both tractor and implement must face that row within two degrees
+before the stock turnover event is permitted. Rotation finishes stationary;
+the actual working footprint and CP offset are then measured and the final
+forward approach validated before lowering. No second loop is permitted.
+
+The raised staging target allows up to 0.5 m positioning error (limited to
+10% of working width), because folded markers are not working admission.
+Working entry retains the 0.1 m / two-degree live limits and tighter planning
+margin. All staged candidates retain field and articulation checks. The
+search prioritises a bend based on trailer length, reducing the recorded
+initial replay from 77 trials to 11; its working correction takes four.
+Speculative row-finish planning no longer starts redundant work once stopped.
+
+The new regression runs measured centred/working geometry and CP's offset
+change through a seven-second turnover, hydraulic lowering, production
+AITurn/plough/fieldwork handover, and eight metres of subsequent fieldwork.
+It covers mirrored entries, square/angled boundaries up to 41.5 degrees,
+independent trailer response, and mounted/trailed implements. The field,
+hydraulic geometry interpolation and vehicle physics are synthetic; this
+does not prove GIANTS collision/terrain behaviour. The desktop bench remains
+on its separate branch and has not been presented as current runtime parity.
+Validation: 80 offline checks pass (49 planner/runtime, 15 initial-entry,
+eight tracking, five deployment/handover and three packaging/syntax checks).
 
 Version 0.19 addresses the 22:47–22:49 T7.300/PW initial-entry recording.
 Initial entry now waits stationary for GIANTS to allow plough rotation, then

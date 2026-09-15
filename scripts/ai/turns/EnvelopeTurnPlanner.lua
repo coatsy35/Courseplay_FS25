@@ -270,7 +270,12 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
             gx,gz=path[goalIx].x,path[goalIx].z
         end
         local aligned, error, angle, contact, rear,balanced,minError,maxError = E.assess(p,s)
-        aligned=aligned and error<=(optimiseEntry and E.repairEdgeTolerance or E.planningEdgeTolerance)
+        -- A raised deployment target is not work admission. It needs a
+        -- straight combination with room left for the measured working
+        -- correction, not millimetre positioning of folded soil markers.
+        local tolerance=p.deploymentTarget and math.min(0.5,p.width*0.1) or
+            (optimiseEntry and E.repairEdgeTolerance or E.planningEdgeTolerance)
+        aligned=angle<=E.angleTolerance and error<=tolerance
         local articulation=math.abs(E.wrap(s.t-s.phi))
         maxArticulation=math.max(maxArticulation,articulation)
         if p.length and articulation > p.maxArticulation then return finish({ok=false,reason='joint angle'}) end
@@ -345,12 +350,51 @@ end
 -- Search stages preserve the original zero/left/right/root-solved candidate
 -- order without retaining a Lua call stack across game updates.
 function E.newSearch(p)
+    -- A centred reversible implement is not its working envelope. End the
+    -- centred manoeuvre upstream, leaving one measured implement span to deploy
+    -- and steer onto the original row. The runtime still measures and validates
+    -- the working position; this target is never used as a lowering boundary.
+    -- Every candidate retains the real field containment and joint limits.
+    if p.deploymentLead and p.deploymentLead>0 then
+        local staged={}
+        for k,v in pairs(p) do staged[k]=v end
+        staged.goal=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.deploymentLead)
+        staged.goal.t=p.goal.t
+        staged.deploymentLead=nil
+        staged.deploymentTarget=true
+        if p.newTracker then staged.newTracker=function(path,screening) return p.newTracker(path,screening) end end
+        local search=E.newSearch(staged)
+        return {getProgress=function() return search:getProgress() end,update=function(_,budget)
+            local result=search:update(budget)
+            if result and result.ok then
+                -- Continue towards the ORIGINAL work start. This part remains
+                -- raised until the live working-envelope check approves it.
+                local finish=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.front+12)
+                local last=result.path[#result.path]
+                local _,forward=E.localPoint(finish,{x=last.x,z=last.z,t=p.goal.t})
+                if forward>0 then addLine(result.path,last,finish) end
+                result.deploymentLead=p.deploymentLead
+            end
+            return result
+        end}
+    end
     local straight=math.max(4,math.min(12,(p.headland-2*p.radius)*0.1))
     local extensions=straight>6 and {8,16,0,4,24} or {0,4,8,16}
     -- Refine the gap between the first two radii. The smaller can exceed a
     -- long trailer's joint limit while the larger crosses a sloping boundary;
     -- that does not mean every radius between them is infeasible.
     local bends,factors={8,12,16,20,28,36},{1.1,(1.1+1.25)/2,1.25,1}
+    if p.deploymentTarget then
+        -- Start near the measured trailer's settling distance, then retain
+        -- every existing compact candidate as a fallback. Short seed bends
+        -- repeatedly fail for long centred implements and waste stopped time.
+        -- This changes search priority only, never radius/clearance admission.
+        local lead=(p.length or p.width)*1.8
+        table.sort(bends,function(a,b)
+            local da,db=math.abs(a-lead),math.abs(b-lead)
+            return da==db and a<b or da<db
+        end)
+    end
     local bi,fi,ei=1,1,1
     -- Try compact worked-side bulbs before the unrestricted shortest path.
     -- Limit the preference to the first three bend lengths so it cannot spend
