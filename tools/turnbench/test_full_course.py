@@ -78,6 +78,11 @@ class CompleteCourseTests(unittest.TestCase):
             with self.subTest(headlandFirst=first):
                 run=self.run_course(headlandFirst=first)
                 self.assertTrue(run['metrics']['complete'])
+                self.assertIsInstance(run['metrics']['missedArea'],float)
+                self.assertEqual(run['metrics']['missedArea'],run['coverage']['missedArea'])
+                self.assertAlmostEqual(sum(w*h for x,z,w,h in run['gapRuns']),run['metrics']['missedArea'])
+                self.assertAlmostEqual(run['coverage']['workedArea']+run['coverage']['missedArea'],
+                                       run['coverage']['requiredArea'])
                 self.assertFalse(run['preview'])
                 self.assertEqual(bool(run['path'][0]['headland']),first)
                 self.assertTrue(any(f['headland'] for f in run['frames']))

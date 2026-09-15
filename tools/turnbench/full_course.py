@@ -6,6 +6,7 @@ does not emulate GIANTS suspension, hydraulics or inter-vehicle traffic control.
 import math
 from dataclasses import replace, asdict
 from engine import Bridge, point, wrap, drive_guidance, polygon_contains, check_boundary
+from field_coverage import FieldCoverage
 
 
 def heading(a,b):
@@ -209,7 +210,7 @@ def densify_route(result):
     return dense
 
 
-def drive_course(p,path,vehicle_index,start=None):
+def drive_course(p,path,vehicle_index,start=None,coverage=None):
     bridge=Bridge(replace(p,allowReverse=False,enforceBoundary=False))
     x,z=path[0]['x'],path[0]['z']
     theta=wrap(path[0]['t']+(math.pi if path[0]['reverse'] else 0))
@@ -219,6 +220,7 @@ def drive_course(p,path,vehicle_index,start=None):
     lowered=bool(path[0].get('working'))
     raising=lowering=None
     frames,events=[],[]
+    previous_frame=None
     ix=0
     dt=.1
     last_progress=0
@@ -313,8 +315,17 @@ def drive_course(p,path,vehicle_index,start=None):
                state=('Reversing' if reverse else v['phase']),phase=v['phase'],
                reverse=reverse,headland=v.get('headland',0),row=v.get('row',0),
                vehicle=vehicle_index,offset=v.get('offset',0),ix=ix+1,angle=angle,error=error)
-        if tick%5==0:
+        if coverage is not None:
+            coverage.add_frame(f)
+        # Preserve transitions between the normal 0.5 s display samples. This
+        # prevents playback drawing work across a lifted section, or omitting
+        # the first/last fraction of a pass.
+        changed=previous_frame is not None and previous_frame['lowered'] != lowered
+        if changed and frames[-1]['time'] < previous_frame['time']:
+            frames.append(previous_frame)
+        if tick%5==0 or changed:
             frames.append(f)
+        previous_frame=f
         rx,rz=axle if reverse and not p.mounted else (x,z)
         end=path[-1]
         dx,dz=rx-end['x'],rz-end['z']
@@ -355,9 +366,11 @@ def drive_course(p,path,vehicle_index,start=None):
 def simulate_complete(p,generated):
     layout=generated['layout']
     fleet=[]
+    coverage=FieldCoverage(layout['boundary'],layout['islands'])
     for i,route in enumerate(layout['routes']):
         path=compile_route(p,route['waypoints'],layout)
-        run=drive_course(p,path,i+1)
+        run=drive_course(p,path,i+1,coverage=coverage)
+        coverage.finish_vehicle()
         run.update(scenario=asdict(p),preview=False,gaps=[],exitGaps=[],resolution=.25,
                    field=dict(boundary=layout['boundary'],headlands=layout['headlands'],islands=layout['islands'],
                               rows=[],rowSegments=[],order=[],west=0,east=p.fieldWidth,south=0,north=p.fieldLength),
@@ -373,5 +386,11 @@ def simulate_complete(p,generated):
             parked['time']=min(end_time,round(parked['time']+.5,2))
             selected['frames'].append(parked)
     selected['fleet']=fleet
+    summary=coverage.result()
+    selected['gapRuns']=summary.pop('gapRuns')
+    selected['coverage']=summary
+    selected['coverageScope']='Whole field / all vehicles'
+    selected['resolution']=summary['resolution']
+    selected['metrics']=dict(selected['metrics'],missedArea=summary['missedArea'])
     selected['generatorErrors']=layout['errors']
     return selected

@@ -12,6 +12,7 @@ let camera = { x: 0, z: 0, scale: 5 },
   drag = null;
 const workedCanvas = document.createElement('canvas');
 let workedRun = null, workedKey = '', workedFrame = -1;
+let workedFleetFrames = [];
 function drawWorkedCoverage(run, end) {
   const key = [camera.x,camera.z,camera.scale,canvas.width,canvas.height].join(',');
   const target = workedCanvas.getContext('2d');
@@ -20,6 +21,7 @@ function drawWorkedCoverage(run, end) {
     const dpr = window.devicePixelRatio || 1;
     target.setTransform(dpr,0,0,dpr,0,0);
     workedRun = run; workedKey = key; workedFrame = -1;
+    workedFleetFrames = [];
   }
   target.fillStyle = '#bfd9cc';
   const fill = points => {
@@ -27,11 +29,21 @@ function drawWorkedCoverage(run, end) {
     points.forEach((p,i) => {const s=toScreen(...p);if(i)target.lineTo(...s);else target.moveTo(...s);});
     target.closePath();target.fill();
   };
-  for (let i=workedFrame+1;i<=end;i++) {
-    const s=run.frames[i];
-    if (!s.lowered) continue;
-    fill([s.left,s.right,s.rearRight,s.rearLeft]);
-    if(i && run.frames[i-1].lowered) fill([run.frames[i-1].left,run.frames[i-1].right,s.right,s.left]);
+  const time = run.frames[end].time;
+  for (const [vehicleIndex, vehicle] of (run.fleet || [run]).entries()) {
+    let i = (workedFleetFrames[vehicleIndex] ?? -1) + 1;
+    for (; i < vehicle.frames.length && vehicle.frames[i].time <= time; i++) {
+      const s = vehicle.frames[i];
+      if (!s.lowered) continue;
+      const corners = [s.left,s.right,s.rearRight,s.rearLeft];
+      fill(corners);
+      if (i && vehicle.frames[i-1].lowered) {
+        const previous = vehicle.frames[i-1];
+        const old = [previous.left,previous.right,previous.rearRight,previous.rearLeft];
+        for (let k=0;k<4;k++) fill([old[k],old[(k+1)%4],corners[(k+1)%4],corners[k]]);
+      }
+    }
+    workedFleetFrames[vehicleIndex] = i-1;
   }
   workedFrame=end;
   ctx.drawImage(workedCanvas,0,0,size.w,size.h);
@@ -356,7 +368,7 @@ function updateMetrics() {
     ? "Worst entry lateral error"
     : "Entry lateral error";
   $("angle-label").textContent = field ? "Worst entry angle" : "Entry angle";
-  $("gap-label").textContent = selected().coverageScope ? "Missed area / complete working block" : field
+  $("gap-label").textContent = selected().completeCourse ? "Missed area / whole field" : selected().coverageScope ? "Missed area / complete working block" : field
     ? "Missed entry area / all turns"
     : "Missed area / first 20 m";
   $("metric-error").textContent = m.entry
@@ -371,6 +383,9 @@ function updateMetrics() {
     : "--";
   $("metric-gap").textContent =
     m.missedArea == null ? "--" : `${m.missedArea.toFixed(2)} m\u00b2`;
+  $("metric-gap").title = selected().coverage
+    ? `Approximate ${selected().resolution} m coverage grid; field boundary excluding islands, including any unworked field margin. All vehicles combined. Final gaps include areas left when a run stops early.`
+    : "";
   $("metric-gap").classList.toggle("bad", m.missedArea > 0);
   $("metric-depth").textContent =
     m.envelopeDepth == null ? "--" : `${m.envelopeDepth.toFixed(1)} m`;
@@ -731,7 +746,11 @@ function draw() {
   }
   drawWorkedCoverage(run, Math.floor(frame));
   if ($("gaps").checked) {
-    ctx.fillStyle = "#e89ba5aa";
+    // Solid colour keeps narrow missed strips readable over the worked layer.
+    ctx.fillStyle = "#e87891";
+    for (const [x,z,w,h] of run.gapRuns || []) {
+      ctx.fillRect(...toScreen(x,z+h),w*camera.scale,h*camera.scale);
+    }
     for (const [x, z] of [...run.gaps, ...run.exitGaps]) {
       const s = toScreen(x - run.resolution / 2, z + run.resolution / 2);
       ctx.fillRect(

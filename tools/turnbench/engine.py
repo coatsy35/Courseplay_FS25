@@ -22,7 +22,7 @@ SOURCES = [
     'tools/turnbench/engine.py', 'tools/turnbench/bridge.lua', 'tools/turnbench/requirements.txt',
     'scripts/courseGenerator/RowPattern.lua', 'config/VehicleConfigurations.xml',
     'scripts/ai/AIReverseDriver.lua',
-    'tools/turnbench/full_course.py', 'scripts/ai/turns/Corner.lua',
+    'tools/turnbench/full_course.py', 'tools/turnbench/field_coverage.py', 'scripts/ai/turns/Corner.lua',
     'tools/turnbench/alignment.py', 'tools/turnbench/aligned_turn.py',
     'tools/turnbench/aligned_pattern.py',
 ]

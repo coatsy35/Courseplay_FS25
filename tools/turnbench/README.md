@@ -70,6 +70,22 @@ vertical rows (CP 0°). Saved setups retain their own values and older API fixtu
 The irregular field defaults to a 36% left inset, adjustable between 10% and 55%.
 Choose **CP Course Generator / layout only** for a static preview.
 
+### Reading coverage and gaps
+
+Full-field mode calculates coverage from the lowered working envelope at every
+0.1 s simulation step. Green shows work completed by the current playback time;
+**Final missed coverage** shows the pink areas left after all simulated passes.
+Use **Show result** to see the completed field and **Missed area / whole field**
+for its total. A gap filled by a later row or headland is not a final missed area.
+For multiple vehicles, coverage combines their routes without double-counting.
+
+Coverage normally uses 0.25 m cells inside the field boundary, excluding islands.
+Large fields use a coarser grid to bound memory; the metric's tooltip reports the
+resolution. Deliberately unworked field margins are included in the missed total.
+These are modelled gaps from the current rectangular work envelope and simulated
+lift/lower state, not measured FS soil coverage. The full-field baseline still
+uses its existing CP movement model, not the newer in-game envelope test strategy.
+
 ## Tests
 
 ```powershell
