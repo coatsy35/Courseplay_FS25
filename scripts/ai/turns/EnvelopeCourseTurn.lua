@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.14'
+EnvelopeCourseTurn.TEST_VERSION = '0.15'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -160,6 +160,7 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
     self:releasePreparation()
     self.state=self.states.ENVELOPE_PLANNING
     self.planningStarted=g_currentMission.time
+    self.planningProgressLogged=nil
     self.planner={update=function()
         self:log('measuring %s envelope',self.needsWorkingGeometry and 'centred-turn' or 'working')
         local p,reason=EnvelopeTurnGeometry.capture(self)
@@ -263,7 +264,17 @@ function EnvelopeCourseTurn:updatePlanner()
     -- Planning is stationary. Give it up to 8 ms per update rather than 4 ms;
     -- retain small sample batches so the UI and cancellation stay responsive.
     until result or getTimeSec()-started>=0.008
-    if not result then return end
+    if not result then
+        -- Long first-turn searches must be distinguishable from a frozen worker.
+        -- Report progress without per-candidate or per-frame log traffic.
+        local now=g_currentMission.time
+        if self.planner.getProgress and now-(self.planningProgressLogged or self.planningStarted or now)>=5000 then
+            self:log('turn search still running: %d candidates, %.1f seconds',self.planner:getProgress(),
+                (now-(self.planningStarted or now))/1000)
+            self.planningProgressLogged=now
+        end
+        return
+    end
     self.planner=nil
     if not result.ok then
         for reason,count in pairs(result.rejections or {}) do self:log('candidate rejections: %s = %d',reason,count) end

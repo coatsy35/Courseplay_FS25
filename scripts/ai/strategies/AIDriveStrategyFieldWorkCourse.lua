@@ -85,7 +85,9 @@ function AIDriveStrategyFieldWorkCourse:start(course, startIx, jobParameters)
         job:setStartFieldWorkCourse(nil, nil)
         self.course = course
         self:startAlignmentTurn(course, startIx, alignmentCourse, alignmentCourseStartIx)
-    elseif distance > 2 * self.turningRadius then
+    elseif distance > 2 * self.turningRadius or
+            (self.settings.envelopeAlignedTurns:getValue() and not course:isOnHeadland(startIx)
+                and EnvelopeTurnGeometry.supported(self.vehicle)) then
         self:debug('Start waypoint is far (%.1f m), use alignment course to get there.', distance)
         self.course = course
         self:startAlignmentTurn(course, startIx)
@@ -105,6 +107,7 @@ end
 
 --- Event raised when the driver has finished.
 function AIDriveStrategyFieldWorkCourse:onFinished(hasFinished)
+    if self.workStarter and self.workStarter.release then self.workStarter:release() end
     AIDriveStrategyCourse.onFinished(self, hasFinished)
     self.remainingTime:reset()
 end
@@ -210,7 +213,7 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
         end
     elseif self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT then
         self:setMaxSpeed(self.settings.fieldSpeed:getValue())
-        local _, _, _, maxSpeed = self.workStarter:getDriveData()
+        local _, _, _, maxSpeed = self.workStarter:getDriveData(dt)
         if maxSpeed ~= nil then
             self:setMaxSpeed(maxSpeed)
         end
@@ -435,7 +438,17 @@ function AIDriveStrategyFieldWorkCourse:resumeFieldworkAfterTurn(ix)
     -- if we can't found a waypoint in front of us, just use the next (ix would be the turn end, this is after that)
     -- ix may be problematic, especially if the next waypoint is a headland corner with > 90 degrees angle, PPC
     -- may never advance to the next waypoint
-    self:startCourse(self.fieldWorkCourse, found and startIx or ix + 1)
+    local resumeIx = found and startIx or ix + 1
+    local pendingTurn
+    if self.settings.envelopeAlignedTurns:getValue() and EnvelopeTurnGeometry.supported(self.vehicle) then
+        pendingTurn = EnvelopeTurnGeometry.pendingRowTurn(self.fieldWorkCourse, ix, resumeIx)
+    end
+    self:startCourse(self.fieldWorkCourse, pendingTurn or resumeIx)
+    if pendingTurn then
+        Logging.info('[CP envelope] %s: preserving short-row turn at waypoint %d on entry hand-off',
+            CpUtil.getName(self.vehicle), pendingTurn)
+        self:startTurn(pendingTurn)
+    end
 end
 
 --- Attempt to recover from a turn where the vehicle got blocked. This replaces the current turn with a
@@ -494,6 +507,15 @@ end
 ---@param startIx number index of waypoint of fieldWorkCourse where the work should start
 ---@param alignmentCourse Course an optional course if the caller already has one
 ---@param alignmentStartIx number index to start the alignment course (if supplied)
+function AIDriveStrategyFieldWorkCourse:createRowStarter(context,course)
+    if self.settings.envelopeAlignedTurns:getValue() and
+            not self.fieldWorkCourse:isOnHeadland(context.turnEndWpIx) and EnvelopeTurnGeometry.supported(self.vehicle) then
+        self:raiseImplements()
+        return EnvelopeStartRowOnly(self.vehicle,self,self.ppc,context,course)
+    end
+    return StartRowOnly(self.vehicle,self,self.ppc,context,course)
+end
+
 function AIDriveStrategyFieldWorkCourse:startAlignmentTurn(fieldWorkCourse, startIx, alignmentCourse, alignmentStartIx)
     if alignmentCourse then
         -- there is an alignment course, use that one, if there is a start ix, then only
@@ -509,7 +531,7 @@ function AIDriveStrategyFieldWorkCourse:startAlignmentTurn(fieldWorkCourse, star
         local fm, bm = self:getFrontAndBackMarkers()
         self.turnContext = RowStartOrFinishContext(self.vehicle, fieldWorkCourse, startIx, startIx, self.turnNodes,
                 self:getWorkWidth(), fm, bm, self:getTurnEndSideOffset(false), self:getTurnEndForwardOffset())
-        self.workStarter = StartRowOnly(self.vehicle, self, self.ppc, self.turnContext, alignmentCourse)
+        self.workStarter = self:createRowStarter(self.turnContext,alignmentCourse)
         self.state = self.states.DRIVING_TO_WORK_START_WAYPOINT
         self:startCourse(self.workStarter:getCourse(), 1)
     else
@@ -682,7 +704,7 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToConnectingPathEnd(con
 end
 
 function AIDriveStrategyFieldWorkCourse:startCourseToWorkStart(course)
-    self.workStarter = StartRowOnly(self.vehicle, self, self.ppc, self.turnContext, course)
+    self.workStarter = self:createRowStarter(self.turnContext,course)
     self.state = self.states.DRIVING_TO_WORK_START_WAYPOINT
     self:raiseImplements()
     self.ppc:setShortLookaheadDistance()

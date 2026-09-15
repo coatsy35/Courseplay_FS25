@@ -165,12 +165,73 @@ function E.makePath(p, approach, straight, radius, extension, bias, loopSide)
     return path, tailStart
 end
 
+-- Forward-only planar transcription of PPC's findRelevantSegment/findGoalPoint.
+-- Candidate paths have no offsets, reverse sections or callbacks. Keeping their
+-- temporary frames as numbers avoids creating/destroying three GIANTS nodes per
+-- sample. This is used ONLY to screen candidates; the production PPC still
+-- verifies every accepted path and controls the actual vehicle. Parity tests
+-- compare its waypoint and goal against PPC, including off-track/endpoint cases.
+function E.newPlanarTracker(p,path)
+    local frames={}
+    for i,q in ipairs(path) do
+        local next=path[i+1]
+        local t=frames[i-1] and frames[i-1].t or 0
+        if next and (next.x~=q.x or next.z~=q.z) then t=math.atan2(next.x-q.x,next.z-q.z) end
+        frames[i]={x=q.x,z=q.z,t=t}
+    end
+    local n=#frames
+    local relevant,nextIx,beforeGoal,current,lastPassed=1,1,1,1,nil
+    local gx,gz=0,0
+    return {delete=function() end,sample=function(_,s)
+        local ref=frames[relevant]
+        local across,along=E.localPoint(s,ref)
+        local lookahead=math.min(p.lookahead+math.abs(across),2*p.lookahead)
+        local projected=E.point(ref.x,ref.z,ref.t,0,along)
+        for i=nextIx,math.max(nextIx,beforeGoal) do
+            local q=frames[math.min(i,n)]
+            local dx,dz=E.localPoint(s,q)
+            if dz>=0 and dx*dx+dz*dz<(4*(p.trackingRadius or p.radius))^2 then
+                lastPassed=math.min(i,n)
+                relevant=lastPassed;nextIx=math.min(n,relevant+1)
+                break
+            end
+        end
+        for i=relevant,n do
+            local a=frames[i]
+            local b=frames[i+1] or E.point(a.x,a.z,frames[n-1].t,0,lookahead)
+            local q1=math.sqrt((a.x-s.x)^2+(a.z-s.z)^2)
+            local q2=math.sqrt((b.x-s.x)^2+(b.z-s.z)^2)
+            if i==1 and i~=lastPassed and q1>=lookahead and q2>=lookahead then
+                gx,gz=frames[relevant].x,frames[relevant].z
+                current=math.max(current,relevant)
+                break
+            end
+            if q1<=lookahead and q2>=lookahead then
+                local length=math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)
+                if q1<0.0001 then q1=0.1 end -- same zero-distance handling as PPC
+                local cosine=(q2*q2-q1*q1-length*length)/(-2*length*q1)
+                local distance=q1*cosine+math.sqrt(q1*q1*(cosine*cosine-1)+lookahead*lookahead)
+                local goal=E.point(a.x,a.z,a.t,0,distance)
+                gx,gz=goal.x,goal.z;beforeGoal=i;current=math.max(current,math.min(n,i+1))
+                break
+            end
+            if i==relevant and q1>=lookahead and q2>=lookahead then
+                local distance=math.abs(across)<=lookahead and math.sqrt(lookahead*lookahead-across*across) or 0
+                local goal=E.point(projected.x,projected.z,ref.t,0,distance)
+                gx,gz=goal.x,goal.z;beforeGoal=i;current=math.max(current,math.min(n,i+1))
+                break
+            end
+        end
+        return current,gx,gz
+    end}
+end
+
 -- A spatial-step pursuit model predicts trailer off-tracking. It is a candidate
 -- filter, not GIANTS physics: execution checks live markers again before work.
 -- Explicit resumable state: FS25 removes Lua's coroutine library. Each update
 -- advances a bounded number of samples and retains the tracker between frames.
 function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEntry)
-    local tracker=p.newTracker and p.newTracker(path)
+    local tracker=p.newTracker and p.newTracker(path,not boundary)
     local function finish(result)
         if tracker then tracker:delete() end
         return result
@@ -314,7 +375,7 @@ function E.newSearch(p)
         if preferWorked and bi>3 then preferWorked=false;bi,fi,ei=1,1,1 end
         stage,bias,iterations='zero',0,0
     end
-    return {update=function(_,budget)
+    return {getProgress=function() return attempts end,update=function(_,budget)
         if initial then
             initial=false
             if not E.checkFootprint(p,p.start) then

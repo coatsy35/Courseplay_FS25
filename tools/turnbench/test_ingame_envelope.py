@@ -17,6 +17,7 @@ require('PurePursuitController')
 require('EnvelopeTurnPlanner')
 require('EnvelopeTurnGeometry')
 require('EnvelopeCourseTurn')
+require('EnvelopeStartRowOnly')
 productionTurningRadius = AIUtil.getTurningRadius
 -- FS25 does not expose this desktop Lua library. Keep it absent for ALL tests.
 coroutine=nil
@@ -44,11 +45,79 @@ function envelopeFixture(width,length,hitch,front,back,angle,rows,headland)
     p.contains=function(x,z) return z-slope*x <= headland*math.sqrt(1+slope*slope)-0.5 and
         x>=-200 and x<=200 and z>=-450 end
     p.dubins=EnvelopeTurnGeometry.analyticPath
-    p.newTracker=function(path) return EnvelopeTurnGeometry.tracker(p,path) end
+    p.newTracker=function(path,screening) return EnvelopeTurnGeometry.tracker(p,path,screening) end
     return p
 end
 ''')
         self.lua.execute(Path(__file__).with_name('ingame-envelope-fixture.lua').read_text())
+
+    def test_planar_screening_matches_production_ppc(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+local paths={
+    {{x=0,z=0},{x=0,z=5},{x=4,z=9},{x=8,z=9},{x=8,z=20}},
+    {{x=0,z=0},{x=0,z=0},{x=0,z=1},{x=1,z=1},{x=1,z=10}}}
+for _,side in ipairs({-1,1}) do
+    local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,25,side,50.4)
+    paths[#paths+1]=E.makePath(p,24,4,10.575,4,side*3)
+end
+for _,path in ipairs(paths) do
+    for _,offset in ipairs({0,1,8}) do
+        local p={start={x=path[1].x,z=path[1].z,t=0},lookahead=2.695,radius=9,trackingRadius=5.389}
+        local reference=EnvelopeTurnGeometry.tracker(p,path)
+        local screen=E.newPlanarTracker(p,path)
+        local states={{x=path[1].x+12,z=path[1].z-12,t=0}}
+        for i=1,#path-1 do
+            local a,b=path[i],path[i+1]
+            local steps=math.max(1,math.ceil(math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)*10))
+            for j=0,steps-1 do
+                local u=j/steps
+                states[#states+1]={x=a.x+(b.x-a.x)*u+offset*math.sin(i+u),
+                    z=a.z+(b.z-a.z)*u,t=0}
+            end
+        end
+        for _,s in ipairs(states) do
+            local a,x,z=reference:sample(s)
+            local b,u,v=screen:sample(s)
+            assert(a==b and math.abs(x-u)<1e-7 and math.abs(z-v)<1e-7,
+                string.format('PPC mismatch wp %s/%s, goal %.9f/%.9f',a,b,x-u,z-v))
+        end
+        reference:delete();screen:delete()
+        assert(not p.activeTracker)
+    end
+end
+''')
+
+    def test_v14_first_turn_screening_keeps_verified_path_with_fewer_nodes(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+local p=envelopeFixture(5.6,11.29,1.656,3.4,17.031,11.8,1,69.1)
+p.start={x=-158.595,z=-115.816,t=math.rad(-9.850),phi=math.rad(.250)}
+p.goal={x=-168.135,z=-121.280,t=0}
+p.hitchX=.024;p.hitchZ=-1.656;p.lookahead=2.695;p.trackingRadius=5.389;p.workedSide=1
+p.work={{x=-.099,z=-2.678,towed=true},{x=.048,z=-1.739,towed=true},
+    {x=-.099,z=-15.375,towed=true,rear=true},{x=.048,z=-15.375,towed=true,rear=true}}
+p.workCentreX=(p.work[1].x+p.work[2].x)/2+p.hitchX;p.footprint={}
+for _,m in ipairs(p.work) do p.footprint[#p.footprint+1]=m end
+for _,x in ipairs({-1.9,1.9}) do for _,z in ipairs({-2,4}) do p.footprint[#p.footprint+1]={x=x,z=z} end end
+-- Synthetic field for the portable regression; map-outline replay is separate.
+p.contains=function(x,z) return x>=-215 and x<=-110 and z>=-200 and z<=-70 end
+local createNode=CpUtil.createNode
+local nodes=0
+CpUtil.createNode=function(...) nodes=nodes+1;return createNode(...) end
+local fast=E.plan(p)
+local fastNodes=nodes;nodes=0
+p.newTracker=function(path) return EnvelopeTurnGeometry.tracker(p,path) end
+local reference=E.plan(p)
+CpUtil.createNode=createNode
+assert(fast.ok and reference.ok and fast.attempts==reference.attempts)
+assert(math.abs(fast.entryError-reference.entryError)<1e-8)
+assert(#fast.path==#reference.path and fastNodes<nodes/10)
+for i,q in ipairs(fast.path) do
+    assert(math.abs(q.x-reference.path[i].x)<1e-8 and math.abs(q.z-reference.path[i].z)<1e-8)
+end
+assert(fastNodes>0 and not p.activeTracker) -- final validation still uses PPC
+''')
 
     def test_pw_straight_pike_and_large_headland(self):
         for angle, headland in [(0,50.4),(25,50.4),(0,100.8)]:
@@ -187,7 +256,7 @@ assert(ready.ok and ready.usedTurnHint)
 f.turn.preparationDone=false
 f.turn:updatePreparation()
 local q=f.turn.preparationGeometry
-assert(q and q.activeTracker)
+assert(q and f.turn.preparationPlanner) -- planar screening has no scene nodes
 f.turn:release()
 assert(not q.activeTracker and not f.turn.preparationPlanner)
 ''')

@@ -74,7 +74,8 @@ end
 -- Use production PPC's segment/goal-point selection in the candidate predictor.
 -- A private direction node avoids moving any real vehicle during calculation.
 -- The proxy is deliberately tiny: no AI job, callbacks or implement commands.
-function G.tracker(p,path)
+function G.tracker(p,path,screening)
+    if screening then return E.newPlanarTracker(p,path) end
     local node=CpUtil.createNode('envelopePrediction',p.start.x,p.start.z,p.start.t)
     local proxy={maxTurningRadius=p.trackingRadius or p.radius,getName=function() return 'Envelope prediction' end,
         getAIDirectionNode=function() return node end,stopCurrentAIJob=function() end,
@@ -117,6 +118,44 @@ end
 function G.enabled(vehicle,context)
     local setting=vehicle:getCpSettings().envelopeAlignedTurns
     return setting and setting:getValue() and not context:isHeadlandCorner()
+end
+
+-- The tractor can already be beyond a short row when its trailing work edge
+-- reaches the start. CP's normal forward-waypoint hand-off can then initialise
+-- on/past the turn marker without emitting that marker's callback. Preserve
+-- the generated order and explicitly finish that row before starting its turn.
+function G.pendingRowTurn(course,entryIx,resumeIx)
+    for i=entryIx+1,math.min(resumeIx,course:getNumberOfWaypoints()-1) do
+        if course:isTurnStartAtIx(i) and not course:isOnHeadland(i) then return i end
+    end
+end
+
+-- Use neighbouring generated row endpoints to describe the same local entry
+-- edge as the row-turn planner. Pattern order is immaterial: choose the nearest
+-- endpoint across the row on the same named field/island boundary.
+function G.initialEntrySlope(course,ix)
+    local first=course:getWaypoint(ix)
+    if not first:isRowStart() then return 0 end
+    local x,_,z=first:getPosition()
+    local reference={x=x,z=z,t=course:getWaypointYRotation(ix)}
+    local boundary=first:getAtBoundaryId()
+    local best,slope=math.huge,0
+    for i=1,course:getNumberOfWaypoints() do
+        local wp=course:getWaypoint(i)
+        if i~=ix and (wp:isRowStart() or wp:isRowEnd()) and wp:getAtBoundaryId()==boundary then
+            -- The far end of a very short row can be nearer than the correct
+            -- neighbouring entry. Compare inward row directions as well, not
+            -- just distance (both ends usually share the same boundary ID).
+            local heading=wp:isRowEnd() and course:getWaypointYRotation(i-1)+math.pi or course:getWaypointYRotation(i)
+            local qx,_,qz=wp:getPosition()
+            local dx,dz=E.localPoint({x=qx,z=qz},reference)
+            local distance=dx*dx+dz*dz
+            if math.abs(E.wrap(heading-reference.t))<math.rad(30) and math.abs(dx)>0.5 and distance<best then
+                best,slope=distance,dz/dx
+            end
+        end
+    end
+    return slope
 end
 
 -- The first integration handles a rigid tractor and direct mounted tools, or
@@ -340,6 +379,7 @@ function G.capture(turn)
     local exit=G.pose(context.workEndNode)
     local dx,dz=E.localPoint(exit,p.goal)
     p.slope=math.abs(dx)>0.5 and dz/dx or 0
+    if turn.entrySlope~=nil then p.slope=turn.entrySlope end
     if math.abs(p.slope)>2 then return nil,'row endpoints do not define a supported pike' end
     -- This distance only seeds candidate placement. Every accepted body sample
     -- must also satisfy the actual polygon/density checks below. Retain the
@@ -375,7 +415,7 @@ function G.capture(turn)
     end
     p.workedSide=G.workedSide(turn)
     p.dubins=G.analyticPath
-    p.newTracker=function(path) return G.tracker(p,path) end
+    p.newTracker=function(path,screening) return G.tracker(p,path,screening) end
     return p
 end
 

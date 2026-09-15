@@ -3,12 +3,48 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.14**, packaged mod version **8.1.0.114**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.14` records identify it.
+Current test: **v0.15**, packaged mod version **8.1.0.115**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.15` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.15 addresses the evening v0.14 session on 15 September. The last
+recorded search was still calculating when the job ended; that session contains
+no selected envelope bulb or envelope no-path stop. The saved course's first
+row is only 3.09 m long. Stock start-row handling initialised on its turn marker,
+but the next waypoint callback advanced beyond it. The resulting search targeted
+the third row from the first row's heading. The envelope hand-off now explicitly
+preserves a short row's pending turn marker and uses CP's normal finish-row/raise
+phase before turning. It does not reorder or regenerate the course.
+
+Initial centre-row entries now retain CP's approach, including permitted reverse
+sections, but hold lowering until the measured working envelope is aligned with
+the original row. The same adapter handles the sequences supplied by up/down,
+skipped rows, lands, racetrack and spiral generation. Headland entries and
+unsupported equipment retain stock CP. An available local forward correction is
+validated after plough rotation. If that cannot fit, the adapter asks CP's normal
+pathfinder for another approach behind the original entry, using CP's existing
+reverse permission, collision checks and fruit setting. Two reposition attempts
+are permitted; neither pathfinder success nor the last waypoint bypasses the
+alignment gate. No reverse-only envelope solver or fixed 20 m approach is added.
+
+Candidate screening now uses a planar transcription of CP's pursuit calculation,
+avoiding scene-node creation during coarse samples. Every accepted candidate
+still passes the production PPC and full footprint/joint/entry validation.
+The recorded first-turn replay produced the same 312-trial path in approximately
+4.2 seconds rather than 18.4 seconds offline; this is not an in-game timing claim.
+Long searches now report candidate-count progress at five-second intervals.
+
+All 61 checks pass: 49 planner/runtime regressions, nine initial-entry tests and
+three packaging/syntax checks. The initial-entry fixture drives a mounted tool,
+6 m and 12 m drills and PW-style trailed geometry from an offset, angled approach,
+with finite acceleration and hydraulic delay. Tests also cover the short-row
+hand-off, reverse permission, original-row targeting, rotation timeout,
+cancellation and bounded failure. These use planar physics and mocked GIANTS
+interfaces; the v0.15 start, reverse repositioning and complete field still need
+confirmation in the game. CP/XML dimensions and entry tolerances are unchanged.
 
 Version 0.14 addresses the fresh v0.13 run stopped at 09:41:20 on 15 September.
 The first bulb took 318 trials and 83 seconds, then the plough rotated normally.

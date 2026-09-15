@@ -115,15 +115,15 @@ end
 -- and hydraulic delay. Only GIANTS' vehicle physics are replaced by a planar
 -- bicycle/passive-trailer update. This catches hand-off and early-stop bugs that
 -- checking a list of successful candidate waypoints cannot reveal.
-function driveEnvelopeLiveFixture(p)
+function driveEnvelopeLiveFixture(p,preparedFixture)
     local E=EnvelopeTurnPlanner
-    local f=makeEnvelopeLiveFixture(p)
+    local f=preparedFixture or makeEnvelopeLiveFixture(p)
     local t=f.turn
     if p.configureFixture then p.configureFixture(f) end
     t.geometry=assert(EnvelopeTurnGeometry.capture(t))
     local result=p.planFixture and p.planFixture(t.geometry) or EnvelopeTurnPlanner.plan(t.geometry)
     assert(result.ok,result.reason)
-    t.ppc=PurePursuitController(f.vehicle)
+    t.ppc=preparedFixture and t.ppc or PurePursuitController(f.vehicle)
     t.ppc:setShortLookaheadDistance()
     t.planner={update=function() return result end}
     function getTimeSec() return os.clock() end

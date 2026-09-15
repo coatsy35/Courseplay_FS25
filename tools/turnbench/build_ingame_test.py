@@ -72,7 +72,7 @@ def build(output):
             manifest = ET.fromstring(result.read('modDesc.xml'))
             assert manifest.findtext('title/en') == TEST_TITLE
             assert manifest.findtext('version') == MOD_VERSION
-            for name in ('EnvelopeTurnPlanner', 'EnvelopeTurnGeometry', 'EnvelopeCourseTurn'):
+            for name in ('EnvelopeTurnPlanner', 'EnvelopeTurnGeometry', 'EnvelopeCourseTurn', 'EnvelopeStartRowOnly'):
                 path = f'scripts/ai/turns/{name}.lua'
                 assert result.read(path) == (ROOT/path).read_bytes()
             for entry in manifest.findall('./extraSourceFiles/sourceFile'):
