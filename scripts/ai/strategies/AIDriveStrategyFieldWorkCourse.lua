@@ -763,7 +763,12 @@ function AIDriveStrategyFieldWorkCourse:setOffsetX()
 end
 
 function AIDriveStrategyFieldWorkCourse:calculateTightTurnOffset()
-    if self.state == self.states.WORKING or self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT then
+    if self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT and self.workStarter and self.workStarter.envelopeAlignment then
+        -- Envelope entry measures against the original working row. A changing
+        -- lateral compensation on its temporary approach moves that target and
+        -- can pull a long trailer away from the path being checked.
+        self.tightTurnOffset = 0
+    elseif self.state == self.states.WORKING or self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT then
         -- when rounding small islands or to start on a course with curves
         self.tightTurnOffset = AIUtil.calculateTightTurnOffset(self.vehicle, self.turningRadius, self.course,
                 self.tightTurnOffset)

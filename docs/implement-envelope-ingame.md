@@ -3,12 +3,41 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.15**, packaged mod version **8.1.0.115**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.15` records identify it.
+Current test: **v0.16**, packaged mod version **8.1.0.116**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.16` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.16 fixes the initial-entry recovery exposed by the 20:27 v0.15 log
+on 15 September. The first local approach could not align (about 1.66 m edge
+error). Two tractor-only CP pathfinder loops were then driven before their
+trailer entry was checked; the first returned with about 78 degrees of joint
+angle, and the second deviated about 10 m from its path. This was an entry and
+tracking failure, not evidence of insufficient headland depth.
+
+The initial CP approach is retained, including any permitted reverse sections.
+If its final/local correction cannot align, one complete recovery is planned
+using the same CP Dubins solver, trailer simulation and envelope controller as
+the row turns. The whole candidate must pass joint, footprint and entry checks
+before it moves. The envelope controller enforces the measured combination
+radius while driving it. Failed execution cannot launch another recovery loop
+or lower late. The original working row and CP/XML geometry remain unchanged.
+
+Initial envelope approaches are capped at 8 km/h and do not acquire CP's changing
+tight-turn lateral compensation. Ordinary CP starts and fieldwork keep their
+existing compensation. No tolerance was widened and no PW-specific radius was
+introduced. Recovery is forward-only; this does not add a reverse trailer solver.
+
+Regression coverage replays the v0.15 starting geometry on both sides through
+the actual planner, pursuit controller and lowering state machine, with finite
+acceleration and hydraulic delay. Both must complete on the original row with
+one lowering command. The test field is synthetic: the log did not capture the
+complete live field polygon. Mounted, 6 m/12 m drill, plough, original short-row
+order, cancellation, bounded failure and packaging regressions are also checked.
+All 63 offline checks pass (49 planner/runtime, 11 initial-entry and three
+packaging/syntax checks). In-game confirmation of v0.16 is still required.
 
 Version 0.15 addresses the evening v0.14 session on 15 September. The last
 recorded search was still calculating when the job ended; that session contains
@@ -19,7 +48,7 @@ the third row from the first row's heading. The envelope hand-off now explicitly
 preserves a short row's pending turn marker and uses CP's normal finish-row/raise
 phase before turning. It does not reorder or regenerate the course.
 
-Initial centre-row entries now retain CP's approach, including permitted reverse
+In v0.15, initial centre-row entries retained CP's approach, including permitted reverse
 sections, but hold lowering until the measured working envelope is aligned with
 the original row. The same adapter handles the sequences supplied by up/down,
 skipped rows, lands, racetrack and spiral generation. Headland entries and
@@ -37,7 +66,7 @@ The recorded first-turn replay produced the same 312-trial path in approximately
 4.2 seconds rather than 18.4 seconds offline; this is not an in-game timing claim.
 Long searches now report candidate-count progress at five-second intervals.
 
-All 61 checks pass: 49 planner/runtime regressions, nine initial-entry tests and
+The v0.15 build passed 61 checks: 49 planner/runtime regressions, nine initial-entry tests and
 three packaging/syntax checks. The initial-entry fixture drives a mounted tool,
 6 m and 12 m drills and PW-style trailed geometry from an offset, angled approach,
 with finite acceleration and hydraulic delay. Tests also cover the short-row

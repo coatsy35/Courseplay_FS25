@@ -114,37 +114,40 @@ assert(f.object.lowerCount==0 and g.turnContext.turnEndWpIx==1)
 t:release();assert(not g.planner)
 ''')
 
-    def test_reposition_preserves_cp_reverse_permission_and_rechecks_entry(self):
+    def test_recovery_is_checked_before_driving_and_does_not_replace_original_row(self):
         self.lua.execute('''
-for _,reverse in ipairs({false,true}) do
-    local f=initialFixture();local t=f.starter;local s=f.strategy
-    s.getAllowReversePathfinding=function() return reverse end
-    local requested
-    PathfinderContext=function(vehicle)
-        assert(vehicle==f.vehicle)
-        return {allowReverse=function(self,v) self.reverse=v;return self end,
-            mustBeAccurate=function(self,v) self.accurate=v;return self end,
-            ignoreFruit=function(self,v) self.ignore=v;return self end}
-    end
-    PathfinderController=function(vehicle,radius)
-        assert(vehicle==f.vehicle and radius==9)
-        return {registerListeners=function(self,o,fn) self.owner=o;self.done=fn end,
-            findPathToNode=function(self,context,node,x,z,retries)
-                assert(context.reverse==reverse and context.accurate and not context.ignore)
-                assert(node==t.turnContext.workStartNode and x==0 and z<11 and retries==0)
-                requested=self;return true
-            end}
-    end
-    t.state=t.states.APPROACHING_ROW;t:getDriveData(16)
-    local g=t.guard;g.geometry={radius=9,length=9,front=-11}
-    g:stopWithReason('test local correction unavailable')
-    assert(requested==t.entryPathfinder and not t.guard and t.repositions==1 and not f.vehicle.stopped)
-    local route=Course(f.vehicle,{{x=0,z=-30,rev=true},{x=0,z=-35,rev=true},{x=0,z=-10}},true)
-    requested.done(t,requested,true,route)
-    assert(not t.entryPathfinder and t.turnCourse==route and f.object.lowerCount==0)
-    t:onLastWaypoint();assert(s.resumed==0)
-    t:release();requested.done(t,requested,false,nil);assert(not f.vehicle.stopped)
+local f=initialFixture();local t=f.starter;local s=f.strategy
+t.state=t.states.APPROACHING_ROW;t:getDriveData(16)
+local g=t.guard;g.geometry={radius=9,length=9,front=-11}
+local checks=0
+g.startPlanning=function(self,path)
+    assert(not path and s.aiTurn==g and s.state==s.states.TURNING)
+    assert(self.turnContext.turnEndWpIx==1)
+    checks=checks+1
 end
+PathfinderController=function() error('unchecked tractor-only recovery') end
+g:stopWithReason('local correction unavailable')
+assert(checks==1 and t.recoveryAttempted and not f.vehicle.stopped and f.object.lowerCount==0)
+g:stopWithReason('complete recovery cannot fit')
+assert(checks==1 and f.vehicle.stopped and f.object.lowerCount==0)
+''')
+
+    def test_initial_approach_uses_stable_offset_and_turn_speed_only_for_envelope(self):
+        self.load_strategy_method('calculateTightTurnOffset')
+        self.lua.execute('''
+local f=initialFixture();local s=f.strategy
+s.tightTurnOffset=4.6
+AIUtil.calculateTightTurnOffset=function() return 4.6 end
+AIDriveStrategyFieldWorkCourse.calculateTightTurnOffset(s)
+assert(s.tightTurnOffset==0)
+s.settings.turnSpeed.getValue=function() return 20 end
+assert(f.starter:getForwardSpeed()==8)
+s.workStarter={}
+AIDriveStrategyFieldWorkCourse.calculateTightTurnOffset(s)
+assert(s.tightTurnOffset==4.6)
+s.state=s.states.WORKING
+AIDriveStrategyFieldWorkCourse.calculateTightTurnOffset(s)
+assert(s.tightTurnOffset==4.6)
 ''')
 
     def test_initial_entry_failure_and_rotation_timeout_stop_without_lowering(self):
@@ -156,8 +159,8 @@ t.state=t.states.APPROACHING_ROW
 g_currentMission.time=100;t:getDriveData(16)
 g_currentMission.time=30101;t:getDriveData(16)
 assert(f.vehicle.stopped and f.object.lowerCount==0 and t.cancelled)
-local other=initialFixture();local p={};other.starter.entryPathfinder=p
-other.starter:onRepositionFinished(p,false,nil)
+local other=initialFixture()
+other.starter:fail('test initial failure')
 assert(other.vehicle.stopped and other.object.lowerCount==0)
 ''')
 
@@ -188,6 +191,45 @@ for _,dimensions in ipairs({{6,0,0,3,4},{6,9,2,11,12},{12,9,2,11,12},{5.6,11.1,1
 end
 ''')
 
+    def test_v015_logged_start_recovers_and_lowers_on_original_row(self):
+        self.lua.execute('''
+-- 15 September 20:27:10: translated to row origin, mirrored to cover both
+-- sides. Real measured pivot/markers/headings; synthetic field and planar
+-- physics, since the live log does not include the complete field polygon.
+for _,side in ipairs({1,-1}) do
+    local p=envelopeFixture(5.6,11.09,1.637,3.783,17.748,14.3,1,78.8)
+    p.hitchX=.044*side;p.axleOffsetX=.02*side;p.lookahead=2.695;p.vehicleRadius=5.389
+    p.work={{x=-3.267*side,z=-2.146,towed=true},{x=2.284*side,z=-2.461,towed=true},
+        {x=-3.267*side,z=-16.111,towed=true,rear=true},{x=2.284*side,z=-16.111,towed=true,rear=true}}
+    p.workCentreX=(-3.267+2.284)/2*side+p.hitchX
+    local f=initialFixture(p);local t=f.starter
+    p.start={x=-.103*side,z=-6.643,t=math.rad(-11.354)*side,phi=math.rad(12.996)*side}
+    f:setPose(p.start)
+    t.state=t.states.APPROACHING_ROW;t:getDriveData(16)
+    local g=assert(t.guard);f.turn=g
+    g.entrySlope=math.tan(math.rad(14.3))*side
+    g.headlandSeed=78.8
+    g.ppc.shortLookaheadDistance=2.695
+    PathfinderController=function() error('must not drive an unchecked recovery loop') end
+    p.planFixture=function()
+        g:prepare()
+        for i=1,10000 do
+            g:updatePlanner()
+            if g.result then
+                assert(t.recoveryAttempted,'fixture must require the full recovery')
+                assert(not g.result.retainedApproach and not g.result.repairedApproach)
+                assert(g.result.entryError<.1 and g.turnContext.turnEndWpIx==1)
+                return g.result
+            end
+            assert(not f.vehicle.stopped and g.planner,'initial recovery failed')
+        end
+        error('initial recovery did not finish')
+    end
+    driveEnvelopeLiveFixture(p,f)
+    assert(f.strategy.resumed==1 and f.object.lowerCount==1 and not f.vehicle.stopped)
+end
+''')
+
     def test_initial_guard_keeps_headlands_and_unsupported_equipment_on_cp(self):
         self.load_strategy_method('createRowStarter')
         self.lua.execute('''
@@ -203,14 +245,15 @@ assert(AIDriveStrategyFieldWorkCourse.createRowStarter(s,f.context,route()).name
 assert(s.raised==1)
 ''')
 
-    def test_initial_reposition_attempts_are_bounded_and_never_retry_after_lowering(self):
+    def test_initial_recovery_never_retries_after_execution_or_lowering(self):
         self.lua.execute('''
 for _,lowered in ipairs({false,true}) do
     local f=initialFixture();local t=f.starter
     t.state=t.states.APPROACHING_ROW;t:getDriveData(16)
     local g=t.guard
-    t.repositions=lowered and 0 or 2;g.lowerRequested=lowered
-    t.reposition=function() error('unbounded or post-lowering retry') end
+    g.result=lowered and nil or {};g.lowerRequested=lowered
+    g.geometry={}
+    g.startPlanning=function() error('post-execution or post-lowering retry') end
     g:stopWithReason('test exhausted local entry')
     assert(f.vehicle.stopped and f.object.lowerCount==0)
 end

@@ -1,7 +1,8 @@
 -- Initial entry keeps CP's route (including its normal reverse manoeuvres).
 -- Only the final, forward working entry is owned by the envelope controller.
--- Repositioning uses CP's pathfinder with its existing reverse/collision rules;
--- no pathfinder success is treated as proof that the implement is aligned.
+-- If that approach cannot align, the envelope planner checks a complete forward
+-- recovery before driving it. A tractor-only pathfinder goal behind the vehicle
+-- is not proof that the trailer can follow the resulting loop into the row.
 EnvelopeStartRowOnly = CpObject(StartRowOnly)
 
 function EnvelopeStartRowOnly:init(vehicle,strategy,ppc,context,course)
@@ -9,7 +10,8 @@ function EnvelopeStartRowOnly:init(vehicle,strategy,ppc,context,course)
     self.name='EnvelopeStartRowOnly'
     self.fieldWorkCourse=strategy.fieldWorkCourse
     self.entryIx=context.turnEndWpIx
-    self.repositions=0
+    self.envelopeAlignment=true
+    self.recoveryAttempted=false
     self:holdLowering()
 end
 
@@ -22,17 +24,10 @@ end
 function EnvelopeStartRowOnly:release()
     self.cancelled=true
     if self.guard then self.guard:release() end
-    -- The private controller is no longer updated after cancellation. Avoid
-    -- touching the drive strategy's normal pathfinder or its callbacks.
-    self.entryPathfinder=nil
 end
 
 function EnvelopeStartRowOnly:getDriveData(dt)
     if self.cancelled then return nil,nil,nil,0 end
-    if self.entryPathfinder then
-        self.entryPathfinder:update(dt or 0)
-        return nil,nil,nil,0
-    end
     if self.guard then return nil,nil,nil,0 end
     local reversing=self.ppc:isReversing()
     self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(),reversing)
@@ -113,8 +108,15 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
         end
     end
     guard.stopWithReason=function(g,reason)
-        if not g.lowerRequested and self.repositions<2 then
-            self:reposition(g,reason)
+        if g.geometry and not g.result and not g.lowerRequested and not self.recoveryAttempted then
+            -- The original/local approach is infeasible. Reuse the row-turn
+            -- planner from this stopped pose, keeping the original entry and
+            -- checking the complete trailer motion, footprint and lowering.
+            -- Execute through EnvelopeCourseTurn too: stock StartRowOnly does
+            -- not enforce the combination's steering radius while tracking.
+            self.recoveryAttempted=true
+            g:log('initial approach cannot align: %s; checking a complete envelope recovery to waypoint %d',reason,self.entryIx)
+            g:startPlanning()
         else EnvelopeCourseTurn.stopWithReason(g,reason) end
     end
     guard.state=guard.states.ENVELOPE_PREPARING
@@ -124,42 +126,10 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
     strategy.state=strategy.states.TURNING
 end
 
-function EnvelopeStartRowOnly:reposition(guard,reason)
-    local p=guard.geometry
-    if not p then EnvelopeCourseTurn.stopWithReason(guard,reason);return end
-    self.repositions=self.repositions+1
-    guard:log('initial entry needs repositioning: %s; requesting stock CP path, attempt %d',reason,self.repositions)
-    guard:release()
-    self.ppc:restorePreviouslyRegisteredListeners()
-    self.driveStrategy.proximityController:unregisterBlockingObjectListener()
-    self.driveStrategy:raiseImplements()
-    self.driveStrategy.aiTurn=nil
-    self.driveStrategy.state=self.driveStrategy.states.DRIVING_TO_WORK_START_WAYPOINT
-    self.guard=nil
-    local context=PathfinderContext(self.vehicle)
-        :allowReverse(self.driveStrategy:getAllowReversePathfinding())
-        :mustBeAccurate(true):ignoreFruit(not self.settings.avoidFruit:getValue())
-    local controller=PathfinderController(self.vehicle,p.radius)
-    self.entryPathfinder=controller
-    controller:registerListeners(self,self.onRepositionFinished)
-    -- Ask CP to reach behind the entry, then approach forwards. The distance
-    -- scales with the measured rig and increases once on retry; it is not a
-    -- fixed 20 m straight or a change to headland rows.
-    local lead=math.max(p.length or 0,p.radius)*(1+self.repositions/2)
-    if not controller:findPathToNode(context,self.turnContext.workStartNode,0,-p.front-lead,0) then
-        self:fail('CP could not start initial-entry pathfinding')
-    end
-end
-
-function EnvelopeStartRowOnly:onRepositionFinished(controller,success,course)
-    if self.cancelled or controller~=self.entryPathfinder then return end
-    self.entryPathfinder=nil
-    if not success or not course then self:fail('CP could not reposition for the initial entry');return end
-    course:adjustForTowedImplements(2)
-    StartRowOnly.init(self,self.vehicle,self.driveStrategy,self.ppc,self.turnContext,course)
-    self.rotationWaitStarted,self.reachedEnd=nil,nil
-    self:holdLowering()
-    self.driveStrategy:startCourse(self:getCourse(),1)
+function EnvelopeStartRowOnly:getForwardSpeed()
+    -- A long trailed implement must not take the initial approach at transport
+    -- speed while its final working geometry is still being checked.
+    return math.min(StartRowOnly.getForwardSpeed(self),8)
 end
 
 function EnvelopeStartRowOnly:fail(reason)
