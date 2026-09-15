@@ -9,7 +9,7 @@ C.tagOptions={steering={'unspecified','front-wheel-steer','four-wheel-steer','ar
     runningGear={'unspecified','wheeled','twin-track','four-track','not-applicable'},
     implement={'unspecified','mounted','trailed','long-trailed','long-narrow-trailed','wide-short-trailed','cart','not-applicable'},
     pivots={'unspecified','single-pivot','multiple-pivots','not-applicable'}}
-C.labels={'unspecified','straight-raised','straight-lowered','plough-A-raised','plough-A-lowered',
+C.labels={'automatic','straight-raised','straight-lowered','plough-A-raised','plough-A-lowered',
           'plough-B-raised','plough-B-lowered','left-turn','right-turn','headland-entry','headland-exit'}
 C.bindings={
     {'VGC_PANEL','Toggle capture panel','togglePanel'},
@@ -64,7 +64,7 @@ function C:loadMap()
     self:registerInputEvents()
     g_inputBinding:endActionEventsModification()
     self.screen=VGCCaptureScreen.new(self)
-    self:notify('Ready. Open Capture: show panel, or use vgcPanel. Labels are optional.')
+    self:notify('Ready. Geometry and machine state are read automatically.')
     self.visible=false
 end
 
@@ -196,6 +196,7 @@ function C:toggleRecord()
         local path
         file,path=self:newFile('motion','.jsonl')
         fileOperation(file,'write',G.json({schema='fs25-geometry-motion',schemaVersion=1,type='header',members=members,
+            scope='current-vehicle-and-attached-tools',selectedInstance=math.min(self.selected,#objects),
             label=self.labels[self.labelIndex],sampleIntervalMs=100,
             note='Time-stamped observations, not certified drawbar clearance limits.'})..'\n')
         self.recording={file=file,path=path,root=root,objects=objects,started=self.clock,last=self.clock-100,samples=0}
@@ -204,7 +205,7 @@ function C:toggleRecord()
         if file then pcall(file.close,file) end
         return self:notify('Could not start recording: '..tostring(err))
     end
-    return self:notify('Recording at up to 10 Hz. Drive normally; press Stop recording when finished. Maximum 10 minutes.')
+    return self:notify('Recording this vehicle and attached tools. Drive manually or with CP, then stop recording.')
 end
 
 function C:sample()
@@ -230,9 +231,10 @@ function C:update(dt)
     self.clock=self.clock+dt
     local root=self:vehicle()
     if root~=self.lastVehicle then
-        if self.screen then self.screen:setPointer(false) end
+        if self.screen then self.screen:onVehicleChanged() end
         self.selected=1; self.lastVehicle=root
     end
+    if self.screen then self.screen:update() end
     local r=self.recording
     if not r then return end
     if root~=r.root then self:stopRecording('vehicle changed'); return end

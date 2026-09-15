@@ -4,7 +4,22 @@ VGCCaptureScreen={}
 VGCCaptureScreen.__index=VGCCaptureScreen
 
 function VGCCaptureScreen.new(capture)
-    return setmetatable({capture=capture,x=.025,y=.23,w=.36,h=.51,buttons={}},VGCCaptureScreen)
+    return setmetatable({capture=capture,x=.025,y=.36,w=.28,h=.30,buttons={}},VGCCaptureScreen)
+end
+
+-- Tab rebuilds the vehicle input context and may reset the mouse cursor.
+-- Restore the OLD cameras, cancel any held click/drag, then bind pointer
+-- interaction to the NEW vehicle. Never leave a visible but dead panel.
+function VGCCaptureScreen:onVehicleChanged()
+    local interactive=self.isOpen and self.pointerOwned
+    self:setPointer(false)
+    self.drag,self.pressed=nil,nil
+    if interactive then self:setPointer(true) end
+end
+
+function VGCCaptureScreen:update()
+    if self.isOpen and self.pointerOwned and not g_gui:getIsGuiVisible() and
+            not g_inputBinding:getShowMouseCursor() then self:setPointer(true) end
 end
 
 function VGCCaptureScreen:setPointer(enabled,restorePrevious)
@@ -45,51 +60,36 @@ function VGCCaptureScreen:close()
 end
 
 function VGCCaptureScreen:layout()
-    self.h=self.detailsExpanded and .69 or .51
-    self.w=math.min(.6,.36*(16/9)/(g_screenAspectRatio or 16/9))
+    self.h=.30
+    self.w=math.min(.6,.28*(16/9)/(g_screenAspectRatio or 16/9))
     self.x=math.max(0,math.min(1-self.w,self.x))
     self.y=math.max(0,math.min(1-self.h,self.y))
     local c=self.capture
     local object=c:selection()
-    local tags=object and c:tags(object) or {}
     self.buttons={}
     local function button(id,text,x,y,w,h,action,disabled)
         self.buttons[#self.buttons+1]={id=id,text=text,x=x,y=y,w=w,h=h,action=action,disabled=disabled}
     end
     local top=self.y+self.h
     button('close','X',self.x+self.w-.032,top-.036,.028,.031,function() self:close() end)
-    local y=top-.085
+    local y=top-.079
     local function selector(id,text,action,disabled)
         button(id..'-previous','<',self.x+.012,y,.028,.034,function() action(-1) end,disabled)
         button(id,text..'  >',self.x+.045,y,self.w-.057,.034,function() action(1) end,disabled)
-        y=y-.045
+        y=y-.042
     end
     local count=#VGCGeometry.objects(c:vehicle())
     selector('machine',object and VGCGeometry.identity(object).name or 'Enter a tractor',function(step)
         c.selected=((c.selected-1+step)%math.max(1,count))+1
     end,c.recording~=nil or not object)
-    local names={steering='Steering',runningGear='Wheels / tracks',implement='Implement',pivots='Pivots'}
-    button('labels',self.detailsExpanded and 'Optional labels: hide' or 'Optional labels: show',
-        self.x+.012,y,self.w-.024,.034,function() self.detailsExpanded=not self.detailsExpanded end)
-    y=y-.04
-    if self.detailsExpanded then
-        for _,field in ipairs(c.tagFields) do
-            selector(field,names[field]..': '..c.tagOptions[field][tags[field] or 1],
-                function(step) c:cycleTag(field,step) end,c.recording~=nil or not object)
-        end
-    end
-    selector('state','State label: '..c.labels[c.labelIndex],function(step)
-        c.labelIndex=((c.labelIndex-1+step)%#c.labels)+1
-    end,c.recording~=nil)
-    self.noteY=y+.013
-    y=y-.037
-    button('capture','Save selected machine',self.x+.012,y,self.w-.024,.036,function() c:capture() end,not object)
-    y=y-.046
-    button('record',c.recording and 'STOP RECORDING' or 'Start recording all machines',self.x+.012,y,self.w-.024,.036,
+    button('capture','Save dimensions',self.x+.012,y,self.w-.024,.033,function() c:capture() end,not object)
+    y=y-.043
+    button('record',c.recording and 'Stop recording' or 'Start recording',self.x+.012,y,self.w-.024,.033,
         function() c:toggleRecord() end,not object and not c.recording)
-    y=y-.046
-    button('drive','Drive / camera (keep panel)',self.x+.012,y,self.w-.024,.036,function() self:setPointer(false) end)
-    self.statusY=y-.028
+    self.scopeY=y-.018
+    y=y-.057
+    button('drive','Drive / camera',self.x+.012,y,self.w-.024,.030,function() self:setPointer(false) end)
+    self.statusY=y-.024
 end
 
 local function inside(b,x,y)
@@ -137,7 +137,7 @@ function VGCCaptureScreen:draw()
     drawFilledRect(self.x,self.y+self.h-.04,self.w,.04,.1,.35,.23,1)
     setTextAlignment(RenderText.ALIGN_LEFT);setTextColor(1,1,1,1)
     setTextBold(true)
-    renderText(self.x+.012,self.y+self.h-.028,.016,'GEOMETRY CAPTURE v0.3 - drag title')
+    renderText(self.x+.012,self.y+self.h-.028,.015,'GEOMETRY CAPTURE v0.4 - drag')
     setTextBold(false)
     for _,b in ipairs(self.buttons) do
         local hover=self.mouseX and inside(b,self.mouseX,self.mouseY)
@@ -149,14 +149,17 @@ function VGCCaptureScreen:draw()
         renderText(b.x+.006,b.y+.009,.014,text)
     end
     setTextColor(.8,.86,.82,1)
-    renderText(self.x+.012,self.noteY,.012,'Labels optional; geometry and all attachments are captured.')
+    renderText(self.x+.012,self.scopeY,.012,'Recording: current vehicle + attached tools')
     local status=self.capture.recording and string.format('Recording: %d samples / %.1f s',
         self.capture.recording.samples,(self.capture.clock-self.capture.recording.started)/1000) or 'Ready'
+    if not self.pointerOwned then status='Driving - Capture shortcut restores buttons' end
     renderText(self.x+.012,self.statusY,.013,status)
-    local help=g_inputBinding:getShowMouseCursor() and 'Keys still drive / start CP. Drive / camera releases the mouse.'
-        or 'Driving mode. Use Capture: show panel to click buttons again.'
-    setTextWrapWidth(self.w-.024)
-    renderText(self.x+.012,self.statusY-.023,.012,help)
-    renderText(self.x+.012,self.y+.045,.012,(self.capture.message or ''):sub(1,190))
+    -- Keep confirmations to one line in the compact HUD. Full errors and
+    -- filenames are still printed in log.txt, never silently discarded.
+    local message=self.capture.message or ''
+    if message:sub(1,7)=='Saved: ' then message='Dimensions saved; state captured automatically.' end
+    if message:sub(1,15)=='Recording saved' then message='Recording saved.' end
+    while #message>4 and getTextWidth(.012,message)>self.w-.024 do message=message:sub(1,-5)..'...' end
+    renderText(self.x+.012,self.y+.011,.012,message)
     setTextWrapWidth(0);setTextColor(1,1,1,1);setTextBold(false)
 end

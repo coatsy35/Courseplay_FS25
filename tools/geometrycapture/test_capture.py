@@ -242,17 +242,19 @@ PlayerInputComponent.registerGlobalPlayerActionEvents()
 assert(next(g_inputBinding.actions)==nil)
 ''')
 
-    def test_hud_buttons_capture_and_record_with_independent_optional_labels(self):
+    def test_compact_hud_reads_state_without_manual_questions(self):
         self.lua.execute('''
 local c=VehicleGeometryCapture
 c:togglePanel()
 local s=c.screen
 assert(s.isOpen and g_inputBinding:getShowMouseCursor())
-clickCaptureButton('labels')
-clickCaptureButton('steering');clickCaptureButton('runningGear');clickCaptureButton('pivots')
-assert(c:tags(root).steering==2 and c:tags(root).runningGear==2 and c:tags(root).pivots==2)
-clickCaptureButton('machine');clickCaptureButton('implement');clickCaptureButton('state')
-assert(c:selection()==tool and c:tags(tool).implement==2 and c.labelIndex==2)
+clickCaptureButton('machine')
+assert(c:selection()==tool and c.labelIndex==1)
+s:layout();assert(s.w*s.h<=.36*.51*.5)
+for _,b in ipairs(s.buttons) do
+    assert(b.id~='labels' and b.id~='state' and b.id~='steering')
+    if b.id=='record' then assert(b.text=='Start recording') end
+end
 clickCaptureButton('capture');clickCaptureButton('record')
 assert(c.recording)
 clickCaptureButton('machine');assert(c.selected==2)
@@ -263,6 +265,58 @@ assert(not c.recording and s.isOpen)
 ''')
         self.assertEqual(len(list(self.folder.glob('*.json'))),3)
         self.assertEqual(len(list(self.folder.glob('*.jsonl'))),1)
+        captures=[json.loads(p.read_text()) for p in self.folder.glob('*.json')]
+        self.assertTrue(all(p['label']=='automatic' for p in captures))
+        tool_capture=next(p for p in captures if p['identity']['name']=='PW 100-12')
+        self.assertIs(tool_capture['state']['lowered'],False)
+
+    def test_tab_transfers_pointer_and_cameras_and_buttons_remain_live(self):
+        self.lua.execute('''
+local c=VehicleGeometryCapture;c:togglePanel();local screen=c.screen
+local original=root
+local second={rootNode={x=50,z=60,t=0},configFileName='second.xml',
+    spec_enterable={cameras={{isRotatable=true},{isRotatable=false}}}}
+function second:getName() return 'Second tractor' end
+-- Click-down on the old vehicle must not activate on the next one.
+screen:layout();screen.pressed='record';screen.drag={x=0,y=0}
+root=second;g_inputBinding.cursor=false
+PlayerInputComponent.registerGlobalPlayerActionEvents();c:update(16)
+assert(screen.isOpen and screen.pointerOwned and g_inputBinding.cursor)
+assert(original.spec_enterable.cameras[1].isRotatable)
+assert(not original.spec_enterable.cameras[2].isRotatable)
+assert(not second.spec_enterable.cameras[1].isRotatable)
+assert(not screen.drag and not screen.pressed and c.selected==1)
+-- A later reset of the game input context also recovers, without a toggle.
+g_inputBinding.cursor=false;c:update(16);assert(g_inputBinding.cursor)
+clickCaptureButton('capture');clickCaptureButton('record');assert(c.recording.root==second)
+c:update(100);clickCaptureButton('record');assert(not c.recording)
+-- Tab can pass through a frame with no vehicle.
+root=nil;c:update(16);c:draw();assert(screen.isOpen and g_inputBinding.cursor)
+root=original;c:update(16);clickCaptureButton('capture')
+clickCaptureButton('drive');root=second;c:update(16)
+assert(not screen.pointerOwned and not g_inputBinding.cursor) -- retain driving mode
+c:togglePanel();clickCaptureButton('close')
+assert(second.spec_enterable.cameras[1].isRotatable)
+assert(not second.spec_enterable.cameras[2].isRotatable)
+''')
+        profiles=[json.loads(p.read_text()) for p in self.folder.glob('*.json')]
+        self.assertTrue(any(p['identity']['model']=='second.xml' for p in profiles))
+
+    def test_tab_finishes_old_recording_without_recording_other_farm_vehicles(self):
+        self.lua.execute('''
+local c=VehicleGeometryCapture;c:togglePanel();clickCaptureButton('record');c:update(100)
+local original=root
+local other={rootNode={x=50,z=60,t=0},configFileName='unrelated.xml'}
+g_currentMission={vehicles={original,tool,other}} -- must not be enumerated
+root=other;c:update(16)
+assert(not c.recording and c.screen.isOpen and g_inputBinding.cursor)
+clickCaptureButton('record');assert(c.recording.root==other and #c.recording.objects==1)
+c:update(100);clickCaptureButton('record')
+''')
+        recordings=[[json.loads(line) for line in p.read_text().splitlines()] for p in self.folder.glob('*.jsonl')]
+        original=next(r for r in recordings if len(r[0]['members'])==2)
+        self.assertEqual(original[-1]['reason'],'vehicle changed')
+        self.assertEqual(original[0]['scope'],'current-vehicle-and-attached-tools')
 
     def test_hud_drag_camera_release_and_wheel_passthrough(self):
         self.lua.execute('''

@@ -3,12 +3,15 @@
 Standalone FS25 development mod. Captures independent, reusable machine geometry and optional
 movement recordings. Works from loaded vehicles, including built-in machines. Courseplay is
 optional; when accessible, its effective radius and per-machine override are included as contextual
-observations. Version **0.3.0.0** replaces the modal menu with a draggable HUD and fixes
-the false file-close failure which prevented movement recording. GIANTS' file wrapper
-can return no success value; explicit errors still fail and are reported. The HUD never
-opens a GUI dialog or changes the driving input context. Offline tests cover file I/O,
-buttons, dragging, cursor/camera restoration and input registration; in-game verification
-of rendering and interaction with other mods is still required.
+observations. Version **0.4.0.0** fixes the visible-but-unresponsive panel after Tab:
+pointer ownership follows the current vehicle, restores the previous cameras and recovers
+when the vehicle input context resets the cursor. Recording the previous combination
+stops and saves on vehicle change; it never silently starts recording another tractor.
+The draggable panel occupies 46% of its previous area. Manual category/state questions
+are removed; lift, fold, steering and plough states are already read automatically.
+The HUD never opens a GUI dialog or changes the driving input context. **21 offline
+checks pass**, including vehicle switching, recording scope, file I/O, dragging and
+camera restoration. Actual FS25 rendering/input interaction still needs verification.
 
 ## Install and first PW 100-12 capture
 
@@ -20,30 +23,28 @@ of rendering and interaction with other mods is still required.
    New installations default to **left Ctrl + left Shift + G** to avoid Google Drive.
    Existing custom bindings are retained (including Ctrl + [).
 4. Select the PW 100-12 with the **Machine** selector. This selects the capture target only.
-5. Under **Optional labels**, optionally choose **long-narrow-trailed** under **Implement**. Labels are independent:
-   steering, wheels/tracks, implement type and pivots can all be specified for one machine.
-   Leave them **unspecified** if unsure; geometry is still captured automatically. Labels never affect driving.
-6. Set the actual plough state yourself. Select `plough-A-raised` in **State / manoeuvre label**,
-   then click **Save geometry**. Repeat for A lowered, B raised and B lowered.
-   A/B are your labels for the two working orientations; wait for each animation to finish.
-7. Select the tractor and optionally label its steering and running gear. Capture it separately,
-   straight and stationary. For a Quadtrac, articulated steering and four-track are separate labels;
-   the long-trailed label belongs to the attached drill. Multiple-pivots can coexist with either.
-8. For a movement test, click **Start recording all machines**. No labels are required.
+5. Click **Save dimensions**. This saves the selected machine's dimensions, joints and
+   current physical state. No movement or answers to category/state questions are needed.
+   Raising, lowering or rotating can change work-marker positions; save again after a
+   different physical state settles if comparing those positions. The file records the state.
+6. For a movement test, click **Start recording**. This records only the current tractor
+   and its attached tools/cart, not unrelated vehicles elsewhere on the farm.
    Drive with the normal keys or start CP while the panel stays open. Click **Drive / camera**
    to return mouse control to the camera without hiding the panel. Use **Capture: show panel**
-   again to restore the pointer, then click **STOP RECORDING**.
+   again to restore the pointer, then click **Stop recording**.
    Starting a recording saves separate geometry files for all attached machines automatically.
-9. Drag the green title bar to move the panel. **X** hides it without stopping recording.
+7. Drag the green title bar to move the panel. **X** hides it without stopping recording.
    The wheel and right-click retain their game bindings; pointer mode temporarily prevents
    camera rotation while clicking or dragging. Drive / camera restores the original camera flags.
 
-Use an ordinary CP turn for the first recording. There is no need to force the tractor into a drawbar
+Either a manual or an ordinary CP turn is suitable for movement recording. CP debug output
+does not replace the sampled wheel/joint/work-marker data in these files. There is no need to force the tractor into a drawbar
 collision or hold it against a joint stop. The recorder does not operate the machine for you.
 
 All shortcuts are listed as **Capture:** actions in the game's Controls settings and can be rebound.
 Shortcuts are optional; all capture operations are available from the panel. Console alternatives:
-`vgcPanel`, `vgcNext`, `vgcClass`, `vgcLabel`, `vgcCapture`, `vgcRecord`.
+`vgcPanel`, `vgcNext`, `vgcCapture`, `vgcRecord`. Legacy `vgcClass`/`vgcLabel` commands
+and their old bindings remain compatible but are unnecessary and absent from the panel.
 
 ## Files
 
@@ -51,7 +52,7 @@ Files are written below the game's user profile:
 
 `modSettings/VehicleGeometryCapture/`
 
-Each `.json` is one machine, selected configuration and labelled state. File names include model,
+Each `.json` is one machine, selected configuration and automatically read state. File names include model,
 identity hash, state label, timestamp and a collision-checked suffix. Captures are never overwritten.
 The identity excludes the tractor/implement pairing. Positions and directions use the machine's
 own root node as reference, with metres and radians. Root axes are not assumed to match AI direction.
