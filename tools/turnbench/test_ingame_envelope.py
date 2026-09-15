@@ -598,7 +598,12 @@ for _,mirror in ipairs({1,-1}) do
         p.approachHint={factorA=r.factorA,factorB=r.factorB,straightRatio=r.straight/p.width,
             biasRatio=r.bias/(p.width*E.approachSide(p))}
         local cached=run(p)
-        assert(cached.ok and cached.usedHint and cached.attempts==1)
+        assert(cached.ok and cached.maxEntryError<=r.maxEntryError+1e-9)
+        if r.maxEntryError<=E.planningEdgeTolerance then
+            assert(cached.usedHint and cached.attempts==1)
+        else
+            assert(cached.attempts>1 and cached.hintMarginError)
+        end
         -- A cached shape never bypasses a changed boundary.
         p.contains=function() return false end
         assert(not run(p).ok)
@@ -606,6 +611,45 @@ for _,mirror in ipairs({1,-1}) do
         p.approachHint.straightRatio=10
         assert(run(p).ok) -- invalid hints are ignored, not treated as geometry
     end
+end
+''')
+
+    def test_v12_marginal_cached_entry_is_refined_before_execution(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+local function run(p)
+    local search=E.newApproachSearch(p);local r
+    repeat r=search:update(256) until r
+    return r
+end
+for _,mirror in ipairs({1,-1}) do
+    -- Working-position snapshot from the 35th turn of the v0.12 field run.
+    -- The box is a synthetic boundary, not the recorded GIANTS density map.
+    local p=envelopeFixture(5.6,11.12,1.696,3.87,17.85,10.3,-1,46.5)
+    p.start={x=-419.042*mirror,z=80.236,t=math.rad(163.002)*mirror,phi=math.rad(171.469)*mirror}
+    p.goal={x=-420.120*mirror,z=64.430,t=-math.pi*mirror}
+    p.hitchX=-0.043*mirror;p.hitchZ=-1.696;p.slope=p.slope*mirror;p.lookahead=2.695;p.trackingRadius=5.389
+    p.work={{x=3.259*mirror,z=-2.178,towed=true},{x=-2.284*mirror,z=-2.472,towed=true},
+        {x=3.259*mirror,z=-16.154,towed=true,rear=true},{x=-2.284*mirror,z=-16.154,towed=true,rear=true}}
+    p.workCentreX=(p.work[1].x+p.work[2].x)/2+p.hitchX;p.footprint={}
+    for _,m in ipairs(p.work) do p.footprint[#p.footprint+1]=m end
+    for _,x in ipairs({-1.9,1.9}) do for _,z in ipairs({-2,4}) do p.footprint[#p.footprint+1]={x=x,z=z} end end
+    p.contains=function(x,z) return x*mirror>=-445 and x*mirror<=-395 and z>=40 and z<=115 end
+    p.approachHint={factorA=0.1,factorB=0.1,straightRatio=4/p.width,
+        biasRatio=0.645*mirror/(p.width*E.approachSide(p))}
+    local refined=run(p)
+    assert(refined.ok and not refined.usedHint,refined.reason)
+    assert(refined.hintMarginError>0.06 and refined.hintMarginError<E.repairEdgeTolerance)
+    assert(refined.maxEntryError<0.02 and refined.attempts<=8)
+    assert(refined.straight==4 and E.edgeTolerance==0.1)
+    for _,s in ipairs(refined.frames) do assert(E.checkFootprint(p,s)) end
+    -- This good shape can still take the fast path next time, with full checks.
+    p.approachHint={factorA=refined.factorA,factorB=refined.factorB,straightRatio=refined.straight/p.width,
+        biasRatio=refined.bias/(p.width*E.approachSide(p))}
+    local reused=run(p)
+    assert(reused.ok and reused.usedHint and reused.attempts==1)
+    p.contains=function() return false end
+    assert(not run(p).ok)
 end
 ''')
 

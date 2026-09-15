@@ -418,6 +418,7 @@ function E.newApproachSearch(p)
     if usingHint then bias=hint.biasRatio*p.width*E.approachSide(p) end
     local bestError=math.huge
     local bestVerified
+    local hintMarginError
     local lastReason='no forward approach'
     local function advance()
         -- Vary the pull-in tangent before extending the straight: changing the
@@ -499,8 +500,15 @@ function E.newApproachSearch(p)
             result.repairedApproach=true
             result.factorA,result.factorB=usingHint and hint.factorA or factors[ai],usingHint and hint.factorB or factors[bi]
             result.usedHint=usingHint and true or false
+            if usingHint and result.maxEntryError>E.planningEdgeTolerance then hintMarginError=result.maxEntryError end
+            result.hintMarginError=hintMarginError
             if not bestVerified or result.maxEntryError<bestVerified.maxEntryError then bestVerified=result end
-            if usingHint or result.maxEntryError<=E.planningEdgeTolerance then return result end
+            -- A remembered shape is a search seed, not a reason to accept less
+            -- tracking margin. The v0.12 field stop predicted 6.4 cm here but
+            -- reached 10.2 cm live. Keep this verified candidate as a fallback,
+            -- then run the same bounded refinement used for a fresh shape.
+            -- Well-aligned cached shapes still return after their first trial.
+            if result.maxEntryError<=E.planningEdgeTolerance then return result end
         end
         if usingHint then
             usingHint=false;bias,stage,iterations,fineGroup=0,'zero',0,false

@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.12'
+EnvelopeCourseTurn.TEST_VERSION = '0.13'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -299,6 +299,10 @@ function EnvelopeCourseTurn:updatePlanner()
             tostring(result.preferWorked or false))
     end
     if result.usedTurnHint then self:log('turn shape reused and checked against actual raised geometry') end
+    if result.hintMarginError then
+        self:log('cached entry margin refined: cached worst %.3f m, selected worst %.3f m, %d trials',
+            result.hintMarginError,result.maxEntryError,result.attempts)
+    end
     if self.planningStarted then self:log('planning completed in %.2f seconds',(g_currentMission.time-self.planningStarted)/1000) end
     -- Reuse CP's per-object commands/controller events/state changes, but let
     -- this strategy own the stricter admission test. This is an INSTANCE method;

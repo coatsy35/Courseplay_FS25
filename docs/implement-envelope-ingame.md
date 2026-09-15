@@ -3,12 +3,45 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.12**, packaged mod version **8.1.0.112**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.12` records identify it.
+Current test: **v0.13**, packaged mod version **8.1.0.113**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.13` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.13 addresses the stop after 34 successful v0.12 entries on 15 September.
+The 35th turn found and drove its bulb, rotated the plough normally, then selected
+a cached local correction with 0.064 m worst predicted admission error. The live
+entry check measured 0.102 m against the unchanged 0.100 m limit and stopped before
+lowering. CP reported no path found, but numerical pathfinding had succeeded.
+Successful entries in that run ranged from 0.008 m to 0.067 m, with a maximum
+heading error of 0.15 degrees. The field did not finish.
+
+Cached corrections now meet the same preferred 0.050 m modelling margin as fresh
+candidates before returning immediately. A marginal but finely verified candidate
+is retained as a fallback while the existing bounded search attempts to improve it.
+Good cached shapes still take one trial. Boundary, joint, lowering and live entry
+guards remain unchanged, including the bounded 0.075 m repair fallback: this is
+not a claim that every physical tracking discrepancy has been eliminated.
+
+The failed snapshot and its mirror refine the reconstructed cached correction
+in six trials, from approximately 0.064 m to 0.012 m worst predicted error, with
+the same 4 m straight. This uses a different sideways lead, not a fixed increase
+in run-in distance. A new log records the cached and selected margins so the
+next in-game test can show when refinement ran. Regression checks also confirm
+that the improved shape reuses in one trial and rejects a changed boundary.
+These remain offline predictions; the first v0.13 game run is still required.
+
+All 46 integration tests and three packaging/syntax checks pass. The recorded
+failure also passes against the field's map outline with sampled work markers
+and approximate tractor corners; this does not reproduce GIANTS' live physics
+or field-density checks.
+
+This build does not implement the separate extreme-pike entry-anchor experiment
+or further change bulb-side selection. CP's existing row-end coverage adjustments
+must be reconciled with actual inner-boundary geometry before that work is safe
+to integrate; simply applying the experimental offset could count it twice.
 
 Version 0.12 follows five completed v0.11 entries, with live working-edge errors
 between 0.019 m and 0.063 m, and a sixth turn which exhausted 250 candidates.
