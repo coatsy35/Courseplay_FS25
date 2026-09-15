@@ -121,7 +121,7 @@ function driveEnvelopeLiveFixture(p)
     local t=f.turn
     if p.configureFixture then p.configureFixture(f) end
     t.geometry=assert(EnvelopeTurnGeometry.capture(t))
-    local result=EnvelopeTurnPlanner.plan(t.geometry)
+    local result=p.planFixture and p.planFixture(t.geometry) or EnvelopeTurnPlanner.plan(t.geometry)
     assert(result.ok,result.reason)
     t.ppc=PurePursuitController(f.vehicle)
     t.ppc:setShortLookaheadDistance()

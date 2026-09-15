@@ -653,6 +653,51 @@ for _,mirror in ipairs({1,-1}) do
 end
 ''')
 
+    def test_v13_rotated_trailer_uses_wider_forward_lead(self):
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+local function run(p)
+    local search=E.newApproachSearch(p);local r
+    repeat r=search:update(256) until r
+    return r
+end
+for _,mirror in ipairs({1,-1}) do
+    -- 15 September 09:41:07: rotation left a 53-degree hitch angle.
+    -- This regression uses a synthetic field; the map-outline replay is separate.
+    local p=envelopeFixture(5.6,11.08,1.627,3.77,17.728,11.9,1,65.1)
+    p.start={x=-163.515*mirror,z=-136.276,t=math.rad(-21.256)*mirror,phi=math.rad(31.509)*mirror}
+    p.goal={x=-168.114*mirror,z=-121.280,t=0}
+    p.hitchX=.104*mirror;p.hitchZ=-1.627;p.slope=p.slope*mirror
+    p.lookahead=2.695;p.trackingRadius=5.389;p.vehicleRadius=5.389
+    p.work={{x=-3.270*mirror,z=-2.145,towed=true},{x=2.282*mirror,z=-2.458,towed=true},
+        {x=-3.270*mirror,z=-16.101,towed=true,rear=true},{x=2.282*mirror,z=-16.101,towed=true,rear=true}}
+    p.workCentreX=(p.work[1].x+p.work[2].x)/2+p.hitchX;p.footprint={}
+    for _,m in ipairs(p.work) do p.footprint[#p.footprint+1]=m end
+    for _,x in ipairs({-1.9,1.9}) do for _,z in ipairs({-2,4}) do p.footprint[#p.footprint+1]={x=x,z=z} end end
+    p.contains=function(x,z) return x*mirror>=-190 and x*mirror<=-145 and z>=-170 and z<=-90 end
+    local r=run(p)
+    assert(r.ok,r.reason)
+    assert(r.attempts<=24 and r.straight==4 and math.abs(r.bias)>2)
+    assert(r.maxEntryError<=E.planningEdgeTolerance and r.maxArticulation<p.maxArticulation)
+    for _,s in ipairs(r.frames) do assert(E.checkFootprint(p,s)) end
+    for i=2,#r.path do assert(r.path[i].z>r.path[i-1].z) end
+    p.approachHint={factorA=r.factorA,factorB=r.factorB,straightRatio=r.straight/p.width,
+        biasRatio=r.bias/(p.width*E.approachSide(p))}
+    assert(run(p).attempts==1)
+    p.contains=function() return false end
+    assert(not run(p).ok)
+    -- Exercise the actual entry state machine and finite acceleration/hydraulics,
+    -- with the tighter tractor lock rather than the planned combination radius.
+    p.configureFixture=function(f)
+        addEnvelopeInternalPivotFixture(f,p,1.321)
+        local exit=E.point(p.goal.x,p.goal.z,0,10,10*p.slope)
+        f.context.workEndNode={x=exit.x,z=exit.z,t=0}
+    end
+    p.planFixture=run
+    driveEnvelopeLiveFixture(p)
+end
+''')
+
     def test_local_search_is_bounded_and_cannot_turn_back_out(self):
         self.lua.execute('''
 local p=envelopeFixture(5.6,11.1,1.9,4.6,18.3,0,1,50.4)

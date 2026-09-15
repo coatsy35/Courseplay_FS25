@@ -3,12 +3,40 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.13**, packaged mod version **8.1.0.113**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.13` records identify it.
+Current test: **v0.14**, packaged mod version **8.1.0.114**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.14` records identify it.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration
 tests run with `coroutine=nil`, including the complete startup path.
+
+Version 0.14 addresses the fresh v0.13 run stopped at 09:41:20 on 15 September.
+The first bulb took 318 trials and 83 seconds, then the plough rotated normally.
+The measured tractor and implement headings differed by approximately 53 degrees.
+The local entry search exhausted 96 trials, with a best predicted error of 0.389 m.
+This was numerical exhaustion before driving the correction, unlike v0.12's
+live entry-gate failure.
+
+The local search's lateral-lead bound treated the steering target as an isolated
+curve and allowed only about 1 m of lead in this pose. Searching all 2,016 old
+parameter combinations still failed in the offline replay. The search now keeps
+that compact bracket first. If minimisation presses against its edge, it widens
+the bracket within half the implement width, one third of the remaining approach
+and 3 m, before changing tangent lengths. An interior minimum instead moves on
+to the next tangent pair, retaining the older cases' search-time limits.
+The full tracked correction must still satisfy CP's resolved radius, joint
+limits, boundary clearance and the original entry tolerances. It cannot loop
+back out or lower early. No implement-specific dimension selects this behaviour.
+
+The recorded geometry and its mirror now pass in 20 trials with approximately
+2.49 m lateral lead, 0.0474 m worst predicted entry error and the same 4 m straight.
+The corrected shape revalidates in one trial when reused. Both directions also
+complete the production PPC/entry-state-machine fixture with finite acceleration
+and hydraulic delay. A separate replay passes against the field's map outline
+with recorded working corners and approximate tractor corners. These checks
+do not reproduce GIANTS' physics or live field density; an in-game run is required.
+The initial 83-second bulb search is not changed by this local-entry fix.
+All 47 integration tests and three packaging/syntax checks pass for v0.14.
 
 Version 0.13 addresses the stop after 34 successful v0.12 entries on 15 September.
 The 35th turn found and drove its bulb, rotated the plough normally, then selected

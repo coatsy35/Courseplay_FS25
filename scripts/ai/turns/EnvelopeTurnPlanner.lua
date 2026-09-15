@@ -407,7 +407,7 @@ function E.newApproachSearch(p)
     local ai,bi,si,attempts=1,1,1,0
     local simulation,path,verified,fineGroup
     local bias,stage,iterations=0,'zero',0
-    local lo,hi,c,d,fc,fd,biasLimit
+    local lo,hi,c,d,fc,fd,biasLimit,initialBiasLimit,widened
     local golden=(math.sqrt(5)-1)/2
     -- A previous completed turn supplies a starting guess, never a reusable
     -- approved path. Rebuild it from the new pose/width and validate it afresh.
@@ -428,6 +428,7 @@ function E.newApproachSearch(p)
         if si>#straights then si=1;ai=ai+1 end
         bias,stage,iterations=0,'zero',0
         fineGroup=false
+        widened=false
     end
     local function makeApproach()
         local straight=usingHint and hint.straightRatio*p.width or straights[si]
@@ -436,7 +437,17 @@ function E.newApproachSearch(p)
         local finish=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.front-straight)
         local _,remaining=E.localPoint(finish,{x=p.start.x,z=p.start.z,t=p.goal.t})
         if remaining<=0 or math.abs(E.wrap(p.start.t-p.goal.t))>=math.pi/2 then return nil end
-        biasLimit=math.min(p.width/2,remaining*remaining/(24*p.radius),3)
+        -- This is a steering target, not a curve the axle must follow exactly.
+        -- The former remaining^2/(24*radius) bound treated it as an isolated
+        -- bend and excluded useful leads once the measured starting tangent
+        -- and trailer angle were included (v0.13's 53-degree articulation).
+        -- Bound the search spatially, then let the tracked simulation enforce
+        -- CP's radius, joint limits and footprint for the complete correction.
+        biasLimit=math.min(p.width/2,remaining/3,3)
+        -- Start with the old compact bracket so ordinary entries retain their
+        -- established correction. Widen this bracket before changing tangents
+        -- if it cannot align the measured trailer.
+        initialBiasLimit=math.min(biasLimit,remaining*remaining/(24*p.radius))
         if math.abs(bias)>biasLimit then return nil end
         local a=E.point(p.start.x,p.start.z,p.start.t,0,remaining*factorA)
         local b=E.point(finish.x,finish.z,p.goal.t,0,-remaining*factorB)
@@ -522,7 +533,7 @@ function E.newApproachSearch(p)
         local objective=result.maxEntryError or result.error or math.huge
         if stage=='zero' then
             if not path then advance();return nil end
-            lo,hi=-biasLimit,biasLimit
+            lo,hi=-initialBiasLimit,initialBiasLimit
             c,d=hi-golden*(hi-lo),lo+golden*(hi-lo)
             fc,fd=nil,nil
             stage,bias='c',c
@@ -532,6 +543,17 @@ function E.newApproachSearch(p)
             iterations=iterations+1
             if iterations>=12 or hi-lo<0.001 then
                 if bestVerified then bestVerified.attempts=attempts;return bestVerified end
+                -- Only expand when minimisation is pressing against the old
+                -- bracket edge. An interior minimum needs different tangents;
+                -- repeating a wider search there just delays known solutions.
+                if not widened and biasLimit>initialBiasLimit+0.001 and
+                        math.abs((lo+hi)/2)>initialBiasLimit*0.9 then
+                    widened=true;iterations=0
+                    lo,hi=-biasLimit,biasLimit
+                    c,d=hi-golden*(hi-lo),lo+golden*(hi-lo)
+                    fc,fd=nil,nil;stage,bias='c',c
+                    return nil
+                end
                 advance();return nil
             end
             if fc<fd then
