@@ -83,8 +83,37 @@ Coverage normally uses 0.25 m cells inside the field boundary, excluding islands
 Large fields use a coarser grid to bound memory; the metric's tooltip reports the
 resolution. Deliberately unworked field margins are included in the missed total.
 These are modelled gaps from the current rectangular work envelope and simulated
-lift/lower state, not measured FS soil coverage. The full-field baseline still
-uses its existing CP movement model, not the newer in-game envelope test strategy.
+lift/lower state, not measured FS soil coverage.
+
+### Shared envelope runtime
+
+Full-field playback defaults to **Envelope test mod / shared Lua strategy**.
+Central-row turns are planned from the actual simulated exit pose using the
+unchanged `EnvelopeTurnPlanner`, `EnvelopeTurnGeometry` and `EnvelopeCourseTurn`
+shipped in the test mod. Production PPC steers these turns; the production live
+entry gate controls lowering, hydraulic waiting and hand-off. The host replaces
+GIANTS movement with a finite-acceleration bicycle/passive-trailer model and uses
+the configured rectangular work markers. Plough rotation/suspension are not yet
+physically modelled. Headlands and connecting travel retain the stock bench
+adapter; entry from those connectors is checked by the shared runtime.
+
+The menu also offers **Stock CP / comparison** explicitly. Existing isolated
+aligned-entry experiments remain separate; they are not the shared runtime.
+
+The runtime snapshot's version and source hashes are recorded in
+`runtime/manifest.json`. Synchronise when a test mod changes:
+
+```powershell
+python tools/turnbench/sync_runtime.py --source <envelope-checkout>
+```
+
+Loading checks the snapshot and shared CP dependency hashes. Edit the runtime
+in the envelope branch and synchronise; do not patch a separate bench planner.
+The shared controller can reject an entry that stock playback previously
+accepted. This is displayed as **envelope runtime stopped**, with its actual
+reason and partial coverage, rather than a Lua execution error or a false pass.
+`python -m unittest test_runtime_driver -v` exercises shipped entry admission for
+PW, 6 m/12 m drills and mounted equipment plus full-field hand-offs.
 
 ## Tests
 

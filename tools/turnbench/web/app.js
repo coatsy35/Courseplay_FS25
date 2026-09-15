@@ -179,6 +179,7 @@ function scenario() {
     reverseSpeed: p.reverseSpeed / 3.6,
     allowReverse: $("allowReverse").checked,
     fullCourse: $("pattern").value === "course",
+    runtimeEnvelope: $("runtimeEnvelope").value === "runtime",
     reverseCourse:
       ["course", "layout"].includes($("pattern").value) &&
       $("courseDirection").value === "end",
@@ -264,7 +265,7 @@ function chooseView(next) {
       ? (result.planner ? "CP + aligned entry" : "Baseline + extra clearance")
       : view === "experiment"
         ? (result.planner ? "Aligned entry" : "Extra clearance")
-        : result.planner?.pattern ? "Aligned pattern" : "Baseline";
+        : result.planner?.pattern ? "Aligned pattern" : result.baseline.runtimeVersion ? `Envelope v${result.baseline.runtimeVersion}` : "Stock CP";
   updateMetrics();
   updateEvents();
   fit();
@@ -296,7 +297,7 @@ async function run(event) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Simulation failed");
     result = data;
-    document.querySelector('[data-view="baseline"]').textContent = data.planner?.pattern ? "Aligned pattern" : "Baseline";
+    document.querySelector('[data-view="baseline"]').textContent = data.planner?.pattern ? "Aligned pattern" : data.baseline.runtimeVersion ? `Envelope v${data.baseline.runtimeVersion}` : "Stock CP";
     $("whole-field-label").hidden = !data.planner;
     document.querySelector('[data-view="experiment"]').textContent = data.planner ? "Aligned entry" : "Extra clearance";
     preparedConfiguration = configuration;
@@ -348,7 +349,7 @@ function updateMetrics() {
       fleet
         .map(
           (vehicle, i) =>
-            `Vehicle ${i + 1}: ${vehicle.blocked ? "boundary clearance rejected" : vehicle.metrics.complete ? "route completed" : "tracking incomplete"}${vehicle.boundaryWarning ? " · boundary estimate available under Clearance details" : ""}`,
+            `Vehicle ${i + 1}: ${vehicle.runtimeFailure ? "envelope runtime stopped — " + vehicle.runtimeFailure : vehicle.blocked ? "boundary clearance rejected" : vehicle.metrics.complete ? "route completed" : "tracking incomplete"}${vehicle.boundaryWarning ? " · boundary estimate available under Clearance details" : ""}`,
         )
         .join(" · ") +
       (selected().generatorErrors.length
@@ -367,7 +368,8 @@ function updateMetrics() {
   $("error-label").textContent = field
     ? "Worst entry lateral error"
     : "Entry lateral error";
-  $("angle-label").textContent = field ? "Worst entry angle" : "Entry angle";
+  $("angle-label").textContent = selected().completeCourse && selected().scenario.runtimeEnvelope ? "Worst runtime row-entry angle" : field ? "Worst entry angle" : "Entry angle";
+  if (selected().completeCourse && selected().scenario.runtimeEnvelope) $("error-label").textContent = "Worst runtime row-entry edge error";
   $("gap-label").textContent = selected().completeCourse ? "Missed area / whole field" : selected().coverageScope ? "Missed area / complete working block" : field
     ? "Missed entry area / all turns"
     : "Missed area / first 20 m";
@@ -1075,6 +1077,7 @@ function updateControls() {
   $("pattern").disabled = entry;
   const field = !entry && !preview && $("pattern").value === "field";
   $("passes").disabled = !field;
+  $("runtimeEnvelope").disabled = !complete;
   $("passes-label").hidden = !field;
   $("course-direction-label").hidden = !(layout || complete);
   $("courseDirection").disabled = !(layout || complete);
@@ -1432,6 +1435,7 @@ $("setup-file").onchange = async () => {
     $("headlandRows").min = p.headlandRows === 0 ? "0" : "1";
     $("pattern").value = p.pattern ? "field" : "single";
     if (p.courseLayout) $("pattern").value = p.fullCourse ? "course" : "layout";
+    $("runtimeEnvelope").value = p.runtimeEnvelope ? "runtime" : "stock";
     if (p.alignedPlanner) $("pattern").value = "aligned";
     $("alignedPattern").checked = Boolean(p.alignedPattern);
     $("entryRows").value = p.rowSpacing ? p.rowSpacing/p.width : 1;

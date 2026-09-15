@@ -108,6 +108,10 @@ def compile_route(p,raw,layout):
             link=[dict({**start,**dict(raw_link[k])},working=False,phase='Connecting turn',
                        rowStart=False,rowEnd=False,connecting=False)
                   for k in range(1,len(raw_link)+1)]
+            if p.runtimeEnvelope and not target['headland']:
+                link.append(dict(link[-1],envelopeTarget=[target['x'],target['z'],incoming],
+                    envelopeOrigin=[target['x'],target['z'],incoming],envelopeInitial=True,
+                    phase='Envelope entry',row=target.get('row',0),offset=0))
             link.append(dict(target,t=incoming,working=False,phase='Connecting turn',
                              rowStart=False,rowEnd=False,connecting=False,offset=0,
                              lower=True,lowerTarget=[target['x'],target['z'],incoming]))
@@ -135,6 +139,23 @@ def compile_route(p,raw,layout):
                 exit_distance=max(p.clearance+p.extension,
                     (p.back if p.raiseLate else p.front)+p.speed*p.raiseSeconds+.2)
                 available=forward_space(end,out,layout['boundary'])
+                if p.runtimeEnvelope:
+                    # Defer planning until playback reaches the actual raised
+                    # exit pose. The shipped Lua must see trailer lag from the
+                    # preceding work, not a freshly straightened synthetic rig.
+                    raise_target=[v['x'],v['z'],out]
+                    result[-1]['raiseTarget']=raise_target
+                    for k in range(1,math.ceil(exit_distance)+1):
+                        x,z=point(*end,out,along=min(k,exit_distance))
+                        result.append(dict(x=x,z=z,t=out,reverse=False,working=True,
+                            phase='Row exit',row=v['row'],headland=0,raiseTarget=raise_target))
+                    result.append(dict(result[-1],working=False,phase='Envelope turn',
+                        envelopeTarget=[target['x'],target['z'],incoming],
+                        envelopeOrigin=raise_target,raiseTarget=None,row=target['row']))
+                    i=j
+                    result.append(dict(target,t=incoming))
+                    i+=1
+                    continue
                 local=replace(p,pattern=False,courseLayout=False,fullCourse=False,entry=False,
                               targetExplicit=True,targetX=dx,targetZ=dz,targetHeading=math.degrees(wrap(incoming-out)),
                               side=1 if dx>=0 else -1,headland=max(.1,available),turnType=p.turnType)
@@ -188,7 +209,7 @@ def corner_waypoints(p,bridge,template,spec,x,z,theta):
 def set_leg_ends(path):
     end=len(path)-1
     for i in range(len(path)-1,-1,-1):
-        if i==len(path)-1 or path[i]['reverse']!=path[i+1]['reverse']:
+        if i==len(path)-1 or path[i]['reverse']!=path[i+1]['reverse'] or path[i].get('envelopeTarget') or path[i+1].get('envelopeTarget'):
             end=i
         path[i]['legEnd']=end
 
@@ -200,7 +221,7 @@ def densify_route(result):
     for i,v in enumerate(result):
         if i:
             a=result[i-1]
-            if a['reverse']==v['reverse']:
+            if a['reverse']==v['reverse'] and not a.get('envelopeTarget') and not v.get('envelopeTarget'):
                 distance=math.hypot(v['x']-a['x'],v['z']-a['z'])
                 for k in range(1,math.ceil(distance)):
                     f=k/max(distance,1e-9)
@@ -210,7 +231,7 @@ def densify_route(result):
     return dense
 
 
-def drive_course(p,path,vehicle_index,start=None,coverage=None):
+def drive_course(p,path,vehicle_index,start=None,coverage=None,layout=None):
     bridge=Bridge(replace(p,allowReverse=False,enforceBoundary=False))
     x,z=path[0]['x'],path[0]['z']
     theta=wrap(path[0]['t']+(math.pi if path[0]['reverse'] else 0))
@@ -230,8 +251,67 @@ def drive_course(p,path,vehicle_index,start=None,coverage=None):
     previous_entry_along={}
     previous_gear=False
     complete=False
+    runtime=None
+    time_offset=0
+    runtime_failure=None
+    runtime_turns=0
+    runtime_entries=[]
+    initial_entry=p.runtimeEnvelope and path[0]['phase']=='Central row'
+    if p.runtimeEnvelope:
+        from runtime_driver import RuntimeDriver
+        runtime=RuntimeDriver(p,layout)
     for tick in range(math.ceil(duration_limit/dt)):
-        now=tick*dt
+        now=tick*dt+time_offset
+        if runtime and (initial_entry or path[ix].get('envelopeTarget')):
+            control=path[ix]
+            target=([control['x'],control['z'],control['t']] if initial_entry else control['envelopeTarget'])
+            origin=control.get('envelopeOrigin',target)
+            run=runtime.run(dict(x=x,z=z,theta=theta,phi=phi),target,origin,
+                            initial_entry or control.get('envelopeInitial',False))
+            runtime_turns+=1
+            for event in run['events']:
+                events.append(dict(event,time=round(now+event['time'],3)))
+            for frame in run['frames']:
+                f=dict(frame,time=round(now+frame['time'],3),vehicle=vehicle_index,
+                       row=control.get('row',0),headland=0)
+                if coverage is not None: coverage.add_frame(f)
+                # Keep every runtime step: the final gate and work transition
+                # must be visible in both playback and the coverage raster.
+                frames.append(f)
+            if not run['ok']:
+                runtime_failure=run['reason']
+                events.append(dict(time=now,kind='Envelope runtime stopped: '+runtime_failure,angle=0,error=0))
+                break
+            last=run['frames'][-1]
+            time_offset+=last['time']
+            now=tick*dt+time_offset
+            x,z,theta,phi=(last[k] for k in ('x','z','theta','phi'))
+            lowered=True;raising=lowering=None
+            previous_frame=None
+            runtime_entries.append(dict(angle=last['angle'],lateral=last['error'],lowered=True))
+            if initial_entry:
+                initial_entry=False
+            else:
+                # Replace the deferred marker with the path actually executed.
+                # Skip only points reached along this row; never consume its
+                # row-end marker, even on a very short pike.
+                replacement=[dict(x=w['x'],z=w['z'],t=target[2],reverse=False,
+                                  working=False,phase='Envelope turn',row=control.get('row',0),headland=0)
+                             for w in run['path'][:last['ix']]]
+                path[ix:ix+1]=replacement
+                ix+=len(replacement)
+            # A checked runtime entry may have consumed the old connection's
+            # straight buffer. Do not revisit it and request lowering again.
+            while ix<len(path)-1 and path[ix]['phase']=='Connecting turn':
+                ix+=1
+            while ix+1<len(path) and not path[ix].get('rowEnd'):
+                q=path[ix+1]
+                if q.get('phase')!='Central row': break
+                progress=(q['x']-x)*math.sin(target[2])+(q['z']-z)*math.cos(target[2])
+                if progress>0: break
+                ix+=1
+            set_leg_ends(path)
+            last_progress=now
         hitch=point(x,z,theta,along=-p.hitch)
         axle=point(*hitch,phi,along=0 if p.mounted else -p.length)
         work=point(*axle,phi,along=(0 if p.mounted else p.length)+p.hitch-p.front)
@@ -356,8 +436,11 @@ def drive_course(p,path,vehicle_index,start=None,coverage=None):
         new_hitch=point(x,z,theta,along=-p.hitch)
         dx,dz=new_hitch[0]-hitch[0],new_hitch[1]-hitch[1]
         phi=theta if p.mounted else wrap(bridge.g.nextTrailerHeading(phi,math.atan2(dx,dz),math.hypot(dx,dz),p.length))
-    worst=dict(angle=max(abs(e['angle']) for e in entry_errors),lateral=max(abs(e['lateral']) for e in entry_errors)) if entry_errors else None
+    measured_entries=runtime_entries if p.runtimeEnvelope else entry_errors
+    worst=dict(angle=max(abs(e['angle']) for e in measured_entries),lateral=max(abs(e['lateral']) for e in measured_entries)) if measured_entries else None
     return dict(frames=frames,events=events,path=path,paths=[[[v['x'],v['z']] for v in path]],
+                runtimeFailure=runtime_failure,runtimeTurns=runtime_turns,
+                runtimeVersion=runtime.manifest['version'] if runtime else None,
                 metrics=dict(complete=complete,entry=worst,missedArea=None,exitMissedArea=None,
                              exitOvershoot=None,envelopeDepth=None,headlandShortfall=None,
                              duration=frames[-1]['time'],maxArticulation=max(abs(math.degrees(wrap(f['theta']-f['phi']))) for f in frames)))
@@ -369,7 +452,7 @@ def simulate_complete(p,generated):
     coverage=FieldCoverage(layout['boundary'],layout['islands'])
     for i,route in enumerate(layout['routes']):
         path=compile_route(p,route['waypoints'],layout)
-        run=drive_course(p,path,i+1,coverage=coverage)
+        run=drive_course(p,path,i+1,coverage=coverage,layout=layout)
         coverage.finish_vehicle()
         run.update(scenario=asdict(p),preview=False,gaps=[],exitGaps=[],resolution=.25,
                    field=dict(boundary=layout['boundary'],headlands=layout['headlands'],islands=layout['islands'],

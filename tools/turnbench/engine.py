@@ -25,6 +25,12 @@ SOURCES = [
     'tools/turnbench/full_course.py', 'tools/turnbench/field_coverage.py', 'scripts/ai/turns/Corner.lua',
     'tools/turnbench/alignment.py', 'tools/turnbench/aligned_turn.py',
     'tools/turnbench/aligned_pattern.py',
+    'tools/turnbench/runtime_driver.py', 'tools/turnbench/sync_runtime.py',
+    'tools/turnbench/runtime/manifest.json', 'tools/turnbench/runtime/drive.lua',
+    'tools/turnbench/runtime/planar-host.lua',
+    'tools/turnbench/runtime/EnvelopeTurnPlanner.lua',
+    'tools/turnbench/runtime/EnvelopeTurnGeometry.lua',
+    'tools/turnbench/runtime/EnvelopeCourseTurn.lua',
 ]
 
 
@@ -110,6 +116,7 @@ class Scenario:
     finalStraight: float = 4
     islandHeadlands: int = 1
     islandClockwise: bool = True
+    runtimeEnvelope: bool = False  # Explicit stock/runtime comparison; UI defaults to runtime.
 
     @classmethod
     def parse(cls, data):
@@ -139,7 +146,7 @@ class Scenario:
         for key in ('entry', 'drill', 'lowerEarly', 'raiseLate', 'tight', 'articulated', 'pattern', 'enforceBoundary','courseLayout','headlandFirst','clockwise','custom','mounted'):
             if type(getattr(p, key)) is not bool:
                 raise ValueError(f'{key} must be boolean')
-        for key in ('alignedPlanner','alignedPattern','targetExplicit','reverseCourse','allowReverse','fullCourse','centreClockwise','spiralFromInside','sharpenCorners','loopTurnsOnHeadland',
+        for key in ('runtimeEnvelope','alignedPlanner','alignedPattern','targetExplicit','reverseCourse','allowReverse','fullCourse','centreClockwise','spiralFromInside','sharpenCorners','loopTurnsOnHeadland',
                     'autoRowAngle','evenRowWidth','useBaseline','sameTurnWidth','narrowField','bypassIslands','islandClockwise'):
             if type(getattr(p,key)) is not bool:
                 raise ValueError(f'{key} must be boolean')
@@ -812,7 +819,10 @@ def compare(data):
                            SOURCES+[str(f.relative_to(ROOT)).replace('\\','/') for f in
                                     (ROOT/'scripts/courseGenerator').rglob('*.lua') if 'test' not in f.parts]+
                            ['tools/turnbench/field_layout.lua']},
-                'model':'Production CP Course Generator and analytic turns; planar rig playback with CP trailer reverse correction' if p.fullCourse else 'Production CP Course Generator; route layout only'}
+                'model':('CP course generator + envelope test-mod runtime (planner, PPC and entry gate); planar physics'
+                         if p.fullCourse and p.runtimeEnvelope else
+                         'Production CP Course Generator and analytic turns; planar rig playback with CP trailer reverse correction'
+                         if p.fullCourse else 'Production CP Course Generator; route layout only')}
     runner = simulate_field if p.pattern else simulate
     return {'baseline':check_boundary(runner(replace(p,extension=0))),
             'experiment':check_boundary(runner(p)) if p.extension and not p.entry else None,

@@ -215,6 +215,10 @@
                   </select></label
                 >
                 <p id="run-mode-note"></p>
+                <label>Full-field row-turn controller<select id="runtimeEnvelope">
+                  <option value="runtime" selected>Envelope test mod / shared Lua strategy</option>
+                  <option value="stock">Stock CP / comparison</option>
+                </select><span>Headland corners retain CP handling. Vehicle movement and hydraulics are simulated.</span></label>
                 <label id="aligned-pattern-label" hidden><input id="alignedPattern" type="checkbox" /> Complete skipped-row block</label>
                 <label id="entry-rows-label" hidden>Rows across to next pass
                   <input id="entryRows" type="number" min="1" max="24" step="1" value="1" />

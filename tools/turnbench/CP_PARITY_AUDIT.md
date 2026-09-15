@@ -1,5 +1,25 @@
 # CP / turn-bench audit
 
+## 15 September: shared envelope row-turn execution
+
+Full-field mode now offers an explicit controller choice, defaulting to the
+versioned envelope runtime. Its planner, geometry checks and `EnvelopeCourseTurn`
+entry/lowering state machine are unchanged snapshots from test mod v0.15; CP's
+production PPC drives those manoeuvres. Source and dependency hashes are checked
+when loading. See `runtime/manifest.json` and `sync_runtime.py`.
+
+The bench plans at the actual simulated row exit, retains trailer heading across
+passes, and feeds the actual lowered envelope into final coverage. Failed entry
+checks stop that simulated run and preserve their reason. Headland corners and
+section-connecting travel still use the older adapter described below. Their
+arrival at a central row is checked by the envelope entry gate, but stock hybrid
+pathfinding/repositioning and physical plough rotation are not simulated. The
+headland-first PW case currently exposes a rejected connection into the centre;
+this is not presented as successful fieldwork or as a measured in-game result.
+
+The original audit below remains applicable to stock comparison mode and these
+remaining adapters. Runtime row turns supersede its older row-turn limitations.
+
 Audited against this checkout on 13 September 2026. Scope: the fieldwork behaviours represented by the bench, not unrelated CP jobs or menus.
 
 **Finding: the bench is not an in-game feasibility simulator.** It runs substantial production CP code, but its driving adapter, implement model and boundary rule are different. Passing the existing completion tests did not establish parity. In particular, the default PW scenario is not validated against an in-game recording.
