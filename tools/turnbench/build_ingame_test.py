@@ -80,6 +80,14 @@ def build(output):
             for name in result.namelist():
                 if name.endswith('.xml'):
                     ET.fromstring(result.read(name))
+        # A byte-correct archive is not a working vehicle. Qualify this exact
+        # candidate before replacing the user's test ZIP. The report remains
+        # available even when qualification fails; no bypass flag is provided.
+        from audit_envelope_build import audit
+        report_path=output.with_suffix('.qualification.json')
+        report=audit(ready,report_path)
+        if not report.get('qualified'):
+            raise RuntimeError(f'Envelope build failed execution qualification; existing ZIP unchanged. See {report_path}')
         ready.replace(output)
     checksum = hashlib.sha256(output.read_bytes()).hexdigest()
     return {'file': str(output), 'test_version': TEST_VERSION, 'version': MOD_VERSION, 'source_version': version, 'sha256': checksum}

@@ -1,12 +1,26 @@
 """Package identity and baseline Lua 5.1 syntax, not FS25/Luau VM validation."""
 from pathlib import Path
 import unittest
+import tempfile
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 from lupa.lua51 import LuaRuntime
 from build_ingame_test import ROOT, ZIP_NAME, TEST_TITLE, MOD_VERSION, build, test_manifest, test_settings
 
 
 class EnvelopePackageTests(unittest.TestCase):
+    def test_failed_or_interrupted_qualification_preserves_existing_zip(self):
+        for outcome in ({'qualified':False}, RuntimeError('audit interrupted')):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory(dir=ROOT/'out') as directory:
+                output=Path(directory)/ZIP_NAME
+                output.write_bytes(b'existing test archive must remain untouched')
+                with patch('audit_envelope_build.audit') as check:
+                    if isinstance(outcome,Exception): check.side_effect=outcome
+                    else: check.return_value=outcome
+                    with self.assertRaises(RuntimeError): build(output)
+                    check.assert_called_once()
+                self.assertEqual(output.read_bytes(),b'existing test archive must remain untouched')
+
     def test_distinct_title_and_default_do_not_change_sources(self):
         manifest = (ROOT/'modDesc.xml').read_bytes()
         settings = (ROOT/'config/VehicleSettingsSetup.xml').read_bytes()

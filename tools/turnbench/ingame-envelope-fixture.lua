@@ -142,10 +142,11 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         t:updatePlanner()
     end
     local s={x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi}
-    local speed=0
+    local speed,elapsed,actualCurvature=0,0,0
     for tick=1,16000 do
-        local dt=0.05
-        g_currentMission.time=tick*dt*1000
+        local dt=p.stepSequence and p.stepSequence[(tick-1)%#p.stepSequence+1] or p.timeStep or 0.05
+        elapsed=elapsed+dt
+        g_currentMission.time=elapsed*1000
         if p.tickFixture then p.tickFixture(f) end
         if p.stateFixture then p.stateFixture(f,s) end
         f.vehicle.speed=speed*3.6
@@ -164,7 +165,7 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         end
         if not gx then gx,_,gz=t.ppc:getGoalPointPosition() end
         local target=(limit or 0)/3.6
-        speed=math.max(0,speed+math.max(-2*dt,math.min(dt,target-speed)))
+        speed=math.max(0,speed+math.max(-(p.braking or 2)*dt,math.min((p.acceleration or 1)*dt,target-speed)))
         local distance=speed*dt
         local dx,dz=gx-s.x,gz-s.z
         -- Physical steering lock belongs to the tractor, not the combination's
@@ -172,6 +173,13 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         local physicalRadius=p.vehicleRadius or p.radius
         local k=math.max(-1/physicalRadius,math.min(1/physicalRadius,
             2*(dx*math.cos(s.t)-dz*math.sin(s.t))/math.max(0.01,dx*dx+dz*dz)))
+        -- Optional independent actuator model for robustness checks. The
+        -- planner still assumes instantaneous steering; the executing vehicle
+        -- can now lag its command, including while braking or stationary.
+        if p.steeringTimeConstant then
+            actualCurvature=actualCurvature+(k-actualCurvature)*(1-math.exp(-dt/p.steeringTimeConstant))
+            k=actualCurvature
+        end
         local old=E.point(s.x,s.z,s.t,p.hitchX,p.hitchZ)
         s.x,s.z=s.x+distance*math.sin(s.t+k*distance/2),s.z+distance*math.cos(s.t+k*distance/2)
         s.t=E.wrap(s.t+k*distance)

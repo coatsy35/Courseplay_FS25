@@ -6,6 +6,10 @@ The implement-directory changes are maintained separately and are not included.
 Current test: **v0.20**, packaged mod version **8.1.0.120**. The ZIP filename
 remains stable; the in-game title and `[CP envelope] v0.20` records identify it.
 
+**Qualification failed on 16 September:** the wider execution sweep finds two
+pre-handover failures despite the original regression suite passing. Hold off
+further in-game testing of v0.20; see [the qualification report](v020-qualification.md).
+
 Version 0.20 addresses the 23:24–23:25 v0.19 recording. The centred loop
 completed, but deploying the plough changed its work markers and CP offset;
 all 96 final corrections failed. A replay of that late working pose still
