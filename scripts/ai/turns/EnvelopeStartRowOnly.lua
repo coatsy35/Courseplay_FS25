@@ -30,7 +30,6 @@ function EnvelopeStartRowOnly:getDriveData(dt)
     if self.cancelled then return nil,nil,nil,0 end
     if self.guard then return nil,nil,nil,0 end
     local reversing=self.ppc:isReversing()
-    self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(),reversing)
     if self.state==self.states.DRIVING_TO_ROW then
         if TurnManeuver.hasTurnControl(self.turnCourse,self.turnCourse:getCurrentWaypointIx(),
                 TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then
@@ -44,6 +43,10 @@ function EnvelopeStartRowOnly:getDriveData(dt)
     for i=self.ppc:getCurrentWaypointIx(),self.turnCourse:getNumberOfWaypoints() do
         if self.turnCourse:isReverseAt(i) then return nil,nil,nil,self:getForwardSpeed() end
     end
+    -- Like stock StartRowOnly, only notify the rotation controller on the
+    -- approach. Calling it along the whole initial route deployed the side arm
+    -- whenever a loop temporarily faced the row, before the turn was complete.
+    self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(),false)
     local ready=true
     for _,controller in pairs(self.driveStrategy.controllers) do
         if controller.isRotatablePlow and controller:isRotatablePlow() then
@@ -100,6 +103,9 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
         EnvelopeCourseTurn.startPlanning(g,path)
     end
     guard.prepare=function(g)
+        if g.initialRecoveryPreparing then
+            return EnvelopeCourseTurn.prepare(g)
+        end
         if g:ensureFieldBoundary() then
             if #remaining<2 then
                 g.geometry=EnvelopeTurnGeometry.capture(g)
@@ -116,7 +122,15 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
             -- not enforce the combination's steering radius while tracking.
             self.recoveryAttempted=true
             g:log('initial approach cannot align: %s; checking a complete envelope recovery to waypoint %d',reason,self.entryIx)
-            g:startPlanning()
+            -- Initial entry has no finishRow transition. Emit the same stock
+            -- event explicitly before attempting a bulb: the working-side
+            -- plough arm otherwise obstructs the tractor's steering wheels.
+            strategy:raiseImplements()
+            strategy:raiseControllerEvent(AIDriveStrategyCourse.onFinishRowEvent,false)
+            g.initialRecoveryPreparing=true
+            g.prepareStarted=g_currentMission.time
+            g.state=g.states.ENVELOPE_PREPARING
+            g:log('centring implements before initial recovery loop')
         else EnvelopeCourseTurn.stopWithReason(g,reason) end
     end
     guard.state=guard.states.ENVELOPE_PREPARING

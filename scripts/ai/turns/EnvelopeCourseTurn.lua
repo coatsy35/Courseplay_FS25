@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.17'
+EnvelopeCourseTurn.TEST_VERSION = '0.18'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -408,16 +408,21 @@ function EnvelopeCourseTurn:checkApproachTracking(contact,live)
     if self.lowerRequested or self.approachCorrected then return true end
     local p=self.geometry
     if not self.approachCorrectionPending then
+        -- PPC can announce ENDING_TURN while the tractor is still rounding the
+        -- bulb. A nearby tail sample then belongs to a different part of the
+        -- manoeuvre. Do not brake and replace that unfinished arc with a local
+        -- entry correction. These are phase checks, not admission tolerances.
+        if math.abs(EnvelopeTurnPlanner.wrap(live.t-p.goal.t))>math.rad(30) then return true end
+        if self.result and self.ppc.getCurrentWaypointIx and
+                self.ppc:getCurrentWaypointIx()<self.result.tailStart then return true end
         local reach=math.max(12,2*(p.length or math.abs(p.front)))
         if contact < -reach or contact > -math.max(3,2*p.lookahead) then return true end
         local nearest,distance=nil,math.huge
         for _,sample in ipairs(self.result and self.result.frames or {}) do
-            if sample.ix>=self.result.tailStart then
-                local d=(sample.x-live.x)^2+(sample.z-live.z)^2
-                if d<distance then nearest,distance=sample,d end
-            end
+            local d=(sample.x-live.x)^2+(sample.z-live.z)^2
+            if d<distance then nearest,distance=sample,d end
         end
-        if not nearest then return true end
+        if not nearest or nearest.ix<self.result.tailStart then return true end
         local deviation=0
         for _,marker in ipairs(p.work) do
             local actual=EnvelopeTurnPlanner.marker(p,live,marker)

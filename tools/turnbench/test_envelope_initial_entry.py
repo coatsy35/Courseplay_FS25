@@ -127,6 +127,8 @@ g.startPlanning=function(self,path)
 end
 PathfinderController=function() error('unchecked tractor-only recovery') end
 g:stopWithReason('local correction unavailable')
+assert(checks==0 and g.state==g.states.ENVELOPE_PREPARING)
+g:prepare()
 assert(checks==1 and t.recoveryAttempted and not f.vehicle.stopped and f.object.lowerCount==0)
 g:stopWithReason('complete recovery cannot fit')
 assert(checks==1 and f.vehicle.stopped and f.object.lowerCount==0)
@@ -214,14 +216,14 @@ for _,side in ipairs({1,-1}) do
     p.planFixture=function()
         g:prepare()
         for i=1,10000 do
-            g:updatePlanner()
+            if g.state==g.states.ENVELOPE_PREPARING then g:prepare() else g:updatePlanner() end
             if g.result then
                 assert(t.recoveryAttempted,'fixture must require the full recovery')
                 assert(not g.result.retainedApproach and not g.result.repairedApproach)
                 assert(g.result.entryError<.1 and g.turnContext.turnEndWpIx==1)
                 return g.result
             end
-            assert(not f.vehicle.stopped and g.planner,'initial recovery failed')
+            assert(not f.vehicle.stopped and (g.planner or g.state==g.states.ENVELOPE_PREPARING),'initial recovery failed')
         end
         error('initial recovery did not finish')
     end
@@ -257,6 +259,49 @@ for _,lowered in ipairs({false,true}) do
     g:stopWithReason('test exhausted local entry')
     assert(f.vehicle.stopped and f.object.lowerCount==0)
 end
+''')
+
+    def test_initial_recovery_centres_stock_plough_before_measuring_or_driving(self):
+        test_ingame_envelope.InGameEnvelopeTests.load_stock_plough_fixture(self)
+        self.lua.execute('''
+local f=initialFixture();local t=f.starter
+local c=addStockPloughFixture(f)
+f.object.animation=0 -- already on its working side at initial entry
+AIDriveStrategyCourse.onFinishRowEvent='finishRow'
+local events=0
+local old=f.strategy.raiseControllerEvent
+f.strategy.raiseControllerEvent=function(self,event,...)
+    if event==AIDriveStrategyCourse.onFinishRowEvent then
+        events=events+1;c:onFinishRow(...)
+    else old(self,event,...) end
+end
+t.state=t.states.APPROACHING_ROW;t:getDriveData(16)
+local g=assert(t.guard);g.geometry={}
+g:stopWithReason('initial local approach infeasible')
+assert(events==1 and f.object.playing and f.object.animation==.5)
+local planned=0
+g.startPlanning=function() planned=planned+1 end
+g:getDriveData(16)
+assert(planned==0 and f.object.lowerCount==0 and f.object.sideCommands==0)
+f.object.playing=false
+g:getDriveData(16)
+assert(planned==1 and g.needsWorkingGeometry and events==1)
+assert(f.object.lowerCount==0 and f.object.sideCommands==0)
+''')
+
+    def test_initial_route_does_not_rotate_plough_before_final_forward_approach(self):
+        self.lua.execute('''
+local f=initialFixture();local t=f.starter
+local rotations=0
+t.workStartHandler.lowerImplementsAsNeeded=function() rotations=rotations+1 end
+t.state=t.states.DRIVING_TO_ROW;t:getDriveData(16)
+assert(rotations==0)
+t.state=t.states.APPROACHING_ROW
+f.ppc.isReversing=function() return true end
+t:getDriveData(16);assert(rotations==0)
+f.ppc.isReversing=function() return false end
+t.startEntryCheck=function() end
+t:getDriveData(16);assert(rotations==1)
 ''')
 
 

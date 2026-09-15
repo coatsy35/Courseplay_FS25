@@ -3,11 +3,37 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from lupa.lua52 import LuaRuntime
 
 MOD = Path(__file__).parent / 'mod'
 
 MOCK = r'''
+g_currentModDirectory=''
+function Class(class,base)
+    class.__index=class
+    class.superClass=function() return base end
+    setmetatable(class,{__index=base})
+    return {__index=class}
+end
+DialogElement={}
+function DialogElement.new(_,mt) return setmetatable({},mt) end
+function DialogElement:exposeControlsAsFields(controls)
+    for _,id in pairs(controls) do
+        self[id]={setTexts=function(self,v) self.texts=v end,
+            setText=function(self,v) self.text=v end,
+            setState=function(self,v) self.state=v end,
+            setDisabled=function(self,v) self.disabled=v end}
+    end
+end
+function DialogElement:onOpen() end
+function DialogElement:onClose() end
+function DialogElement:close() self:onClose() end
+FocusManager={setFocus=function() end}
+PlayerInputComponent={registerGlobalPlayerActionEvents=function() end}
+Utils={appendedFunction=function(original,after)
+    return function(...) original(...);after(...) end
+end}
 function localToLocal(n,r,x,y,z)
     local dx,dz=n.x-r.x,n.z-r.z
     return dx*math.cos(r.t)-dz*math.sin(r.t)+x, (n.y or 0)-(r.y or 0)+y,
@@ -32,15 +58,22 @@ g_inputBinding={count=0,removed=0}
 Vehicle={INPUT_CONTEXT_NAME='VEHICLE'}
 function g_inputBinding:beginActionEventsModification(context) assert(context=='VEHICLE');self.context=context end
 function g_inputBinding:endActionEventsModification() self.context=nil end
-function g_inputBinding:registerActionEvent(action,target,fn) self.count=self.count+1; return true,self.count end
+function g_inputBinding:registerActionEvent(action,target,fn)
+    self.count=self.count+1
+    self.actions=self.actions or {}
+    self.actions[self.count]={action=action,target=target,fn=fn}
+    return true,self.count
+end
 function g_inputBinding:setActionEventText() end
 function g_inputBinding:setActionEventTextVisibility() end
-function g_inputBinding:removeActionEvent() self.removed=self.removed+1 end
+function g_inputBinding:removeActionEvent(id) self.removed=self.removed+1;self.actions[id]=nil end
 RenderText={ALIGN_LEFT=0}
 function setTextAlignment() end
 function setTextColor() end
 function renderText(x,y,size,text) assert(type(text)=='string') end
-g_gui={getIsGuiVisible=function() return false end}
+g_gui={getIsGuiVisible=function() return false end,
+    loadGui=function(self,path,name,screen) self.screen=screen end,
+    showDialog=function(self) self.screen:onOpen() end}
 root={rootNode={x=100,z=200,t=0},configFileName='$data/tractor.xml',configurations={wheels=2},
       size={width=3,length=6},maxTurningRadius=7,isServer=true,attachments={}}
 tool={rootNode={x=100,z=190,t=0},configFileName='$data/pw10012.xml',configurations={workingWidth=1},
@@ -71,7 +104,7 @@ class CaptureTests(unittest.TestCase):
         self.lua=LuaRuntime(unpack_returned_tuples=True)
         self.lua.globals().folder=self.folder.as_posix()+'/'
         self.lua.execute(MOCK)
-        for name in ('Geometry.lua','Capture.lua'):
+        for name in ('Geometry.lua','CaptureScreen.lua','Capture.lua'):
             self.lua.execute((MOD/name).read_text(encoding='utf-8'))
         self.lua.execute('VehicleGeometryCapture:loadMap(); VehicleGeometryCapture.folder=folder')
         self.addCleanup(lambda:self.lua.execute('VehicleGeometryCapture:deleteMap()'))
@@ -162,6 +195,55 @@ class CaptureTests(unittest.TestCase):
     def test_write_failure_reported_without_throwing(self):
         self.lua.execute("VehicleGeometryCapture.folder=folder..'does-not-exist/';VehicleGeometryCapture:capture()")
         self.assertIn('Capture failed',self.lua.eval('VehicleGeometryCapture.message'))
+
+    def test_input_rebuild_restores_all_actions_without_duplicates(self):
+        self.lua.execute('''
+g_inputBinding.actions={} -- game recreates the input context on vehicle entry
+PlayerInputComponent.registerGlobalPlayerActionEvents()
+local count=0
+for _,a in pairs(g_inputBinding.actions) do
+    count=count+1
+    if a.action=='VGC_PANEL' then a.fn(a.target) end
+end
+assert(count==6 and VehicleGeometryCapture.screen.isOpen)
+PlayerInputComponent.registerGlobalPlayerActionEvents() -- rebind / vehicle switch
+count=0;for _ in pairs(g_inputBinding.actions) do count=count+1 end
+assert(count==6)
+VehicleGeometryCapture:deleteMap()
+PlayerInputComponent.registerGlobalPlayerActionEvents()
+assert(next(g_inputBinding.actions)==nil)
+''')
+
+    def test_menu_buttons_select_capture_and_record_without_shortcuts(self):
+        self.lua.execute('''
+local c=VehicleGeometryCapture
+c:togglePanel()
+local s=c.screen
+assert(s.isOpen and #s.machineSelector.texts==2)
+s:onMachineChanged(2);s:onCategoryChanged(7);s:onLabelChanged(2)
+assert(c:selection()==tool and c.categoriesByObject[tool]==7 and c.labelIndex==2)
+s:onClickCapture()
+s:onClickRecord()
+assert(c.recording and s.recordButton.text=='Stop recording' and s.machineSelector.disabled)
+s:onMachineChanged(1);assert(c.selected==2)
+s:onClickBack();assert(not s.isOpen and c.recording)
+c:update(100)
+c:togglePanel();s:onClickRecord()
+assert(not c.recording and s.recordButton.text=='Start recording')
+''')
+        self.assertEqual(len(list(self.folder.glob('*.json'))),3)
+        self.assertEqual(len(list(self.folder.glob('*.jsonl'))),1)
+
+    def test_native_menu_callbacks_and_exposed_controls_exist(self):
+        xml=ET.parse(MOD/'CaptureScreen.xml').getroot()
+        ids={node.get('id') for node in xml.iter() if node.get('id')}
+        for name in ('machineSelector','categorySelector','labelSelector','statusText','captureButton','recordButton'):
+            self.assertIn(name,ids)
+        for node in xml.iter():
+            for event in ('onOpen','onClose','onClick'):
+                method=node.get(event)
+                if method:
+                    self.assertTrue(self.lua.eval("type(VGCCaptureScreen['"+method+"'])=='function'"),method)
 
 
 if __name__=='__main__':

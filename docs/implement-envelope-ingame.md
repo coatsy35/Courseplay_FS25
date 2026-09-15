@@ -3,8 +3,25 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.17**, packaged mod version **8.1.0.117**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.17` records identify it.
+Current test: **v0.18**, packaged mod version **8.1.0.118**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.18` records identify it.
+
+Version 0.18 addresses the T7.300/PW initial-entry failure recorded on 15 September
+at 22:19–22:20. Initial entry bypassed the normal row-finish event, so its recovery
+loop used an uncentred plough. It now raises implements and emits CP's stock
+`onFinishRow(false)` event, then waits stationary for centring before measuring
+and planning the loop. CP still owns rotation back to the working side.
+The initial route also follows stock CP's event timing: its rotation/lowering
+controller is called only on the final forward approach, not throughout the
+outgoing route whenever the tractor briefly faces the incoming row.
+
+The drift check also treated a nearby future tail sample as if the tractor had
+already completed the bulb (40° tractor / 85° implement heading error). A local
+correction now requires the incoming course phase, a tractor within 30° of its
+direction, and a nearest predicted sample on that phase. Lowering tolerances,
+field containment and joint limits are unchanged. Replays cover the logged pose
+in both directions, with stock plough rotation and one aligned lowering. Field,
+centred marker motion and physics remain synthetic; in-game validation is required.
 The earlier unnumbered builds used 8.1.0.3. Version 0.3 fixed their live
 `coroutine.create/resume` crash: FS25 does not expose that library. The search
 and simulation now retain explicit state between updates. All integration

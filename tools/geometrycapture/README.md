@@ -3,7 +3,9 @@
 Standalone FS25 development mod. Captures independent, reusable machine geometry and optional
 movement recordings. Works from loaded vehicles, including built-in machines. Courseplay is
 optional; when accessible, its effective radius and per-machine override are included as contextual
-observations. This first build requires an in-game smoke test; offline tests do not exercise GIANTS.
+observations. Version **0.2.0.0** adds a native button menu and restores actions whenever
+FS25 rebuilds its player controls. Menu rendering still needs an in-game smoke test;
+offline tests exercise button behaviour and input registration, not GIANTS rendering.
 
 ## Install and first PW 100-12 capture
 
@@ -11,21 +13,24 @@ observations. This first build requires an in-game smoke test; offline tests do 
    Keep the ZIP intact. Enable **Vehicle Geometry Capture** on the save selection screen.
    It is a separate mod, with no replacement of the Courseplay test or live ZIP.
 2. Enter your tractor with the PW 100-12 attached. Unfold and straighten on reasonably level ground.
-3. Press **left Ctrl + left Alt + G** to show the capture panel.
-4. Use **Ctrl + Alt + N** until the panel names the PW 100-12. This selects the capture target only.
-5. Use **Ctrl + Alt + T** to choose **long-narrow-trailed**.
-6. Set the actual plough state yourself. Use **Ctrl + Alt + L** to select `plough-A-raised`,
-   then **Ctrl + Alt + C** to save. Repeat for A lowered, B raised and B lowered.
+3. Use **Capture: show panel** in Controls, or console command `vgcPanel`, to open the menu.
+   New installations default to **left Ctrl + left Shift + G** to avoid Google Drive.
+   Existing custom bindings are retained (including Ctrl + [).
+4. Select the PW 100-12 with the **Machine** selector. This selects the capture target only.
+5. Choose **long-narrow-trailed** in **Machine category**.
+6. Set the actual plough state yourself. Select `plough-A-raised` in **State / manoeuvre label**,
+   then click **Save geometry**. Repeat for A lowered, B raised and B lowered.
    A/B are your labels for the two working orientations; wait for each animation to finish.
 7. Select the tractor and its steering category and capture it separately, straight and stationary.
-8. For a movement test, set the label to left/right turn or headland entry/exit, then press
-   **Ctrl + Alt + R**. Drive normally or let CP perform the turn. Press the same keys to stop.
+8. For a movement test, choose its label and click **Start recording**, then **Back to driving**.
+   Drive normally or let CP perform the turn. Reopen the menu and click **Stop recording**.
+   Starting a recording saves separate geometry files for all attached machines automatically.
 
 Use an ordinary CP turn for the first recording. There is no need to force the tractor into a drawbar
 collision or hold it against a joint stop. The recorder does not operate the machine for you.
 
 All shortcuts are listed as **Capture:** actions in the game's Controls settings and can be rebound.
-The panel shows the default shortcuts. Console alternatives, if the console is already enabled:
+Shortcuts are optional; all operations are available from the menu. Console alternatives:
 `vgcPanel`, `vgcNext`, `vgcClass`, `vgcLabel`, `vgcCapture`, `vgcRecord`.
 
 ## Files

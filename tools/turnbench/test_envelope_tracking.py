@@ -73,6 +73,27 @@ t.lowerRequested=false;t.approachCorrected=true
 assert(t:checkApproachTracking(-15,p.start))
 ''')
 
+    def test_v017_unfinished_bulb_does_not_trigger_tail_repair(self):
+        self.lua.execute('''
+local p=envelopeFixture(5.6,11.09,1.633,3.778,17.74,14.3,1,61)
+local f=makeEnvelopeLiveFixture(p);local t=f.turn
+t.geometry=assert(EnvelopeTurnGeometry.capture(t))
+t.geometry.goal.t=0
+local live={x=-165.15,z=-142.598,t=math.rad(-40.279),phi=math.rad(-84.758)}
+t.result={tailStart=125,frames={{ix=125,x=-160,z=-140,t=0,phi=0}}}
+t.ppc.getCurrentWaypointIx=function() return 122 end
+t.startPlanning=function() error('unfinished bulb must not be replaced') end
+assert(t:checkApproachTracking(-22.15,live))
+assert(not t.approachCorrected and not t.approachCorrectionPending)
+-- Even when the tractor faces the row, an earlier, neighbouring piece of
+-- the bulb must not be compared against future tail samples.
+live.t=0
+t.ppc.getCurrentWaypointIx=function() return 125 end
+t.result.frames[2]={ix=124,x=live.x,z=live.z,t=live.t,phi=live.phi}
+assert(t:checkApproachTracking(-22.15,live))
+assert(not t.approachCorrected)
+''')
+
     def test_full_recovery_learns_faster_trailer_response_without_changing_geometry(self):
         self.lua.execute('''
 for _,side in ipairs({1,-1}) do
@@ -97,6 +118,38 @@ for _,side in ipairs({1,-1}) do
     assert(math.abs(f.turn.measuredResponseLength-10.4)<.15)
     assert(f.object.lowerCount==1 and not f.vehicle.stopped)
     assert(math.abs(EnvelopeTurnGeometry.capture(f.turn).length-11.09)<.001)
+end
+''')
+
+    def test_v017_initial_pose_with_centred_plough_completes_recovery(self):
+        test_ingame_envelope.InGameEnvelopeTests.load_stock_plough_fixture(self)
+        self.lua.execute('''
+for _,side in ipairs({1,-1}) do
+    -- Latest T7.300 start pose and measured working geometry. Centred marker
+    -- movement and the field are synthetic; this exercises the real stock
+    -- rotation controller and the envelope lifecycle, not GIANTS collisions.
+    local p=envelopeFixture(5.6,11.09,1.636,3.781,17.744,14.3,1,61)
+    p.start={x=-158.461*side,z=-130.834,t=math.rad(1.631)*side,phi=math.rad(20.333)*side}
+    p.goal={x=-157.051*side,z=-118.820,t=0}
+    p.hitchX=.034*side;p.axleOffsetX=.03*side;p.slope=p.slope*side
+    p.lookahead=2.695;p.vehicleRadius=5.389
+    p.work={{x=-3.268*side,z=-2.145,towed=true},{x=2.283*side,z=-2.460,towed=true},
+        {x=-3.268*side,z=-16.108,towed=true,rear=true},{x=2.283*side,z=-16.108,towed=true,rear=true}}
+    p.workCentreX=(-3.268+2.283)/2*side+p.hitchX
+    for _,m in ipairs(p.work) do m.x=m.x*.1 end
+    local f=makeEnvelopeLiveFixture(p);addStockPloughFixture(f)
+    f.turn.needsWorkingGeometry=true;f.turn.entrySlope=p.slope;f.turn.headlandSeed=61
+    f.turn.ppc=PurePursuitController(f.vehicle);f.turn.ppc.shortLookaheadDistance=2.695
+    p.tickFixture=function(current)
+        if current.object.playing and g_currentMission.time>=current.object.animationEnd then
+            current.object.animation=current.object.targetAnimation
+            current.object.playing=false
+            for _,m in ipairs(p.work) do m.x=m.x/.1 end
+        end
+    end
+    driveEnvelopeLiveFixture(p,f)
+    assert(f.object.sideCommands==1 and f.object.lowerCount==1)
+    assert(f.strategy.resumed==1 and not f.vehicle.stopped)
 end
 ''')
 

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<GUI onOpen="onOpen" onClose="onClose">
+    <GuiElement profile="newLayer" />
+    <GuiElement profile="fs25_dialogBg" id="dialogElement" size="900px 590px">
+        <Text profile="vgcTitle" text="VEHICLE GEOMETRY CAPTURE" />
+        <Text profile="vgcLabel" position="40px -110px" text="Machine" />
+        <MultiTextOption profile="vgcSelector" position="40px -140px" id="machineSelector" namedComponents="true" onClick="onMachineChanged" />
+        <Text profile="vgcLabel" position="40px -200px" text="Machine category (label only)" />
+        <MultiTextOption profile="vgcSelector" position="40px -230px" id="categorySelector" namedComponents="true" onClick="onCategoryChanged" />
+        <Text profile="vgcLabel" position="40px -290px" text="State / manoeuvre label (does not move the machine)" />
+        <MultiTextOption profile="vgcSelector" position="40px -320px" id="labelSelector" namedComponents="true" onClick="onLabelChanged" />
+        <Text profile="vgcLabel" position="40px -380px" text="Recording captures every attached machine. Close this menu to drive." />
+        <Text profile="vgcStatus" id="statusText" />
+        <BoxLayout profile="fs25_dialogButtonBox">
+            <Button profile="buttonExtra1" id="captureButton" text="Save geometry" onClick="onClickCapture" />
+            <Button profile="buttonOK" id="recordButton" text="Start recording" onClick="onClickRecord" />
+            <Button profile="buttonBack" text="Back to driving" onClick="onClickBack" />
+        </BoxLayout>
+    </GuiElement>
+    <GUIProfiles>
+        <Profile name="vgcLabel" extends="fs25_settingsSectionHeader">
+            <anchor value="0 1" /><pivot value="0 1" /><size value="820px 30px" /><textSize value="18px" />
+        </Profile>
+        <Profile name="vgcTitle" extends="vgcLabel">
+            <position value="40px -50px" /><textSize value="24px" />
+        </Profile>
+        <Profile name="vgcSelector" extends="fs25_settingsMultiTextOption">
+            <anchor value="0 1" /><pivot value="0 1" /><size value="820px 42px" />
+        </Profile>
+        <Profile name="vgcStatus" extends="vgcLabel">
+            <position value="40px -425px" /><size value="820px 70px" /><textSize value="16px" />
+            <textMaxNumLines value="3" />
+        </Profile>
+    </GUIProfiles>
+</GUI>

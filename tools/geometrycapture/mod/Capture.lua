@@ -1,5 +1,6 @@
 -- Standalone, opt-in capture. Never commands steering, hydraulics or AI.
-VehicleGeometryCapture = {visible=false,selected=1,labelIndex=1,events={},clock=0,serial=0}
+VehicleGeometryCapture = {visible=false,selected=1,labelIndex=1,events={},clock=0,serial=0,
+    baseDirectory=g_currentModDirectory}
 local C,G = VehicleGeometryCapture,VGCGeometry
 C.categories={'unclassified','front-wheel-steer','four-wheel-steer','articulated','twin-track',
               'mounted','long-trailed','long-narrow-trailed','wide-short-trailed','multiple-pivots'}
@@ -31,6 +32,7 @@ function C:notify(message)
 end
 
 function C:loadMap()
+    self.loaded=true
     self.categoriesByObject=setmetatable({},{__mode='k'})
     self.clock,self.serial,self.selected,self.labelIndex=0,0,1,1
     self.folder=getUserProfileAppPath() .. 'modSettings/VehicleGeometryCapture/'
@@ -42,21 +44,43 @@ function C:loadMap()
     addConsoleCommand('vgcNext','Select next attached machine','nextMachine',self)
     addConsoleCommand('vgcClass','Cycle machine category','nextCategory',self)
     addConsoleCommand('vgcLabel','Cycle capture label','nextLabel',self)
+    -- Player/vehicle input contexts are rebuilt on entry and after rebinding.
+    -- Register with the same lifecycle used by CP's global player controls,
+    -- rather than leaving six events in the map-loading context only.
+    if not self.inputHookInstalled then
+        PlayerInputComponent.registerGlobalPlayerActionEvents=Utils.appendedFunction(
+            PlayerInputComponent.registerGlobalPlayerActionEvents,function()
+                if C.loaded then C:registerInputEvents() end
+            end)
+        self.inputHookInstalled=true
+    end
     g_inputBinding:beginActionEventsModification(Vehicle.INPUT_CONTEXT_NAME)
+    self:registerInputEvents()
+    g_inputBinding:endActionEventsModification()
+    self.screen=VGCCaptureScreen.new(self)
+    g_gui:loadGui(self.baseDirectory..'CaptureScreen.xml','VGCCaptureScreen',self.screen)
+    self.screen:useNativeBackground()
+    self:notify('Ready. Open Capture: show panel in Controls, or use vgcPanel in the console.')
+    self.visible=false
+end
+
+function C:registerInputEvents()
+    for _,id in ipairs(self.events) do g_inputBinding:removeActionEvent(id) end
+    self.events={}
     for _,binding in ipairs(self.bindings) do
         local _,id=g_inputBinding:registerActionEvent(InputAction[binding[1]],self,self[binding[3]],false,true,false,true)
         if id then
             self.events[#self.events+1]=id
             g_inputBinding:setActionEventText(id,binding[2])
-            g_inputBinding:setActionEventTextVisibility(id,false)
+            g_inputBinding:setActionEventTextVisibility(id,binding[1]=='VGC_PANEL')
         end
     end
-    g_inputBinding:endActionEventsModification()
-    self:notify('Ready. Ctrl+Alt+G opens capture controls. Enter a tractor to begin.')
-    self.visible=false
 end
 
-function C:togglePanel() self.visible=not self.visible end
+function C:togglePanel()
+    if self.screen.isOpen then self.screen:close()
+    else g_gui:showDialog('VGCCaptureScreen') end
+end
 function C:nextMachine()
     if self.recording then return self:notify('Stop recording before changing the selected machine.') end
     self.selected=self.selected%math.max(1,#G.objects(self:vehicle()))+1
@@ -149,7 +173,7 @@ function C:toggleRecord()
         if file then pcall(file.close,file) end
         return self:notify('Could not start recording: '..tostring(err))
     end
-    return self:notify('Recording at up to 10 Hz. Drive the test; Ctrl+Alt+R stops. Maximum 10 minutes.')
+    return self:notify('Recording at up to 10 Hz. Close the menu to drive; reopen it to stop. Maximum 10 minutes.')
 end
 
 function C:sample()
@@ -199,8 +223,8 @@ function C:draw()
     local lines={'VEHICLE GEOMETRY CAPTURE',object and G.identity(object).name or 'Enter a tractor',
         'Category: '..self.categories[object and self.categoriesByObject[object] or 1],
         'Label: '..self.labels[self.labelIndex],self.recording and 'RECORDING' or 'Ready',
-        'Ctrl+Alt+G: panel   N: next machine', 'Ctrl+Alt+T: category   L: label',
-        'Ctrl+Alt+C: capture   R: record/stop', 'Use labelled raised/lowered captures on level ground.',
+        'Capture: show panel opens the menu; all actions have buttons.',
+        'Console: vgcPanel / vgcRecord', 'Use labelled raised/lowered captures on level ground.',
         self.message or ''}
     setTextAlignment(RenderText.ALIGN_LEFT)
     for i,line in ipairs(lines) do
@@ -212,6 +236,8 @@ function C:draw()
 end
 
 function C:deleteMap()
+    self.loaded=false
+    if self.screen and self.screen.isOpen then self.screen:close() end
     self:stopRecording('map closed')
     for _,name in ipairs({'vgcCapture','vgcRecord','vgcPanel','vgcNext','vgcClass','vgcLabel'}) do removeConsoleCommand(name) end
     for _,id in ipairs(self.events) do g_inputBinding:removeActionEvent(id) end
