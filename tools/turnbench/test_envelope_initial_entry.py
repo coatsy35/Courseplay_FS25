@@ -267,6 +267,7 @@ end
         self.lua.execute('''
 local f=initialFixture();local t=f.starter
 local c=addStockPloughFixture(f)
+f.vehicle:getAIDirectionNode().t=math.rad(15) -- still turning, not the straight entry
 f.object.animation=0 -- already on its working side at initial entry
 AIDriveStrategyCourse.onFinishRowEvent='finishRow'
 local events=0
@@ -307,6 +308,7 @@ assert(t.state==t.states.DRIVING_TO_ROW) -- checked before approaching the crop
         test_ingame_envelope.InGameEnvelopeTests.load_stock_plough_fixture(self)
         self.lua.execute('''
 local f=initialFixture();local t=f.starter;local c=addStockPloughFixture(f)
+f.vehicle:getAIDirectionNode().t=math.rad(15) -- centring required before this arc
 local permitted=false;f.object.getIsPlowRotationAllowed=function() return permitted end
 local events=0;f.strategy.raiseControllerEvent=function(_,event)
     assert(event==AIDriveStrategyCourse.onFinishRowEvent);events=events+1;c:onFinishRow(false)

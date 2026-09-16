@@ -34,6 +34,19 @@ function EnvelopeStartRowOnly:prepareInitialPosition()
             end
         end
     end
+    if self:canDeployPlough() then
+        -- Already on the straight: do not centre a plough which preparation
+        -- has put on its working side, only to turn it over again immediately.
+        self.initialNeedsWorkingGeometry=false
+        for _,controller in pairs(self.driveStrategy.controllers) do
+            if controller.isRotatablePlow and controller:isRotatablePlow() and
+                    not controller:isRotatedToSide(self.turnContext:shouldPlowBeOnTheLeft()) then
+                self.initialNeedsWorkingGeometry=true
+            end
+        end
+        self.initialPrepared=true
+        return true
+    end
     if self.initialNeedsWorkingGeometry and not self.initialCentreRequested then
         self.initialCentreRequested=true
         self.driveStrategy:raiseImplements()
@@ -41,6 +54,18 @@ function EnvelopeStartRowOnly:prepareInitialPosition()
         return false -- allow GIANTS to begin the animation before checking it
     end
     self.initialPrepared=true
+    return true
+end
+
+function EnvelopeStartRowOnly:canDeployPlough()
+    local heading=EnvelopeTurnGeometry.pose(self.turnContext.workStartNode).t
+    local pose=EnvelopeTurnGeometry.pose(self.vehicle:getAIDirectionNode())
+    if math.abs(EnvelopeTurnPlanner.wrap(pose.t-heading))>EnvelopeTurnPlanner.angleTolerance then return false end
+    for i=math.max(1,self.ppc:getCurrentWaypointIx()),self.turnCourse:getNumberOfWaypoints()-1 do
+        if self.turnCourse:isReverseAt(i) or
+                math.abs(EnvelopeTurnPlanner.wrap(self.turnCourse:getWaypointYRotation(i)-heading))>
+                    EnvelopeTurnPlanner.angleTolerance then return false end
+    end
     return true
 end
 
@@ -119,13 +144,17 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
         end
     end
     guard.stopWithReason=function(g,reason)
-        if g.geometry and not g.result and not g.lowerRequested and not self.recoveryAttempted then
+        if g.geometry and not g.result and not g.lowerRequested and not self.recoveryAttempted and not g.planningTimedOut then
             -- The original/local approach is infeasible. Reuse the row-turn
             -- planner from this stopped pose, keeping the original entry and
             -- checking the complete trailer motion, footprint and lowering.
             -- Execute through EnvelopeCourseTurn too: stock StartRowOnly does
             -- not enforce the combination's steering radius while tracking.
             self.recoveryAttempted=true
+            -- Account for calculation across attempts, but not the physical
+            -- centring animation between them.
+            g.planningWaitUsed=g.planningWaitStarted and g_currentMission.time-g.planningWaitStarted or 0
+            g.planningWaitStarted=nil
             g:log('initial approach cannot align: %s; checking a complete envelope recovery to waypoint %d',reason,self.entryIx)
             -- Initial entry has no finishRow transition. Emit the same stock
             -- event explicitly before attempting a bulb: the working-side

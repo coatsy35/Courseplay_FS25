@@ -12,6 +12,7 @@ class InGameEnvelopeTests(unittest.TestCase):
         self.lua = self.bridge.lua
         self.lua.execute("""
 g_updateLoopIndex=1
+g_currentMission.time=0
 function getName() return 'test node' end
 require('PurePursuitController')
 require('EnvelopeTurnPlanner')

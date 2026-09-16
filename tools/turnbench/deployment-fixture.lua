@@ -12,10 +12,14 @@ function deploymentFixture(side)
     local f=makeEnvelopeLiveFixture(p);local t=f.turn
     addStockPloughFixture(f)
     f.object.setRotationMax=function(self,whichSide)
-        local _,_,angle,_,state=EnvelopeTurnGeometry.assessLive(t.geometry,f.vehicle)
-        assert(angle<=EnvelopeTurnPlanner.angleTolerance,'rotation before implement alignment')
+        local _,_,_,_,state=EnvelopeTurnGeometry.assessLive(t.geometry,f.vehicle)
         assert(math.abs(EnvelopeTurnPlanner.wrap(state.t-t.geometry.goal.t))<=EnvelopeTurnPlanner.angleTolerance,
             'rotation before tractor alignment')
+        for i=math.max(1,t.ppc:getCurrentWaypointIx()),#t.result.path-1 do
+            local a,b=t.result.path[i],t.result.path[i+1]
+            assert(math.abs(EnvelopeTurnPlanner.wrap(math.atan2(b.x-a.x,b.z-a.z)-t.geometry.goal.t))<=
+                EnvelopeTurnPlanner.angleTolerance,'rotation before final straight')
+        end
         self.sideCommands=self.sideCommands+1;self.targetAnimation=whichSide and 1 or 0
         self.playing=true;self.animationEnd=g_currentMission.time+7000
     end
@@ -36,6 +40,7 @@ function deploymentFixture(side)
     p.planFixture=function()
         t:startPlanning()
         for i=1,10000 do
+            g_currentMission.time=g_currentMission.time+50
             t:updatePlanner()
             if not t.planner then
                 f.initialAttempts=t.result and t.result.attempts
@@ -45,6 +50,33 @@ function deploymentFixture(side)
         error('deployment planning did not finish')
     end
     return p,f
+end
+
+-- Saved T7 first-pike course: use its outer headland CENTRELINE as a
+-- conservative inset boundary. Arrival yaw and hydraulic transform remain
+-- synthetic; a separate unit check covers the stock approach's handover
+-- policy, not GIANTS' execution of the complete drive-to-work path.
+function configureSavedStraightEntry(p,f,field,arrivalAngle)
+    f.vehicle.cpGetFieldPolygon=function() return field end
+    f.strategy.vehicle=f.vehicle;f.strategy.workWidth=p.width
+    f.strategy.frontMarkerDistance=-3.7;f.strategy.backMarkerDistance=-17.4
+    local course={getWaypointPosition=function() return p.goal.x,0,p.goal.z end,
+        getWaypointYRotation=function() return p.goal.t end,getNumberOfHeadlands=function() return 9 end}
+    local offset,fits=EnvelopeTurnGeometry.outerEntryOffset(f.strategy,course,1,-p.length)
+    assert(fits and offset < -24)
+    p.start={x=p.goal.x,z=p.goal.z+offset,t=0,phi=math.rad(arrivalAngle)}
+    f:setPose(p.start)
+    p.planFixture=function()
+        local path={}
+        for z=p.start.z,p.goal.z+12,0.5 do path[#path+1]={x=p.start.x,z=z} end
+        f.turn:startPlanning(path)
+        for i=1,1000 do
+            g_currentMission.time=g_currentMission.time+50
+            f.turn:updatePlanner()
+            if not f.turn.planner then return assert(f.turn.result,table.concat(f.logs,'\n')) end
+        end
+        error('straight entry validation did not finish')
+    end
 end
 
 function attachFieldworkHandover(p,f)

@@ -3,8 +3,29 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.21**, packaged mod version **8.1.0.121**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.21` records identify it.
+Current test: **v0.22**, packaged mod version **8.1.0.122**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.22` records identify it.
+
+Version 0.21 failed the subsequent live first-row entry despite passing its
+offline checks. Version 0.22 addresses that earlier approach: it keeps CP's
+drive-to-work pathfinder, places its target farther towards the outer headland
+where the full-width combination fits, and delays the usual 15-metre handover
+until the tractor reaches the final straight. Folded ploughs stay folded during
+transport; unfolded ploughs are centred once before driving. Turnover is allowed
+on the straight, followed by measurement and validation of the working envelope.
+The implement need not already be straight while centred: the raised forward
+correction aligns its deployed working edges before lowering.
+
+Local correction screens several tangent shapes and refines lateral lead before
+fine production-PPC validation. Working limits remain 0.1 m / two degrees, with
+the existing tighter prediction margin. Stopped experimental planning has a
+one-second cumulative budget; physical centring/turnover is excluded. Exhaustion
+stops explicitly and cannot authorise an unchecked path or restart the budget.
+See [v0.22 qualification](v022-qualification.md) for evidence and limitations.
+Validation: **92 offline regression tests and 27 packaged execution cases pass**.
+The complete physical v0.22 start still requires an in-game test.
+
+### Earlier versions
 
 Version 0.21 fixes both failures which withdrew v0.20 from testing. Deployment
 now reserves the controller's lookahead and braking distance as well as the

@@ -3,11 +3,12 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.21'
+EnvelopeCourseTurn.TEST_VERSION = '0.22'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
     self.name='EnvelopeCourseTurn'
+    self.envelopeAlignment=true
     self:addState('ENVELOPE_PREPARING')
     self:addState('ENVELOPE_PLANNING')
     self:addState('ENVELOPE_STOPPED')
@@ -161,6 +162,7 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
     self:releasePreparation()
     self.state=self.states.ENVELOPE_PLANNING
     self.planningStarted=g_currentMission.time
+    self.planningWaitStarted=self.planningWaitStarted or self.planningStarted-(self.planningWaitUsed or 0)
     self.planningProgressLogged=nil
     self.planner={update=function()
         self:log('measuring %s envelope',self.needsWorkingGeometry and 'centred-turn' or 'working')
@@ -199,7 +201,14 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
             -- Only its final incoming section may deploy the plough, even if
             -- an earlier part of that bulb briefly points towards the row.
             local tailStart=EnvelopeTurnPlanner.approachTailStart(p,remainingPath)
-            local simulation=EnvelopeTurnPlanner.newSimulation(p,remainingPath,tailStart,0.075,true,true)
+            local approachModel=p
+            if self.needsWorkingGeometry then
+                approachModel={}
+                for k,v in pairs(p) do approachModel[k]=v end
+                approachModel.deploymentApproach=true
+                tailStart=EnvelopeTurnPlanner.straightTailStart(p,remainingPath)
+            end
+            local simulation=EnvelopeTurnPlanner.newSimulation(approachModel,remainingPath,tailStart,0.075,true,true)
             self.planner={update=function(_,budget)
                 local result=simulation:update(budget)
                 if not result then return nil end
@@ -240,14 +249,25 @@ end
 -- the stock PlowController still owns the animation and unfolding permission.
 function EnvelopeCourseTurn:checkWorkingPosition()
     if not self.rotationStarted then
-        local _,error,angle,_,live=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
+        -- Facing the row briefly on an arc is not the final straight. PPC's
+        -- end-turn flag starts at the steering lead, which can still curve.
+        if not self.result then return true end
+        for i=math.max(1,self.ppc:getCurrentWaypointIx()),#self.result.path-1 do
+            local a,b=self.result.path[i],self.result.path[i+1]
+            if (b.x-a.x)^2+(b.z-a.z)^2>1e-8 and
+                    math.abs(EnvelopeTurnPlanner.wrap(math.atan2(b.x-a.x,b.z-a.z)-self.geometry.goal.t))>
+                        EnvelopeTurnPlanner.angleTolerance then return true end
+        end
+        local _,_,_,_,live=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
         -- Keep the plough centred throughout the bulb and steering lead.
-        -- Stock CP's 30-degree trigger is deliberately held back until both
-        -- tractor and implement face the incoming row. The upstream deployment
-        -- target leaves room to measure the working markers before lowering.
-        if angle>EnvelopeTurnPlanner.angleTolerance or
-                math.abs(EnvelopeTurnPlanner.wrap(live.t-self.geometry.goal.t))>EnvelopeTurnPlanner.angleTolerance or
-                error>math.min(0.5,self.geometry.width*0.1) then return true end
+        -- Deploy when the tractor is ON that straight, then draw forwards to
+        -- align the working implement before lowering. Requiring the centred
+        -- tool to be straight first consumed the very run-in needed after its
+        -- working frame/offset changed. This is NOT the lowering admission.
+        local lateral=EnvelopeTurnPlanner.localPoint(live,self.geometry.goal)
+        if math.abs(EnvelopeTurnPlanner.wrap(live.t-self.geometry.goal.t))>EnvelopeTurnPlanner.angleTolerance or
+                math.abs(lateral)>math.min(0.5,self.geometry.width*0.1) then return true end
+        self.deploymentReady=true
     end
     self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onTurnEndProgressEvent,
         self:getLowerImplementNode(),false,false,self.turnContext:shouldPlowBeOnTheLeft())
@@ -284,6 +304,10 @@ function EnvelopeCourseTurn:checkWorkingPosition()
     return false
 end
 
+function EnvelopeCourseTurn:canDeployPlough()
+    return self.deploymentReady==true
+end
+
 function EnvelopeCourseTurn:updateRotation()
     if self.needsWorkingGeometry then self:checkWorkingPosition() end
 end
@@ -292,14 +316,21 @@ end
 coroutine library. Each call below advances a small sample batch. ]]
 
 function EnvelopeCourseTurn:updatePlanner()
+    -- Never turn an infeasible start into tens of seconds of stopped retries.
+    -- A failed deadline remains a failure: it cannot admit an unchecked path.
+    if self.planningWaitStarted and g_currentMission.time-self.planningWaitStarted>=1000 then
+        self.planningTimedOut=true
+        self:stopWithReason('planning exceeded the one-second stopped budget')
+        return
+    end
     local started=getTimeSec()
     local ok,result
     repeat
         ok,result=pcall(self.planner.update,self.planner,10)
         if not ok then self:stopWithReason('planner error: '..tostring(result)); return end
-    -- Planning is stationary. Give it up to 8 ms per update rather than 4 ms;
-    -- retain small sample batches so the UI and cancellation stay responsive.
-    until result or getTimeSec()-started>=0.008
+    -- Short bounded batches remain cancellable. Use the one-second stopped
+    -- window rather than spreading a small calculation over many seconds.
+    until result or getTimeSec()-started>=0.050
     if not result then
         -- Long first-turn searches must be distinguishable from a frozen worker.
         -- Report progress without per-candidate or per-frame log traffic.
@@ -320,6 +351,8 @@ function EnvelopeCourseTurn:updatePlanner()
         self:stopWithReason(result.reason); return
     end
     self.result=result
+    self.planningWaitStarted=nil
+    self.planningWaitUsed=nil
     self.entrySpeedLimit=nil
     local points={}
     for i,wp in ipairs(result.path) do
@@ -335,7 +368,8 @@ function EnvelopeCourseTurn:updatePlanner()
     if result.repairedApproach then
         self:log('SELECTED local entry correction: %d trials, lateral lead %.3f m, predicted edge error %.3f m, worst admission error %.3f m, reused shape %s; no second loop',result.attempts,result.bias,result.entryError,result.maxEntryError or result.entryError,tostring(result.usedHint or false))
     elseif result.retainedApproach then
-        self:log('VALIDATED remaining working-position approach: predicted edge error %.3f m',result.entryError)
+        if result.requiresDeployment then self:log('VALIDATED raised CP approach to final straight; working entry still requires deployment and validation')
+        else self:log('VALIDATED remaining working-position approach: predicted edge error %.3f m',result.entryError) end
     else
         self.initialTurnHint=EnvelopeTurnPlanner.turnHint(self.geometry,result)
         self.initialTurnModel=EnvelopeTurnGeometry.turnModel(self.geometry)

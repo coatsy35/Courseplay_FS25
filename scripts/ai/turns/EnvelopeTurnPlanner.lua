@@ -116,6 +116,33 @@ function E.outside(point, polygon, reserve)
     return true
 end
 
+-- Index edges by horizontal bands once, rather than walking every field edge
+-- for every tractor/tool sample. Both ray crossings and reserved-edge checks
+-- can only involve segments whose z range reaches this band. No polygon
+-- simplification, enlarged field or reduced clearance is involved.
+function E.polygonChecker(polygon,reserve,wantInside)
+    local bands={}
+    local a=polygon[#polygon]
+    for _,b in ipairs(polygon) do
+        local edge={a,b}
+        for band=math.floor((math.min(a.z,b.z)-reserve)/4),math.floor((math.max(a.z,b.z)+reserve)/4) do
+            bands[band]=bands[band] or {}
+            bands[band][#bands[band]+1]=edge
+        end
+        a=b
+    end
+    return function(point)
+        local inside=false
+        for _,edge in ipairs(bands[math.floor(point.z/4)] or {}) do
+            local a,b=edge[1],edge[2]
+            if segmentDistanceSquared(point,a,b)<reserve*reserve then return false end
+            if (a.z>point.z)~=(b.z>point.z) and
+                    point.x<(b.x-a.x)*(point.z-a.z)/(b.z-a.z)+a.x then inside=not inside end
+        end
+        return inside==wantInside
+    end
+end
+
 -- Body edges are sampled too: four corners alone can straddle a concave hedge
 -- or an island. The 0.5 m reserve covers the <=0.4 m spatial samples between
 -- checks. Field polygons are complemented by GIANTS field-density queries in
@@ -283,6 +310,16 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
         if collect and (not frames[#frames] or travelled-frames[#frames].distance >= 0.2) then
             frames[#frames+1]={x=s.x,z=s.z,t=s.t,phi=s.phi,distance=travelled,contact=contact,aligned=aligned,ix=ix}
         end
+        if p.deploymentApproach and ix>=tailStart then
+            local lateral=E.localPoint(s,p.goal)
+            if math.abs(E.wrap(s.t-p.goal.t))<=E.angleTolerance and math.abs(lateral)<=math.min(0.5,p.width*0.1) then
+                -- Only the raised route TO deployment is admitted here.
+                -- Execution must stop for turnover and remeasure/revalidate
+                -- the working shape before it may follow the remaining line.
+                return finish({ok=true,path=path,tailStart=tailStart,frames=frames,entryError=error,
+                    maxArticulation=maxArticulation,distance=travelled,requiresDeployment=true})
+            end
+        end
         if ix >= tailStart then
             alignmentLead = aligned and (alignmentLead+step) or 0
             if optimiseEntry and contact>=E.loweringGateContact then
@@ -317,6 +354,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
                 end
                 return finish({ok=true,path=path,tailStart=tailStart,frames=frames,entryError=contactError,
                     maxArticulation=maxArticulation,distance=travelled,rearError=rearError,
+                    alignmentError=optimiseEntry and (entryMin+entryMax)/2 or balanced,
                     maxEntryError=optimiseEntry and math.max(math.abs(entryMin),math.abs(entryMax)) or nil})
             end
         end
@@ -384,12 +422,20 @@ function E.newSearch(p)
     -- long trailer's joint limit while the larger crosses a sloping boundary;
     -- that does not mean every radius between them is infeasible.
     local bends,factors={8,12,16,20,28,36},{1.1,(1.1+1.25)/2,1.25,1}
-    if p.deploymentTarget then
+    local rowSeparation=math.abs(E.localPoint(p.goal,p.start))
+    local wideTransfer=rowSeparation>2*p.radius
+    if p.deploymentTarget or (p.length and (rowSeparation<p.length or wideTransfer)) then
         -- Start near the measured trailer's settling distance, then retain
         -- every existing compact candidate as a fallback. Short seed bends
         -- repeatedly fail for long centred implements and waste stopped time.
         -- This changes search priority only, never radius/clearance admission.
-        local lead=(p.length or p.width)*1.8
+        -- Closely spaced rows need trailer settling even without turnover.
+        -- A same-heading recovery has a complete bulb to settle; opposite
+        -- rows start with the shorter lead. A transfer wider than a turning
+        -- diameter also needs settling after its transverse section; ordinary
+        -- gaps between those cases retain compact priority.
+        local sameHeading=math.abs(E.wrap(p.start.t-p.goal.t))<math.pi/2
+        local lead=(p.length or p.width)*((p.deploymentTarget or sameHeading or wideTransfer) and 1.8 or 1.5)
         table.sort(bends,function(a,b)
             local da,db=math.abs(a-lead),math.abs(b-lead)
             return da==db and a<b or da<db
@@ -520,6 +566,18 @@ function E.approachTailStart(p,path)
     return math.max(2,first)
 end
 
+function E.straightTailStart(p,path)
+    local first=#path
+    for i=#path-1,1,-1 do
+        local a,b=path[i],path[i+1]
+        if (b.x-a.x)^2+(b.z-a.z)^2>1e-8 then
+            if math.abs(E.wrap(math.atan2(b.x-a.x,b.z-a.z)-p.goal.t))>E.angleTolerance then break end
+            first=i
+        end
+    end
+    return math.max(2,first)
+end
+
 function E.newApproachSearch(p)
     local factors={0.1,0.2,0.3,0.4,0.5,0.6}
     local straights={4,2,0,8}
@@ -527,18 +585,26 @@ function E.newApproachSearch(p)
     -- Interleave nearby pull-in tangents and straight lengths. Exhausting all
     -- six tangents at each straight used the entire 96-trial budget before a
     -- shorter run-in was considered, even when that was the feasible shape.
-    local families={}
+    -- Include both compact and broader entry tangents in the quick screen.
+    -- A nearly straight initial approach needs a different cubic from a tool
+    -- arriving with substantial residual yaw after a bulb.
+    local families={{1,1,1},{1,2,1},{2,4,1},{1,1,2},{1,2,2},{1,4,4},{3,3,1}}
+    local fastFamilyCount=#families
+    local seen={}
+    for _,f in ipairs(families) do seen[f[1]..':'..f[2]..':'..f[3]]=true end
     for a=1,#factors do
         for firstB=1,#factors,2 do
             for s=1,#straights do
                 for b=firstB,math.min(firstB+1,#factors) do
-                    families[#families+1]={a,b,s}
+                    if not seen[a..':'..b..':'..s] then families[#families+1]={a,b,s} end
                 end
             end
         end
     end
     local familyIndex=1
+    local fastPass=true
     local simulation,path,verified,fineGroup
+    local fineVerificationStart
     local bias,stage,iterations=0,'zero',0
     local lo,hi,c,d,fc,fd,biasLimit,initialBiasLimit,widened
     local golden=(math.sqrt(5)-1)/2
@@ -552,14 +618,17 @@ function E.newApproachSearch(p)
     local bestError=math.huge
     local bestVerified
     local hintMarginError
+    local zeroAlignment,previousBias,previousAlignment,secantIterations
     local lastReason='no forward approach'
     local function advance()
         familyIndex=familyIndex+1
+        if fastPass and familyIndex>fastFamilyCount then familyIndex=1;fastPass=false end
         local family=families[familyIndex]
         if family then ai,bi,si=family[1],family[2],family[3]
         else ai=#factors+1 end
         bias,stage,iterations=0,'zero',0
         fineGroup=false
+        fineVerificationStart=false
         widened=false
     end
     local function makeApproach()
@@ -632,9 +701,13 @@ function E.newApproachSearch(p)
         end
         result=result or simulation:update(budget)
         if not result then return nil end
-        if result.ok and not verified then
+        -- Coarse stepping can overestimate a near-threshold entry. Use it to
+        -- screen shapes, never to reject a promising shape without running the
+        -- production tracker. Only the unchanged fine tolerance admits a path.
+        if not verified and (result.ok or (result.alignmentError and
+                (result.error or math.huge)<=E.edgeTolerance*1.5)) then
             simulation=E.newSimulation(p,path,2,0.075,true,true,true)
-            verified,fineGroup=true,true;return nil
+            verified,fineGroup,fineVerificationStart=true,true,true;return nil
         end
         simulation=nil
         if result.ok then
@@ -651,11 +724,31 @@ function E.newApproachSearch(p)
             -- reached 10.2 cm live. Keep this verified candidate as a fallback,
             -- then run the same bounded refinement used for a fresh shape.
             -- Well-aligned cached shapes still return after their first trial.
-            if result.maxEntryError<=E.planningEdgeTolerance then return result end
+            if result.maxEntryError<=E.planningEdgeTolerance or
+                    (fastPass and stage=='secant' and verified and result.maxEntryError<=E.repairEdgeTolerance) then
+                bestVerified.attempts=attempts
+                bestVerified.hintMarginError=hintMarginError
+                return bestVerified
+            end
         end
         if usingHint then
             usingHint=false;bias,stage,iterations,fineGroup=0,'zero',0,false
             return nil
+        end
+        if fineVerificationStart then
+            fineVerificationStart=false
+            if result.alignmentError then
+                -- Do not fit a secant through a coarse-tracker sample and a
+                -- production-PPC sample: their small discretisation offset
+                -- matters at this tolerance. Obtain a second FINE sample.
+                previousBias,previousAlignment=bias,result.alignmentError
+                local probe=p.width*0.05*(result.alignmentError>0 and -1 or 1)
+                local nextBias=math.max(-biasLimit,math.min(biasLimit,bias+probe))
+                if math.abs(nextBias-bias)>0.001 then
+                    stage,bias,secantIterations='secant',nextBias,0
+                    return nil
+                end
+            end
         end
         lastReason=result.reason or 'preferred alignment margin not reached'
         bestError=math.min(bestError,result.maxEntryError or result.error or math.huge)
@@ -666,9 +759,53 @@ function E.newApproachSearch(p)
         if stage=='zero' then
             if not path then advance();return nil end
             lo,hi=-initialBiasLimit,initialBiasLimit
+            zeroAlignment=result.alignmentError
+            if zeroAlignment and initialBiasLimit>0.001 then
+                local across=E.localPoint(p.start,p.goal)
+                local probe=math.min(initialBiasLimit,p.width*0.1)
+                stage,bias='probe',across>0 and -probe or probe
+                return nil
+            end
             c,d=hi-golden*(hi-lo),lo+golden*(hi-lo)
             fc,fd=nil,nil
             stage,bias='c',c
+        elseif stage=='probe' or stage=='secant' then
+            -- Lateral response is locally near-linear. Two samples usually
+            -- locate a useful steering lead without twelve minimisation steps.
+            -- Fine PPC/footprint validation still decides admission; a poor
+            -- linear estimate falls back to the original bounded minimiser.
+            local oldBias=stage=='probe' and 0 or previousBias
+            local oldError=stage=='probe' and zeroAlignment or previousAlignment
+            local currentError=result.alignmentError
+            secantIterations=stage=='probe' and 0 or secantIterations
+            if fastPass and stage=='secant' and secantIterations>=2 then
+                -- Screen the compact shape families before refining one.
+                -- If none works, advance() returns to the original minimiser;
+                -- the search budget and fine acceptance are unchanged.
+                advance()
+                return nil
+            end
+            if stage=='secant' and currentError and math.abs(currentError)<E.planningEdgeTolerance/4 and
+                    objective>E.repairEdgeTolerance then
+                -- The two sides are already balanced, but their spread is too
+                -- wide: another lateral shift cannot fix that tangent shape.
+                -- Try a different pull-in/straight instead of spending twelve
+                -- more trials minimising the same rejected shape.
+                advance()
+                return nil
+            end
+            if oldError and currentError and math.abs(currentError-oldError)>1e-6 and secantIterations<2 then
+                local nextBias=bias-currentError*(bias-oldBias)/(currentError-oldError)
+                nextBias=math.max(-biasLimit,math.min(biasLimit,nextBias))
+                if math.abs(nextBias-bias)>0.001 then
+                    previousBias,previousAlignment=bias,currentError
+                    secantIterations=secantIterations+1
+                    stage,bias='secant',nextBias
+                    return nil
+                end
+            end
+            c,d=hi-golden*(hi-lo),lo+golden*(hi-lo)
+            fc,fd=nil,nil;stage,bias='c',c
         else
             if stage=='c' then fc=objective else fd=objective end
             if not fd then stage,bias='d',d;return nil end

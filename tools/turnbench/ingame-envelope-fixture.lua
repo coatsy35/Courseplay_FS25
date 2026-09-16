@@ -130,6 +130,9 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         g_currentMission.time=0
         t:startPlanning()
         for i=1,10000 do
+            -- Planning is sliced at 50 ms. Advance the mission clock as well:
+            -- a frozen clock would silently bypass the stopped-time deadline.
+            g_currentMission.time=g_currentMission.time+50
             t:updatePlanner()
             if not t.planner then result=t.result;break end
         end
@@ -142,7 +145,7 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         t:updatePlanner()
     end
     local s={x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi}
-    local speed,elapsed,actualCurvature=0,0,0
+    local speed,elapsed,actualCurvature=0,g_currentMission.time/1000,0
     for tick=1,16000 do
         local dt=p.stepSequence and p.stepSequence[(tick-1)%#p.stepSequence+1] or p.timeStep or 0.05
         elapsed=elapsed+dt

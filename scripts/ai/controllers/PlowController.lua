@@ -97,7 +97,19 @@ end
 
 --- Rotates the plow if possible.
 ---@param shouldBeOnTheLeft boolean|nil
+-- All CP-issued side-rotation commands share the experimental entry gate.
+-- Ordinary turns retain stock controller behaviour.
+function PlowController:isEnvelopeDeploymentAllowed()
+    local strategy=self.driveStrategy
+    if not strategy or not strategy.states then return true end
+    local turn
+    if strategy.state==strategy.states.TURNING then turn=strategy.aiTurn
+    elseif strategy.state==strategy.states.DRIVING_TO_WORK_START_WAYPOINT then turn=strategy.workStarter end
+    return not (turn and turn.envelopeAlignment) or turn:canDeployPlough()
+end
+
 function PlowController:rotate(shouldBeOnTheLeft)
+    if not self:isEnvelopeDeploymentAllowed() then return end
     if self:isRotatablePlow() and self:getIsPlowRotationAllowed() then
         self.implement:setRotationMax(shouldBeOnTheLeft)
     end
@@ -126,6 +138,7 @@ end
 --- making sure the plow is in the working position when lowering
 -- TODO: this whole magic hack would not be necessary if we moved the actual lowering into onTurnEndProgress()
 function PlowController:onLowering()
+    if not self:isEnvelopeDeploymentAllowed() then return end
     -- if we just turned (that is, not starting to work)
     local lastPlowSide = self.lastPlowSide:get()
     if lastPlowSide ~= nil and
@@ -146,6 +159,7 @@ end
 --- should most likely be calculated here in the controller, but for now, we get it from an argument
 ---@param shouldBeOnTheLeft boolean should the plow be turned to the left to be in the good position after the turn?
 function PlowController:onTurnEndProgress(workStartNode, reversing, shouldLower, shouldBeOnTheLeft)
+    if not self:isEnvelopeDeploymentAllowed() then return end
     self.lastPlowSide:set(shouldBeOnTheLeft or false, 2000)
     if self:isRotatablePlow() and not self:isRotatedToSide(shouldBeOnTheLeft) and not self:isRotationActive() then
         -- more or less aligned with the first waypoint of the row, start rotating to working position

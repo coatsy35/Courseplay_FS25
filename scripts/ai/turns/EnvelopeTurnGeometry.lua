@@ -158,6 +158,65 @@ function G.initialEntrySlope(course,ix)
     return slope
 end
 
+-- Choose the initial tractor target from the available field, before stock
+-- CP plans its approach. A fixed trailer-length offset can leave a long rig
+-- beside the crop while there is unused headland behind it. Sample a raised,
+-- straight combination at full working width, including its rear overhang;
+-- stop at the FIRST edge, never jump a road/island to another patch of field.
+-- This places a target only. CP's pathfinder still checks the route to it and
+-- the envelope guard measures the actual working shape before lowering.
+function G.outerEntryOffset(strategy,course,ix,fallback)
+    local vehicle=strategy.vehicle
+    local x,_,z=course:getWaypointPosition(ix)
+    local heading=course:getWaypointYRotation(ix)
+    local width=math.max(strategy.workWidth or 0,(vehicle.size or {}).width or 0)
+    local front=math.max(strategy.frontMarkerDistance or 0,(vehicle.size or {}).length or 0)
+    local back=math.min(strategy.backMarkerDistance or 0,fallback)
+    local reserve=E.reserve+0.5
+    local polygon=vehicle.cpGetFieldPolygon and vehicle:cpGetFieldPolygon()
+    local islands=vehicle.cpGetIslandPolygons and vehicle:cpGetIslandPolygons() or {}
+    if (vehicle.cpIsFieldBoundaryDetectionRunning and vehicle:cpIsFieldBoundaryDetectionRunning()) or
+            (polygon and (#polygon<3 or not E.inside({x=x,z=z},polygon))) then
+        -- A loaded course can still have another field's cached polygon.
+        -- Density sampling remains available while the fresh detector runs.
+        polygon=nil;islands={}
+    end
+    local fieldCheck=polygon and #polygon>=3 and E.polygonChecker(polygon,reserve,true)
+    local islandChecks={}
+    for _,island in ipairs(islands) do islandChecks[#islandChecks+1]=E.polygonChecker(island,reserve,false) end
+    local function contains(across,along)
+        local q=E.point(x,z,heading,across,along)
+        if fieldCheck and not fieldCheck(q) then return false end
+        for _,check in ipairs(islandChecks) do
+            if not check(q) then return false end
+        end
+        return CpFieldUtil.isOnField(q.x,q.z) and true or false
+    end
+    local halfWidth=width/2+reserve
+    local function fits(offset)
+        -- Check the interior as well as edges so a narrow island cannot fall
+        -- between the tractor and trailing implement's sampled corners.
+        for lateral=-halfWidth,halfWidth+0.999,1 do
+            local across=math.min(lateral,halfWidth)
+            for longitudinal=back-reserve,front+reserve+0.999,1 do
+                if not contains(across,offset+math.min(longitudinal,front+reserve)) then return false end
+            end
+        end
+        return true
+    end
+    if not fits(fallback) then return fallback,false end
+    local offset=fallback
+    -- Bound CPU work for invalid/missing density data. The nominal headland
+    -- count only sets the query horizon; every position must fit the field.
+    local rows=course:getNumberOfHeadlands() or 0
+    local horizon=math.max(-fallback,math.min(150,(rows+1)*width*2))
+    while offset-1>=-horizon and fits(offset-1) do offset=offset-1 end
+    for _=1,3 do
+        if fits(offset-0.25) then offset=offset-0.25 else break end
+    end
+    return offset,true
+end
+
 -- The first integration handles a rigid tractor and direct mounted tools, or
 -- one passive trailer. It must not flatten an articulated tractor/seed-cart
 -- chain into one fictitious hinge. Unsupported equipment retains stock CP.
@@ -394,6 +453,9 @@ function G.capture(turn)
     local polygon=vehicle.cpGetFieldPolygon and vehicle:cpGetFieldPolygon()
     local islands=vehicle.cpGetIslandPolygons and vehicle:cpGetIslandPolygons() or {}
     if not polygon or #polygon<3 then return nil,'field polygon unavailable; generate the course on this field first' end
+    local fieldCheck=E.polygonChecker(polygon,E.reserve+0.18,true)
+    local islandChecks={}
+    for _,island in ipairs(islands) do islandChecks[#islandChecks+1]=E.polygonChecker(island,E.reserve+0.18,false) end
     -- Cache on a 0.25 m grid. Add its half-diagonal to the reserve so rounding
     -- can NEVER turn a failed clearance sample into a successful one.
     local cache={}
@@ -402,10 +464,10 @@ function G.capture(turn)
         local key=ix..':'..iz
         if cache[key]~=nil then return cache[key] end
         local q={x=ix/4,z=iz/4}
-        local valid=E.inside(q,polygon,E.reserve+0.18)
+        local valid=fieldCheck(q)
         if valid then
-            for _,island in ipairs(islands) do
-                if not E.outside(q,island,E.reserve+0.18) then valid=false end
+            for _,check in ipairs(islandChecks) do
+                if not check(q) then valid=false end
                 if not valid then break end
             end
         end

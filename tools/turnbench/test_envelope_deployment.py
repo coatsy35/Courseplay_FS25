@@ -85,18 +85,26 @@ for _,dimensions in ipairs({{4,0},{6,8},{12,11}}) do
 end
 ''')
 
-    def test_turnover_waits_for_both_headings_and_row_position(self):
+    def test_turnover_requires_final_straight_before_drawing_the_tool_into_line(self):
         self.lua.execute('''
 local p,f=deploymentFixture(1);local t=f.turn
 t.geometry=assert(EnvelopeTurnGeometry.capture(t))
 local goal=t.geometry.goal
-for _,pose in ipairs({{x=goal.x,z=goal.z-20,t=0,phi=math.rad(20)},
-        {x=goal.x,z=goal.z-20,t=math.rad(20),phi=0},
+t.result={path={{x=goal.x,z=goal.z-25},{x=goal.x,z=goal.z}}}
+t.ppc.getCurrentWaypointIx=function() return 1 end
+for _,pose in ipairs({{x=goal.x,z=goal.z-20,t=math.rad(20),phi=0},
         {x=goal.x+2,z=goal.z-20,t=0,phi=0}}) do
     f:setPose(pose)
     assert(t:checkWorkingPosition()) -- continue raised, do not rotate
     assert(f.object.sideCommands==0 and not t.rotationStarted and f.object.lowerCount==0)
 end
+f:setPose({x=goal.x,z=goal.z-20,t=0,phi=math.rad(20)})
+t.result.path[1].x=goal.x+5
+assert(t:checkWorkingPosition() and f.object.sideCommands==0,'turned over on remaining arc')
+t.result.path[1].x=goal.x
+t:checkWorkingPosition()
+assert(f.object.sideCommands==1 and t.deploymentReady,'failed to deploy on straight for raised alignment')
+assert(f.object.lowerCount==0,'deployment must not lower an unaligned implement')
 ''')
 
     def test_old_late_pose_is_not_accepted_by_relaxing_the_entry_gate(self):
