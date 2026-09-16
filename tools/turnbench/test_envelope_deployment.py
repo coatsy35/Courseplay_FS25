@@ -88,6 +88,29 @@ assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==
 assert(f.initialAttempts<=64)
 """)
 
+    def test_turn_and_field_speed_follow_cp_settings(self):
+        self.lua.execute("""
+local p,f=deploymentFixture(1);local t=f.turn
+p.fieldSpeed=24;p.turnSpeed=12
+t.turnCourse={getCurrentWaypointIx=function() return 5 end,
+    getDistanceFromFirstWaypoint=function() return 30 end,
+    getDistanceToLastWaypoint=function() return 60 end}
+assert(t:getForwardSpeed()==24)
+t.result={repairedApproach=true}
+assert(t:getForwardSpeed()==12)
+p.turnSpeed=16
+assert(t:getForwardSpeed()==16)
+""")
+
+    def test_v026_later_exit_reaches_fieldwork(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-first-pike-outer-headland.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute("""
+local p,f=deploymentFixture(1);configureV026Exit(p,f,savedField)
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+""")
+
     def test_recorded_initial_loop_deploys_and_enters_on_both_sides(self):
         self.lua.execute('''
 for _,side in ipairs({1,-1}) do

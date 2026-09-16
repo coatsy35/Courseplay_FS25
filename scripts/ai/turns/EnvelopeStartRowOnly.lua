@@ -186,12 +186,6 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
     strategy.state=strategy.states.TURNING
 end
 
-function EnvelopeStartRowOnly:getForwardSpeed()
-    -- A long trailed implement must not take the initial approach at transport
-    -- speed while its final working geometry is still being checked.
-    return math.min(StartRowOnly.getForwardSpeed(self),8)
-end
-
 function EnvelopeStartRowOnly:fail(reason)
     Logging.info('[CP envelope] v%s %s: STOP initial entry: %s',EnvelopeCourseTurn.TEST_VERSION,CpUtil.getName(self.vehicle),reason)
     self:release()

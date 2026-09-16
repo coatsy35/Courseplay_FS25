@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.26'
+EnvelopeCourseTurn.TEST_VERSION = '0.27'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -193,6 +193,7 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         -- their measured physical geometry. Never substitute an observed
         -- response lever for the real axle/pivot dimensions.
         p.responseLength=self.measuredResponseLength
+        p.steeringResponseTime=self.measuredSteeringResponse
         p.turnHint=self.preparedTurnHint or self.driveStrategy.envelopeTurnHint
         p.approachHint=self.driveStrategy.envelopeApproachHints and self.driveStrategy.envelopeApproachHints[EnvelopeTurnPlanner.approachSide(p)]
         self:logGeometry(p)
@@ -272,6 +273,7 @@ function EnvelopeCourseTurn:checkWorkingPosition()
         -- Prediction and execution require the entire raised combination to
         -- be aligned, not merely the tractor reaching its straight segment.
         if not EnvelopeTurnPlanner.canDeploy(self.geometry,live) then return true end
+        if self.vehicle:getLastSpeed()>0.2 then return true end
         self.deploymentReady=true
     end
     if self.deferPreparation then
@@ -373,6 +375,15 @@ function EnvelopeCourseTurn:updatePlanner()
         end
         self:stopWithReason(result.reason); return
     end
+    if self.needsWorkingGeometry and result.frames then
+        local straight=EnvelopeTurnPlanner.straightTailStart(self.geometry,result.path)
+        for _,pose in ipairs(result.frames) do
+            if pose.ix>=straight and EnvelopeTurnPlanner.canDeploy(self.geometry,pose) then
+                result.deploymentStop=pose
+                break
+            end
+        end
+    end
     self.result=result
     self.planningWaitStarted=nil
     self.planningWaitUsed=nil
@@ -421,14 +432,42 @@ function EnvelopeCourseTurn:updatePlanner()
     end
 end
 
+function EnvelopeCourseTurn:getForwardSpeed()
+    -- CP's field speed is suitable for the middle of a long manoeuvre. Its
+    -- turn speed applies to the final approach, including deployment staging.
+    if self.result and (self.result.repairedApproach or self.result.retainedApproach or
+            self.ppc:getCurrentWaypointIx()>=self.result.tailStart) then
+        return AITurn.getForwardSpeed(self)
+    end
+    return CourseTurn.getForwardSpeed(self)
+end
+
 function EnvelopeCourseTurn:getDriveData(dt)
     if self.states.ENVELOPE_ROTATING and self.state==self.states.ENVELOPE_ROTATING then self:updateRotation(); return nil,nil,true,0 end
     if self.state==self.states.ENVELOPE_PREPARING then self:prepare(); return nil,nil,true,0 end
     if self.state==self.states.ENVELOPE_PLANNING then self:updatePlanner(); return nil,nil,true,0 end
     if self.state==self.states.ENVELOPE_STOPPED then return nil,nil,true,0 end
     local gx,gz,forward,speed=CourseTurn.getDriveData(self,dt)
+    -- Brake towards the predicted deployment pose, allowing the live tractor
+    -- and trailer to finish straightening before stopping. No fixed turn cap.
+    local deploymentSpeedLimit=math.huge
+    if self.needsWorkingGeometry and self.result and (self.result.deploymentLead or self.result.requiresDeployment) and self.result.frames then
+        local stop=self.result.deploymentStop
+        if stop and self.ppc:getCurrentWaypointIx()>=self.result.tailStart then
+            local live=EnvelopeTurnGeometry.pose(self.vehicle:getAIDirectionNode())
+            local _,remaining=EnvelopeTurnPlanner.localPoint(stop,{x=live.x,z=live.z,t=self.geometry.goal.t})
+            local _,_,_,_,state=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
+            local yaw=math.abs(EnvelopeTurnPlanner.wrap(state.phi-self.geometry.goal.t))
+            local settling=(self.geometry.length or 0)*math.log(math.max(1,
+                yaw/(EnvelopeTurnPlanner.angleTolerance*0.9)))
+            local heading=math.abs(EnvelopeTurnPlanner.wrap(state.t-self.geometry.goal.t))
+            local turning=math.max(0,heading-EnvelopeTurnPlanner.angleTolerance*0.9)*self.geometry.radius
+            deploymentSpeedLimit=3.6*math.sqrt(math.max(0,2*math.max(remaining,settling,turning)))
+        end
+    end
     if self.geometry and self.state~=self.states.ENVELOPE_STOPPED then
         local aligned,error,angle,contact,state=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
+        self:observeSteeringResponse(state,dt)
         self:observeTrailerResponse(state)
         self.lastContact=contact
         if math.abs(EnvelopeTurnPlanner.wrap(state.t-state.phi))>self.geometry.maxArticulation then
@@ -453,7 +492,35 @@ function EnvelopeCourseTurn:getDriveData(dt)
         end
     end
     return gx,gz,forward,math.min(speed or self:getForwardSpeed(),
-        self.result and self.result.repairedApproach and 3 or 8,self.entrySpeedLimit or math.huge)
+        deploymentSpeedLimit,self.entrySpeedLimit or math.huge)
+end
+
+-- Infer steering response from commanded curvature and actual tractor yaw.
+-- Only moving, resolved samples contribute; the median rejects transients.
+-- This changes prediction, never CP's selected speed or steering lock.
+function EnvelopeCourseTurn:observeSteeringResponse(live,dt)
+    local previous=self.steeringSample
+    local sample={x=live.x,z=live.z,t=live.t}
+    self.steeringSample=sample
+    if not previous or not self.requestedCurvature or dt<=0 or dt>250 then return end
+    local distance=math.sqrt((live.x-previous.x)^2+(live.z-previous.z)^2)
+    if distance<0.01 then return end
+    sample.curvature=EnvelopeTurnPlanner.wrap(live.t-previous.t)/distance
+    if not previous.curvature then return end
+    local error=self.requestedCurvature-previous.curvature
+    if math.abs(error)<0.003 then return end
+    local ratio=(self.requestedCurvature-sample.curvature)/error
+    if ratio<=0 or ratio>=0.99 then return end
+    local response=-(dt/1000)/math.log(ratio)
+    if response<0.02 or response>2 then return end
+    self.steeringResponses=self.steeringResponses or {}
+    local values=self.steeringResponses
+    values[#values+1]=response
+    if #values>40 then table.remove(values,1) end
+    if #values<5 then return end
+    local ordered={};for i,v in ipairs(values) do ordered[i]=v end
+    table.sort(ordered)
+    self.measuredSteeringResponse=ordered[math.ceil(#ordered/2)]
 end
 
 -- Estimate the passive yaw response from real forward hitch motion. A median
@@ -586,7 +653,7 @@ function EnvelopeCourseTurn:endTurn(dt)
     -- Approach the first physical work corner slowly, stopping 0.5 m before
     -- contact. Waiting there decouples hydraulic delay from alignment: stopping
     -- earlier in a curve would freeze a trailer before it could straighten.
-    self.entrySpeedLimit=math.min(5,3.6*math.sqrt(math.max(0,2*(-contact-0.5))))
+    self.entrySpeedLimit=3.6*math.sqrt(math.max(0,2*(-contact-0.5)))
     if not self.lowerRequested then
         -- Alignment acquired AFTER entering unworked ground is too late. A
         -- delayed callback or braking overshoot must not silently create a gap
@@ -633,7 +700,7 @@ function EnvelopeCourseTurn:endTurn(dt)
         self.entryReleased=true
         self:log('READY: settled edge error %.3f m, angle %.2f degrees, first work corner %.2f m before entry',error,math.deg(angle),-contact)
     end
-    self.entrySpeedLimit=3
+    self.entrySpeedLimit=nil
     -- Do not hand back early: the base resume method lowers implements without
     -- an envelope check. Here every tool is ready AND live-aligned at contact.
     if contact>=0 then

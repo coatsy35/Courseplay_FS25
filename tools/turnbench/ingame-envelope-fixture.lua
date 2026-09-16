@@ -4,7 +4,8 @@ function makeEnvelopeLiveFixture(p)
     function getTimeSec() return os.clock() end
     local E=EnvelopeTurnPlanner
     local function setting(value) return {getValue=function() return value end} end
-    local settings={turnSpeed=setting(8),fieldSpeed=setting(12),reverseSpeed=setting(4),
+    local settings={turnSpeed={getValue=function() return p.turnSpeed or 8 end},
+        fieldSpeed={getValue=function() return p.fieldSpeed or 12 end},reverseSpeed=setting(4),
         envelopeAlignedTurns=setting(true),lowerImplementEarly=setting(true)}
     local node={x=p.start.x,z=p.start.z,t=p.start.t}
     local axle={x=0,z=0,t=0}

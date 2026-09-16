@@ -3,8 +3,21 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.26**, packaged mod version **8.1.0.126**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.26` records identify it.
+Current test: **v0.27**, packaged mod version **8.1.0.127**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.27` records identify it.
+
+Version 0.27 removes the experimental fixed speed caps. CP's field speed applies
+in the middle of long turns and turn speed on final approaches. Braking uses the
+remaining stopping distance; deployment waits for a straight, stationary combination.
+Working-entry prediction includes steering response estimated during the turn.
+Cheap candidate screening now rejects boundary violations before full PPC replay,
+reducing the search cost of the recorded row 14 -> 15 timeout.
+
+**104 regression tests and 41 packaged execution cases pass.**
+See [v0.27 qualification](v027-qualification.md) for checks and limitations.
+The one-off working-side measurement phase remains a follow-up.
+
+### Version 0.26
 
 Version 0.26 adds stock Dubins CSC alternatives for raised row reversals,
 checks a compact staging allowance after a bounded full-allowance search, and

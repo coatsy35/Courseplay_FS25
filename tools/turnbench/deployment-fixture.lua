@@ -188,6 +188,23 @@ function configureV025SecondExit(p,f,field)
     end
 end
 
+-- Raised snapshot from the v0.26 row 14 -> 15 failure. Working-position
+-- animation remains the measured PW proxy used by the preceding exit case.
+function configureV026Exit(p,f,field)
+    configureV025SecondExit(p,f,field)
+    p.start={x=-173.720,z=-141.247,t=math.rad(-179.997),phi=math.rad(170.510)}
+    p.goal={x=-179.317,z=-124.920,t=0}
+    p.hitchX=-.024;p.hitchZ=-1.673
+    p.work={{x=.163,z=-2.592,towed=true},{x=-.065,z=-1.791,towed=true},
+        {x=.163,z=-15.466,towed=true,rear=true},{x=-.065,z=-15.466,towed=true,rear=true}}
+    p.slope=math.tan(math.rad(19.1));p.headland=46.6
+    f.turn.headlandSeed=p.headland;f.turn.entrySlope=p.slope
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    f:setPose(p.start)
+end
+
 function attachFieldworkHandover(p,f)
     local s,t=f.strategy,f.turn
     s.vehicle=f.vehicle;s.settings=f.vehicle:getCpSettings();s.workWidth=p.width;s.ppc=t.ppc

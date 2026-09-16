@@ -31,7 +31,7 @@ E.loweringGateContact = -0.65
 function E.deploymentLead(p, initial)
     local front,back=-math.huge,math.huge
     for _,m in ipairs(p.work) do front=math.max(front,m.z);back=math.min(back,m.z) end
-    local reserve=p.lookahead+(8/3.6)^2/2+math.abs(p.slope)*p.width/2
+    local reserve=p.lookahead+((p.approachSpeed or 0)/3.6)^2/2+math.abs(p.slope)*p.width/2
     local full=math.max(p.length or 0,front-back)+reserve
     if initial then return p.width/2+reserve end
     return full,math.max(p.width,p.length or 0)/2+reserve
@@ -287,13 +287,14 @@ end
 -- Explicit resumable state: FS25 removes Lua's coroutine library. Each update
 -- advances a bounded number of samples and retains the tracker between frames.
 function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEntry)
-    local tracker=p.newTracker and p.newTracker(path,not boundary)
+    local tracker=p.newTracker and p.newTracker(path,not collect)
     local function finish(result)
         if tracker then tracker:delete() end
         return result
     end
     local s = {x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi or p.start.t}
     local ix, travelled, entered, alignmentLead = 1, 0, false, 0
+    local actualCurvature,speed=0,0
     local loweringGatePassed=false
     -- Local steering correction needs an objective over the SAME interval for
     -- every candidate. Stopping at its first failed sample changes the measured
@@ -396,6 +397,16 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
         end
         if ix >= #path then break end
         local k=E.pursuitCurvature(p,s,gx,gz)
+        -- Integrate the observed steering delay at the configured approach
+        -- speed, including acceleration from rest and the entry braking curve.
+        if p.steeringResponseTime then
+            local target=(p.approachSpeed or 0)/3.6
+            if not p.deploymentTarget then target=math.min(target,math.sqrt(math.max(0.01,2*(-contact-0.5)))) end
+            local nextSpeed=math.min(target,math.sqrt(speed*speed+2*step))
+            local dt=2*step/math.max(0.1,speed+nextSpeed)
+            actualCurvature=actualCurvature+(k-actualCurvature)*(1-math.exp(-dt/p.steeringResponseTime))
+            k=actualCurvature;speed=nextSpeed
+        end
         local oldHitch=E.point(s.x,s.z,s.t,p.hitchX,p.hitchZ)
         s.x=s.x+step*math.sin(s.t+k*step/2)
         s.z=s.z+step*math.cos(s.t+k*step/2)
@@ -573,7 +584,7 @@ function E.newSearch(p)
                 (usingHint and hint.pathFamily) or families[familyIndex] or loopSide)
             attempts=attempts+1
             verified=false
-            if path then simulation=E.newSimulation(p,path,tail,0.15,false,false)
+            if path then simulation=E.newSimulation(p,path,tail,0.15,true,false)
             else result={ok=false,reason='no analytic path'} end
         end
         result=result or simulation:update(budget)

@@ -316,6 +316,7 @@ function G.capture(turn)
     local node=vehicle:getAIDirectionNode()
     local p={start=G.pose(node),goal=G.pose(context.workStartNode),radius=AIUtil.getTurningRadius(vehicle),
         trackingRadius=vehicle.maxTurningRadius,
+        approachSpeed=vehicle:getCpSettings().turnSpeed:getValue(),
         width=turn.workWidth,lookahead=turn.ppc.shortLookaheadDistance or 3,
         hitchX=0,hitchZ=0,work={},footprint={},objects={},loweringLead=0.5,
         -- This is a conservative numerical ceiling, NOT a drawbar collision

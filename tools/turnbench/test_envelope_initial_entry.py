@@ -155,7 +155,7 @@ AIUtil.calculateTightTurnOffset=function() return 4.6 end
 AIDriveStrategyFieldWorkCourse.calculateTightTurnOffset(s)
 assert(s.tightTurnOffset==0)
 s.settings.turnSpeed.getValue=function() return 20 end
-assert(f.starter:getForwardSpeed()==8)
+assert(f.starter:getForwardSpeed()==StartRowOnly.getForwardSpeed(f.starter))
 s.workStarter={}
 AIDriveStrategyFieldWorkCourse.calculateTightTurnOffset(s)
 assert(s.tightTurnOffset==4.6)
