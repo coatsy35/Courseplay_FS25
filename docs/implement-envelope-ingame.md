@@ -3,8 +3,22 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.25**, packaged mod version **8.1.0.125**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.25` records identify it.
+Current test: **v0.26**, packaged mod version **8.1.0.126**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.26` records identify it.
+
+Version 0.26 adds stock Dubins CSC alternatives for raised row reversals,
+checks a compact staging allowance after a bounded full-allowance search, and
+uses the same deployment model during straight-row preparation and stopped
+validation. Difficult cold searches have a three-second ceiling. Existing
+paths are checked against the live admission limit; newly selected paths keep
+their planning margin. Final local corrections run at up to 3 km/h.
+
+Validation: **102 regression tests and 37 packaged execution cases pass**,
+including the logged failure after the second row. See
+[v0.26 qualification](v026-qualification.md) for scope and limitations.
+The one-off working-side measurement phase remains a follow-up.
+
+### Version 0.25
 
 Version 0.25 requires both tractor and trailer alignment before deployment,
 uses the original generated row centre during folded initial travel, and

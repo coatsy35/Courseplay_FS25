@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.25'
+EnvelopeCourseTurn.TEST_VERSION = '0.26'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -85,6 +85,14 @@ function EnvelopeCourseTurn:updatePreparation()
             p.start={x=predicted.x,z=predicted.z,t=exit.t,phi=exit.t}
             local measured=EnvelopeTurnGeometry.applyTurnModel(p,self.driveStrategy.envelopeTurnModel)
             p.turnHint=self.driveStrategy.envelopeTurnHint
+            if measured then
+                for _,controller in pairs(self.driveStrategy.controllers) do
+                    if controller.isRotatablePlow and controller:isRotatablePlow() then
+                        p.deploymentLead=EnvelopeTurnPlanner.deploymentLead(p,false)
+                        break
+                    end
+                end
+            end
             self.preparationGeometry=p
             self.preparationPlanner=EnvelopeTurnPlanner.newSearch(p)
             self.preparationStarted=g_currentMission.time
@@ -95,6 +103,7 @@ function EnvelopeCourseTurn:updatePreparation()
             if result then
                 if result.ok then
                     self.preparedTurnHint=EnvelopeTurnPlanner.turnHint(self.preparationGeometry,result)
+                    self.preparedDeploymentLead=result.deploymentLead
                     self:log('straight-row candidate ready: %d trials; actual raised geometry still requires validation',result.attempts)
                 end
                 self.preparationDone=true
@@ -171,17 +180,13 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         self.headlandSeed=self.headlandSeed or p.headland
         self.geometry=p
         if self.needsWorkingGeometry then
-            local front,back=-math.huge,math.huge
-            for _,m in ipairs(p.work) do front=math.max(front,m.z);back=math.min(back,m.z) end
-            local controlReserve=p.lookahead+(8/3.6)^2/2
-            -- Initial folded travel uses the generated row centre, never an
-            -- automatic offset measured in the opposite/transport plough state.
-            -- Row turns retain their existing working-side preparation space.
-            if self.initialRowGoal then
-                p.goal=self.initialRowGoal
-                p.deploymentLead=p.width/2+math.abs(p.slope)*p.width/2+controlReserve
-            else
-                p.deploymentLead=math.max(p.length or 0,front-back)+math.abs(p.slope)*p.width/2+controlReserve
+            if self.initialRowGoal then p.goal=self.initialRowGoal end
+            p.deploymentLead=EnvelopeTurnPlanner.deploymentLead(p,self.initialRowGoal~=nil)
+            if self.preparedDeploymentLead and not self.initialRowGoal then
+                -- Reuse this turn's proposed staging distance, bounded by the
+                -- freshly measured geometry. The whole route is still checked.
+                local _,compact=EnvelopeTurnPlanner.deploymentLead(p,false)
+                p.deploymentLead=math.max(compact,math.min(p.deploymentLead,self.preparedDeploymentLead))
             end
         end
         -- Only the yaw response changes: collision/work marker positions keep
@@ -198,10 +203,12 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
             -- Only its final incoming section may deploy the plough, even if
             -- an earlier part of that bulb briefly points towards the row.
             local tailStart=EnvelopeTurnPlanner.approachTailStart(p,remainingPath)
-            local approachModel=p
+            local approachModel={}
+            for k,v in pairs(p) do approachModel[k]=v end
+            -- An already driven path is revalidated against the live admission
+            -- limit. New paths still require their additional planning margin.
+            approachModel.validationOnly=true
             if self.needsWorkingGeometry then
-                approachModel={}
-                for k,v in pairs(p) do approachModel[k]=v end
                 approachModel.deploymentApproach=true
                 tailStart=EnvelopeTurnPlanner.straightTailStart(p,remainingPath)
             end
@@ -334,9 +341,9 @@ coroutine library. Each call below advances a small sample batch. ]]
 function EnvelopeCourseTurn:updatePlanner()
     -- Never turn an infeasible start into tens of seconds of stopped retries.
     -- A failed deadline remains a failure: it cannot admit an unchecked path.
-    if self.planningWaitStarted and g_currentMission.time-self.planningWaitStarted>=1000 then
+    if self.planningWaitStarted and g_currentMission.time-self.planningWaitStarted>=3000 then
         self.planningTimedOut=true
-        self:stopWithReason('planning exceeded the one-second stopped budget')
+        self:stopWithReason('planning exceeded the three-second stopped budget')
         return
     end
     local started=getTimeSec()
@@ -344,7 +351,7 @@ function EnvelopeCourseTurn:updatePlanner()
     repeat
         ok,result=pcall(self.planner.update,self.planner,10)
         if not ok then self:stopWithReason('planner error: '..tostring(result)); return end
-    -- Short bounded batches remain cancellable. Use the one-second stopped
+    -- Short bounded batches remain cancellable. Use the bounded stopped
     -- window rather than spreading a small calculation over many seconds.
     until result or getTimeSec()-started>=0.050
     if not result then
@@ -445,7 +452,8 @@ function EnvelopeCourseTurn:getDriveData(dt)
                 self.ppc:getCurrentWaypointIx(),state.x,state.z,math.deg(state.t),math.deg(state.phi),contact,error,math.deg(angle),self.requestedCurvature)
         end
     end
-    return gx,gz,forward,math.min(speed or self:getForwardSpeed(),8,self.entrySpeedLimit or math.huge)
+    return gx,gz,forward,math.min(speed or self:getForwardSpeed(),
+        self.result and self.result.repairedApproach and 3 or 8,self.entrySpeedLimit or math.huge)
 end
 
 -- Estimate the passive yaw response from real forward hitch motion. A median

@@ -25,6 +25,18 @@ E.reserve = 0.5
 -- later boundary-crossing sample. The tractor brakes towards 0.5 m clearance.
 E.loweringGateContact = -0.65
 
+-- Use the same raised deployment allowance for speculative and live plans.
+-- Try the full preparation allowance first, then a compact measured-lever
+-- allowance. Every candidate still needs alignment and footprint validation.
+function E.deploymentLead(p, initial)
+    local front,back=-math.huge,math.huge
+    for _,m in ipairs(p.work) do front=math.max(front,m.z);back=math.min(back,m.z) end
+    local reserve=p.lookahead+(8/3.6)^2/2+math.abs(p.slope)*p.width/2
+    local full=math.max(p.length or 0,front-back)+reserve
+    if initial then return p.width/2+reserve end
+    return full,math.max(p.width,p.length or 0)/2+reserve
+end
+
 function E.wrap(a)
     return math.atan2(math.sin(a), math.cos(a))
 end
@@ -318,7 +330,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
         -- straight combination with room left for the measured working
         -- correction, not millimetre positioning of folded soil markers.
         local tolerance=p.deploymentTarget and math.min(0.5,p.width*0.1) or
-            (optimiseEntry and (E.entryTolerance(p)*0.8) or (E.entryTolerance(p)*0.6))
+            E.entryTolerance(p)*(p.validationOnly and 1 or (optimiseEntry and 0.8 or 0.6))
         aligned=angle<=E.angleTolerance and error<=tolerance
         if p.deploymentTarget then aligned=aligned and E.canDeploy(p,s) end
         local articulation=math.abs(E.wrap(s.t-s.phi))
@@ -429,9 +441,22 @@ function E.newSearch(p)
         -- target, which reserves room for their different entry geometry.
         staged.canCompactReturn=math.abs(E.wrap(p.start.t-p.goal.t))>=math.pi/2
         if p.newTracker then staged.newTracker=function(path,screening) return p.newTracker(path,screening) end end
+        local _,compact=E.deploymentLead(p,false)
+        local lead=p.deploymentLead
+        local previousAttempts=0
+        staged.maxCandidates=compact<lead and 32 or nil
         local search=E.newSearch(staged)
-        return {getProgress=function() return search:getProgress() end,update=function(_,budget)
+        return {getProgress=function() return previousAttempts+search:getProgress() end,update=function(_,budget)
             local result=search:update(budget)
+            if result and not result.ok and compact<lead then
+                previousAttempts=result.attempts or 0
+                lead=compact
+                staged.goal=E.point(p.goal.x,p.goal.z,p.goal.t,0,-lead)
+                staged.goal.t=p.goal.t
+                staged.maxCandidates=nil
+                search=E.newSearch(staged)
+                return nil
+            end
             if result and result.ok then
                 -- Continue towards the ORIGINAL work start. This part remains
                 -- raised until the live working-envelope check approves it.
@@ -439,7 +464,8 @@ function E.newSearch(p)
                 local last=result.path[#result.path]
                 local _,forward=E.localPoint(finish,{x=last.x,z=last.z,t=p.goal.t})
                 if forward>0 then addLine(result.path,last,finish) end
-                result.deploymentLead=p.deploymentLead
+                result.deploymentLead=lead
+                result.attempts=(result.attempts or 0)+previousAttempts
             end
             return result
         end}
@@ -469,6 +495,13 @@ function E.newSearch(p)
             return da==db and a<b or da<db
         end)
     end
+    local families={false}
+    if p.deploymentTarget and math.abs(E.wrap(p.start.t-p.goal.t))>=math.pi/2 then
+        families={'LSL','RSR',false}
+        if p.workedSide==1 then families[1],families[2]='RSR','LSL' end
+        if p.length and p.length>p.radius then factors={1.25,1.175,1.1,1} end
+    end
+    local familyIndex=1
     local bi,fi,ei=1,1,1
     -- Try compact worked-side bulbs before the unrestricted shortest path.
     -- Limit the preference to the first three bend lengths so it cannot spend
@@ -511,6 +544,9 @@ function E.newSearch(p)
             return
         end
         if usingHint then usingHint=false;stage,bias,iterations='zero',0,0;return end
+        familyIndex=familyIndex+1
+        if familyIndex<=#families then stage,bias,iterations='zero',0,0;return end
+        familyIndex=1
         ei=ei+1
         if ei>#extensions then ei=1; fi=fi+1 end
         if fi>#factors then fi=1; bi=bi+1 end
@@ -524,7 +560,7 @@ function E.newSearch(p)
                 return {ok=false,reason='starting footprint lacks field clearance',attempts=0}
             end
         end
-        if bi>#bends then return {ok=false,reason=lastReason or 'no aligned candidate',attempts=attempts,rejections=rejections} end
+        if bi>#bends or (p.maxCandidates and attempts>=p.maxCandidates and not simulation) then return {ok=false,reason=lastReason or 'no aligned candidate',attempts=attempts,rejections=rejections} end
         local bend=compactSeed and (initialRecovery and (compactIndex==1 and 8 or 12) or
             (compactIndex==1 and 12 or 8)) or (usingHint and hint.bendRatio*p.width or bends[bi])
         local radius=p.radius*(compactSeed and 1.1 or (usingHint and hint.radiusRatio or factors[fi]))
@@ -533,7 +569,8 @@ function E.newSearch(p)
             (not usingHint and preferWorked and p.workedSide or nil)) or nil
         local result
         if not simulation then
-            path,tail=E.makePath(p,straight+bend,straight,radius,extension,bias,loopSide)
+            path,tail=E.makePath(p,straight+bend,straight,radius,extension,bias,
+                (usingHint and hint.pathFamily) or families[familyIndex] or loopSide)
             attempts=attempts+1
             verified=false
             if path then simulation=E.newSimulation(p,path,tail,0.15,false,false)
@@ -551,7 +588,8 @@ function E.newSearch(p)
             result.attempts,result.straight,result.bend=attempts,straight,bend
             result.radius,result.extension,result.bias=radius,extension,bias
             result.usedTurnHint=not compactSeed and usingHint and true or false
-            result.preferWorked=loopSide~=nil
+            result.preferWorked=loopSide~=nil and not families[familyIndex]
+            result.pathFamily=(usingHint and hint.pathFamily) or families[familyIndex]
             return result
         end
         lastReason=result.reason
@@ -585,7 +623,7 @@ function E.turnSide(p)
 end
 
 function E.turnHint(p,result)
-    return {bendRatio=result.bend/p.width,radiusRatio=result.radius/p.radius,
+    return {pathFamily=result.pathFamily,bendRatio=result.bend/p.width,radiusRatio=result.radius/p.radius,
         biasRatio=result.bias/(p.width*E.turnSide(p)),extensionRatio=result.extension/p.width,
         preferWorked=result.preferWorked,
         workedSideRelative=p.workedSide and p.workedSide*E.turnSide(p) or nil}
@@ -802,6 +840,9 @@ function E.newApproachSearch(p)
         end
         if fineVerificationStart then
             fineVerificationStart=false
+            -- Fine validation can jump directly from the zero probe into a
+            -- secant. Initialise its fallback bracket before that transition.
+            if stage=='zero' then lo,hi=-initialBiasLimit,initialBiasLimit end
             if result.alignmentError then
                 -- Do not fit a secant through a coarse-tracker sample and a
                 -- production-PPC sample: their small discretisation offset

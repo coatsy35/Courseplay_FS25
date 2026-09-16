@@ -162,6 +162,32 @@ function configureV024Entry(p,f)
     f:setPose(p.start)
 end
 
+-- v0.25 second row exit, 16 September 12:41:01. These raised dimensions
+-- are measured; subsequent turnover remains a synthetic working-side change.
+function configureV025SecondExit(p,f,field)
+    p.start={x=-162.514,z=-138.500,t=math.rad(179.992),phi=math.rad(170.572)}
+    p.goal={x=-168.114,z=-121.280,t=0}
+    p.hitchX=-.02;p.hitchZ=-1.67;p.length=11.31;p.axleOffsetX=-.07
+    p.work={{x=.160,z=-2.593,towed=true},{x=-.064,z=-1.790,towed=true},
+        {x=.160,z=-15.464,towed=true,rear=true},{x=-.064,z=-15.464,towed=true,rear=true}}
+    p.slope=math.tan(math.rad(10.4));p.headland=47.5
+    f.turn.headlandSeed=p.headland;f.turn.entrySlope=p.slope
+    if field then f.vehicle.cpGetFieldPolygon=function() return field end end
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    f:setPose(p.start)
+    p.stateFixture=function(current,state)
+        if current.object.playing and g_currentMission.time>=current.object.animationEnd then
+            current.object.animation=current.object.targetAnimation;current.object.playing=false
+            p.work={{x=-3.265,z=-2.151,towed=true},{x=2.286,z=-2.467,towed=true},
+                {x=-3.265,z=-16.127,towed=true,rear=true},{x=2.286,z=-16.127,towed=true,rear=true}}
+            p.length=11.10;p.hitchX=.02;p.hitchZ=-1.66;p.axleOffsetX=.02
+            state.phi=EnvelopeTurnPlanner.wrap(state.phi-math.rad(12.3))
+        end
+    end
+end
+
 function attachFieldworkHandover(p,f)
     local s,t=f.strategy,f.turn
     s.vehicle=f.vehicle;s.settings=f.vehicle:getCpSettings();s.workWidth=p.width;s.ppc=t.ppc

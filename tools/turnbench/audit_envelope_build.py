@@ -38,7 +38,10 @@ def audit(archive,output):
     cases += [('v023-bent-arrival',{'v023Arrival':True}),
               ('v023-bent-arrival-lag',{'v023Arrival':True,'steeringTimeConstant':.2}),
               ('v024-bent-arrival',{'v024Arrival':True}),
-              ('v024-bent-arrival-lag',{'v024Arrival':True,'steeringTimeConstant':.2})]
+              ('v024-bent-arrival-lag',{'v024Arrival':True,'steeringTimeConstant':.2}),
+              ('v025-second-exit',{'v025Exit':True}),
+              ('v025-second-exit-lag',{'v025Exit':True,'steeringTimeConstant':.2}),
+              ('v025-second-exit-slower-steering',{'v025Exit':True,'steeringTimeConstant':.5})]
     with ZipFile(archive) as z:
         runtime={n:z.read(n) for n in z.namelist() if n.endswith('.lua')}
         mismatches=[n for n,data in runtime.items() if (ROOT/n).read_bytes()!=data]
@@ -54,7 +57,7 @@ def audit(archive,output):
             for module in ('EnvelopeTurnPlanner','EnvelopeTurnGeometry','EnvelopeCourseTurn','EnvelopeStartRowOnly'):
                 test.lua.execute(runtime[f'scripts/ai/turns/{module}.lua'].decode())
             test.lua.globals().options=test.lua.table_from(options)
-            if 'savedArrival' in options or 'firstExitOffset' in options or 'v023Arrival' in options or 'v024Arrival' in options:
+            if 'savedArrival' in options or 'firstExitOffset' in options or 'v023Arrival' in options or 'v024Arrival' in options or 'v025Exit' in options:
                 points=json.loads((ROOT/'tools/turnbench/fixtures/t7-first-pike-outer-headland.json').read_text())
                 test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
             start=time.perf_counter()
@@ -62,6 +65,7 @@ def audit(archive,output):
             try:
                 test.lua.execute('''
 p,f=deploymentFixture(options.side or 1)
+if options.v025Exit then configureV025SecondExit(p,f,savedField) end
 if options.savedArrival~=nil then configureSavedStraightEntry(p,f,savedField,options.savedArrival) end
 if options.firstExitOffset~=nil then configureRecordedFirstExit(p,f,savedField,options.firstExitOffset) end
 if options.v023Arrival or options.v024Arrival then

@@ -293,6 +293,11 @@ function G.analyticPath(start,goal,radius,loopSide)
         G.loopSolvers=G.loopSolvers or {
             [-1]=DubinsSolver({DubinsSolver.PathType.LRL}),
             [1]=DubinsSolver({DubinsSolver.PathType.RLR})}
+        if type(loopSide)=='string' then
+            -- The shortest tractor Dubins solution is not necessarily the
+            -- best trailer path. Keep valid CSC alternatives available.
+            G.loopSolvers[loopSide]=G.loopSolvers[loopSide] or DubinsSolver({DubinsSolver.PathType[loopSide]})
+        end
         solver=G.loopSolvers[loopSide]
     end
     local s=State3D(start.x,-start.z,CpMathUtil.angleFromGame(start.t))

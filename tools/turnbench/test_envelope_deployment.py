@@ -58,6 +58,36 @@ for _,width in ipairs({1,4,6,12,30}) do
 end
 """)
 
+    def test_preparation_uses_the_same_raised_deployment_goal(self):
+        self.lua.execute("""
+local p,f=deploymentFixture(1)
+f.strategy.envelopeTurnModel=EnvelopeTurnGeometry.turnModel(assert(EnvelopeTurnGeometry.capture(f.turn)))
+local captured
+EnvelopeTurnPlanner.newSearch=function(model)
+    captured=model
+    return {update=function() return {ok=false} end}
+end
+f.turn:updatePreparation()
+assert(captured and captured.deploymentLead==EnvelopeTurnPlanner.deploymentLead(captured,false))
+assert(f.turn.preparationDone and not f.turn.result and f.object.lowerCount==0)
+-- Stale preparation must never remove the newly measured staging allowance.
+f.turn.preparedDeploymentLead=-100
+f.turn:startPlanning();f.turn.planner:update(1)
+local measured=f.turn.geometry
+local _,minimum=EnvelopeTurnPlanner.deploymentLead(measured,false)
+assert(measured.deploymentLead==minimum and f.object.lowerCount==0)
+""")
+
+    def test_v025_second_row_exit_completes_within_bounded_wait(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-first-pike-outer-headland.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute("""
+local p,f=deploymentFixture(1);configureV025SecondExit(p,f,savedField)
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+assert(f.initialAttempts<=64)
+""")
+
     def test_recorded_initial_loop_deploys_and_enters_on_both_sides(self):
         self.lua.execute('''
 for _,side in ipairs({1,-1}) do
