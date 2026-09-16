@@ -3,8 +3,16 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.32**, packaged mod version **8.1.0.132**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.32` records identify it.
+Current test: **v0.33**, packaged mod version **8.1.0.133**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.33` records identify it.
+
+Version 0.33 previews the measured working-side correction before selecting
+the raised arrival line. A remembered deployment transform can select a lateral
+staging offset without moving the course's working row. The actual working
+geometry and entry remain measured and validated after deployment.
+See [v0.33 qualification](v033-qualification.md).
+
+### Version 0.32
 
 Version 0.32 separates deployment space from speed-dependent braking. The
 latest failure is reproduced with the saved T7 settings (20 km/h turn, 27 km/h

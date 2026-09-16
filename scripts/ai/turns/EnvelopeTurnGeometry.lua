@@ -439,6 +439,19 @@ function G.applyTurnModel(p,model)
     return true
 end
 
+-- Reuse only the same equipment and measured working side. Rebuild tracker
+-- closures for this turn; cached geometry never retains live scene trackers.
+function G.deploymentModel(p,model)
+    if not model or math.abs(model.width-p.width)>0.001 or #model.objects~=#p.objects then return nil end
+    for i,entry in ipairs(p.objects) do if entry.object~=model.objects[i] then return nil end end
+    local working={};for k,v in pairs(p) do working[k]=v end
+    for _,key in ipairs({'length','axleOffsetX','hitchX','hitchZ','front','workCentreX','work','footprint',
+            'deploymentAngle','steeringResponseTime'}) do working[key]=model[key] end
+    working.deploymentLead=nil;working.turnHint=nil;working.approachHint=nil
+    working.newTracker=function(path,screening) return G.tracker(working,path,screening) end
+    return working
+end
+
 -- Live marker positions are compared against their calibrated straight-row
 -- offsets. This is independent of the tractor's predicted path and catches
 -- actual hitch lag, tracking errors and a plough which has not finished rotating.

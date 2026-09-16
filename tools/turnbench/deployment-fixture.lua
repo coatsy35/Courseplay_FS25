@@ -234,6 +234,54 @@ function configureV031Exit(p,f,field)
     f:setPose(p.start)
 end
 
+-- v0.32 row 269 -> 270: logged folded and working geometry, 16 September.
+-- The deployment heading change is reconstructed; dynamics remain synthetic.
+function configureV032Exit(p,f,field)
+    configureV030Exit(p,f,field)
+    p.start={x=-274.518,z=-173.903,t=math.rad(179.882),phi=math.rad(170.776)}
+    p.goal={x=-280.128,z=-156.450,t=0}
+    p.hitchX=-.037;p.hitchZ=-1.672;p.length=11.305;p.axleOffsetX=-.103
+    p.work={{x=.243,z=-2.598,towed=true},{x=-.100,z=-1.787,towed=true},
+        {x=.243,z=-15.459,towed=true,rear=true},{x=-.100,z=-15.459,towed=true,rear=true}}
+    p.slope=math.tan(math.rad(12.7));p.headland=46.6
+    p.turnSpeed=20;p.fieldSpeed=27;p.steeringTimeConstant=.212397
+    f.turn.entrySlope=p.slope;f.turn.headlandSeed=p.headland
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    local folded=true
+    local originalScanner=VehicleSizeScanner
+    VehicleSizeScanner=function()
+        local scanner=originalScanner()
+        scanner._measureDimension=function(self,object,reference,distance,ending,axis)
+            self.scannedVehicleFound=true
+            if axis=='x' then return distance>0 and (folded and 3.956 or 5.203) or (folded and -3.937 or -7.158) end
+            return distance>0 and (folded and 11.483 or 12.901) or (folded and -5.352 or -5.405)
+        end
+        return scanner
+    end
+    p.stateFixture=function(current,state)
+        if current.object.playing and g_currentMission.time>=current.object.animationEnd then
+            current.object.animation=current.object.targetAnimation;current.object.playing=false;folded=false
+            p.work={{x=-3.256,z=-2.151,towed=true},{x=2.290,z=-2.469,towed=true},
+                {x=-3.256,z=-16.132,towed=true,rear=true},{x=2.290,z=-16.132,towed=true,rear=true}}
+            p.length=11.102;p.hitchX=.037;p.hitchZ=-1.653;p.axleOffsetX=.017
+            state.phi=EnvelopeTurnPlanner.wrap(state.phi-math.rad(9.5))
+        end
+    end
+    -- Seed the previously observed working-side state for this later-row replay.
+    local saved={};for k,v in pairs(p) do saved[k]=v end
+    local state={};for k,v in pairs(p.start) do state[k]=v end
+    f.object.targetAnimation=0;f.object.playing=true;f.object.animationEnd=0;p.stateFixture(f,state)
+    f:setPose(state)
+    local model=EnvelopeTurnGeometry.turnModel(assert(EnvelopeTurnGeometry.capture(f.turn)))
+    model.deploymentAngle=math.rad(-9.5);model.steeringResponseTime=.212397
+    f.strategy.envelopeWorkingModels={[f.context:shouldPlowBeOnTheLeft() and 'left' or 'right']=model}
+    for k,v in pairs(saved) do p[k]=v end
+    folded=true;f.object.animation=.5
+    f:setPose(p.start)
+end
+
 function attachFieldworkHandover(p,f)
     local s,t=f.strategy,f.turn
     s.vehicle=f.vehicle;s.settings=f.vehicle:getCpSettings();s.workWidth=p.width;s.ppc=t.ppc

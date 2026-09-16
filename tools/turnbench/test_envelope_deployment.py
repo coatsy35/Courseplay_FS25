@@ -165,6 +165,39 @@ attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
 assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
 """)
 
+    def test_v032_later_exit_previews_working_position_before_turn(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute("""
+local p,f=deploymentFixture(1);configureV032Exit(p,f,savedField)
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+assert(math.abs(f.context.workStartNode.x+280.128)<.001,'changed the working row')
+local preview=false
+for _,line in ipairs(f.logs) do if line:find('measured working%-side preview') then preview=true end end
+assert(preview,'working geometry was not considered before turning')
+local side=f.context:shouldPlowBeOnTheLeft() and 'left' or 'right'
+local model=f.strategy.envelopeWorkingModels[side]
+f.turn:startPlanning();f.turn.planner:update(1)
+assert(f.strategy.envelopeWorkingModels[side]==model,'later steering changed the cached deployment transform')
+f.turn:release()
+""")
+
+    def test_deployment_model_rejects_changed_equipment(self):
+        self.lua.execute("""
+local p,f=deploymentFixture(1)
+local geometry=assert(EnvelopeTurnGeometry.capture(f.turn))
+local model=EnvelopeTurnGeometry.turnModel(geometry)
+model.deploymentAngle=.2
+assert(EnvelopeTurnGeometry.deploymentModel(geometry,model))
+local working=EnvelopeTurnGeometry.deploymentModel(geometry,model)
+local search=EnvelopeTurnPlanner.newDeploymentSearch(geometry,working)
+local deleted=false;working.activeTracker={delete=function() deleted=true end}
+f.turn.planner=search;f.turn:release();assert(deleted,'preview tracker leaked on cancellation')
+model.objects[1]={}
+assert(not EnvelopeTurnGeometry.deploymentModel(geometry,model))
+""")
+
     def test_braking_distance_follows_curve_and_waypoint_lead(self):
         self.lua.execute("""
 local E=EnvelopeTurnPlanner

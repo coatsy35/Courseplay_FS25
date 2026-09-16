@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.32'
+EnvelopeCourseTurn.TEST_VERSION = '0.33'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -41,6 +41,7 @@ function EnvelopeCourseTurn:stopWithReason(reason)
 end
 
 function EnvelopeCourseTurn:release()
+    if self.planner and self.planner.delete then self.planner:delete() end
     if self.geometry and self.geometry.activeTracker then self.geometry.activeTracker:delete() end
     self.planner=nil
     self:releasePreparation()
@@ -205,6 +206,15 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         p.steeringResponseTime=self.measuredSteeringResponse
         p.turnHint=self.preparedTurnHint or self.driveStrategy.envelopeTurnHint
         p.approachHint=self.driveStrategy.envelopeApproachHints and self.driveStrategy.envelopeApproachHints[EnvelopeTurnPlanner.approachSide(p)]
+        local side=self.turnContext:shouldPlowBeOnTheLeft() and 'left' or 'right'
+        if not self.needsWorkingGeometry and self.deploymentPose and not self.workingModelRecorded then
+            local model=EnvelopeTurnGeometry.turnModel(p)
+            model.deploymentAngle=EnvelopeTurnPlanner.wrap(p.start.phi-self.deploymentPose.phi)
+            model.steeringResponseTime=self.measuredSteeringResponse
+            self.driveStrategy.envelopeWorkingModels=self.driveStrategy.envelopeWorkingModels or {}
+            self.driveStrategy.envelopeWorkingModels[side]=model
+            self.workingModelRecorded=true
+        end
         self:logGeometry(p)
         if remainingPath then
             -- Rotation may change hitch/axle/soil-marker positions. Validate
@@ -243,7 +253,12 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
                 else self.planner=EnvelopeTurnPlanner.newApproachSearch(p) end
                 return nil
             end}
-        else self.planner=EnvelopeTurnPlanner.newSearch(p) end
+        else
+            local models=self.driveStrategy.envelopeWorkingModels
+            local working=self.needsWorkingGeometry and models and EnvelopeTurnGeometry.deploymentModel(p,models[side])
+            if working then self:log('previewing measured working side %s: deployment heading change %.2f degrees',side,math.deg(working.deploymentAngle)) end
+            self.planner=working and EnvelopeTurnPlanner.newDeploymentSearch(p,working) or EnvelopeTurnPlanner.newSearch(p)
+        end
         return nil
     end}
 end
@@ -295,6 +310,7 @@ function EnvelopeCourseTurn:checkWorkingPosition()
         if not EnvelopeTurnPlanner.canDeploy(self.geometry,live) then return true end
         if self.vehicle:getLastSpeed()>0.2 then return true end
         self.deploymentReady=true
+        self.deploymentPose=self.deploymentPose or live
     end
     if self.deferPreparation then
         if not self.preparationRequested then
@@ -403,6 +419,9 @@ function EnvelopeCourseTurn:updatePlanner()
         end
     end
     self.result=result
+    if self.geometry.deploymentOffset then
+        self:log('measured working-side preview: raised arrival offset %.3f m; working row unchanged',self.geometry.deploymentOffset)
+    end
     self.entrySpeedLimit=nil
     local points={}
     for i,wp in ipairs(result.path) do

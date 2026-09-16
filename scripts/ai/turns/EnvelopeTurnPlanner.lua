@@ -531,6 +531,43 @@ function E.newDirectSearch(p)
     end}
 end
 
+-- Choose the raised arrival line with the measured deployment transform in
+-- mind. Centring the folded tool on the row can leave an offset working tool
+-- with no feasible pull-in. Preview the working correction before driving.
+function E.newDeploymentSearch(p,working)
+    local originalGoal=p.goal
+    local _,compact=E.deploymentLead(p,false)
+    local pose={x=originalGoal.x,z=originalGoal.z,t=originalGoal.t,
+        phi=E.wrap(originalGoal.t+working.deploymentAngle)}
+    local _,_,_,_,_,balanced=E.assess(working,pose)
+    local offsets={0,-balanced/2,-balanced,balanced/2}
+    local index,preview,search=1,nil,nil
+    return {delete=function() if working.activeTracker then working.activeTracker:delete() end end,
+        getProgress=function() return search and search:getProgress() or 0 end,
+        update=function(_,budget)
+            if search then return search:update(budget) end
+            local offset=offsets[index]
+            if offset==nil then
+                -- The cached animation is only a prediction. Retain normal
+                -- planning when it cannot provide a verified better arrival.
+                p.goal=originalGoal;search=E.newSearch(p);return nil
+            end
+            if not preview then
+                working.start=E.point(originalGoal.x,originalGoal.z,originalGoal.t,offset,-compact+p.lookahead)
+                working.start.t=originalGoal.t;working.start.phi=pose.phi
+                preview=E.newApproachSearch(working)
+            end
+            local result=preview:update(budget)
+            if not result then return nil end
+            if result.ok then
+                p.goal=E.point(originalGoal.x,originalGoal.z,originalGoal.t,offset,0)
+                p.goal.t=originalGoal.t;p.deploymentOffset=offset
+                search=E.newSearch(p)
+            else index=index+1;preview=nil end
+            return nil
+        end}
+end
+
 -- Search stages preserve the original zero/left/right/root-solved candidate
 -- order without retaining a Lua call stack across game updates.
 function E.newSearch(p)
