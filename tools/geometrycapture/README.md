@@ -3,15 +3,17 @@
 Standalone FS25 development mod. Captures independent, reusable machine geometry and optional
 movement recordings. Works from loaded vehicles, including built-in machines. Courseplay is
 optional; when accessible, its effective radius and per-machine override are included as contextual
-observations. Version **0.4.0.0** fixes the visible-but-unresponsive panel after Tab:
-pointer ownership follows the current vehicle, restores the previous cameras and recovers
-when the vehicle input context resets the cursor. Recording the previous combination
-stops and saves on vehicle change; it never silently starts recording another tractor.
-The draggable panel occupies 46% of its previous area. Manual category/state questions
-are removed; lift, fold, steering and plough states are already read automatically.
-The HUD never opens a GUI dialog or changes the driving input context. **21 offline
-checks pass**, including vehicle switching, recording scope, file I/O, dragging and
-camera restoration. Actual FS25 rendering/input interaction still needs verification.
+observations. Version **0.5.0.0** removes the Drive / camera mode that left a visible
+panel with unclickable buttons. Drive normally with the panel open; close **X** for
+free camera rotation and reopen with the capture shortcut or `vgcPanel`.
+The panel stays draggable and restores interaction after Tab. Each dimension save
+shows a new counter and machine name. **Optional machine labels** expands independent
+steering, tracks/wheels, implement and pivot selectors; these are annotations, not
+geometry overrides. Physical lift/fold/steering states are read automatically.
+
+**22 offline checks pass**, including vehicle switching, recording scope, file I/O,
+dragging, camera restoration, optional labels and distinct save confirmations.
+Actual FS25 rendering/input interaction still needs verification.
 
 ## Install and first PW 100-12 capture
 
@@ -29,13 +31,15 @@ camera restoration. Actual FS25 rendering/input interaction still needs verifica
    different physical state settles if comparing those positions. The file records the state.
 6. For a movement test, click **Start recording**. This records only the current tractor
    and its attached tools/cart, not unrelated vehicles elsewhere on the farm.
-   Drive with the normal keys or start CP while the panel stays open. Click **Drive / camera**
-   to return mouse control to the camera without hiding the panel. Use **Capture: show panel**
-   again to restore the pointer, then click **Stop recording**.
+   Drive with the normal keys or start CP while the panel stays open. Click **Stop recording**
+   when finished. For free camera rotation, close **X**, then reopen the panel to stop recording.
    Starting a recording saves separate geometry files for all attached machines automatically.
 7. Drag the green title bar to move the panel. **X** hides it without stopping recording.
    The wheel and right-click retain their game bindings; pointer mode temporarily prevents
-   camera rotation while clicking or dragging. Drive / camera restores the original camera flags.
+   camera rotation while clicking or dragging. Closing **X** restores the original camera flags.
+8. Optionally expand **Optional machine labels**. For the Quadtrac select articulated,
+   four-track and multiple-pivots independently. Select each attached implement to label
+   it separately. Labels are saved with that machine; they do not alter measured geometry.
 
 Either a manual or an ordinary CP turn is suitable for movement recording. CP debug output
 does not replace the sampled wheel/joint/work-marker data in these files. There is no need to force the tractor into a drawbar

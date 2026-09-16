@@ -258,9 +258,9 @@ end
 clickCaptureButton('capture');clickCaptureButton('record')
 assert(c.recording)
 clickCaptureButton('machine');assert(c.selected==2)
-clickCaptureButton('drive');assert(s.isOpen and c.recording and not g_inputBinding:getShowMouseCursor())
+assert(s.isOpen and c.recording and g_inputBinding:getShowMouseCursor())
 c:update(100)
-c:togglePanel();clickCaptureButton('record')
+clickCaptureButton('record')
 assert(not c.recording and s.isOpen)
 ''')
         self.assertEqual(len(list(self.folder.glob('*.json'))),3)
@@ -293,9 +293,9 @@ c:update(100);clickCaptureButton('record');assert(not c.recording)
 -- Tab can pass through a frame with no vehicle.
 root=nil;c:update(16);c:draw();assert(screen.isOpen and g_inputBinding.cursor)
 root=original;c:update(16);clickCaptureButton('capture')
-clickCaptureButton('drive');root=second;c:update(16)
-assert(not screen.pointerOwned and not g_inputBinding.cursor) -- retain driving mode
-c:togglePanel();clickCaptureButton('close')
+root=second;c:update(16)
+assert(screen.pointerOwned and g_inputBinding.cursor)
+clickCaptureButton('close')
 assert(second.spec_enterable.cameras[1].isRotatable)
 assert(not second.spec_enterable.cameras[2].isRotatable)
 ''')
@@ -328,13 +328,35 @@ c:mouseEvent(x+.2,y+s.h+.03,false,false,0)
 c:mouseEvent(x+.2,y+s.h+.03,false,true,1)
 assert(math.abs(s.x-x-.15)<.001 and not s.drag)
 assert(not c:mouseEvent(s.x+.1,s.y+.1,true,false,4))
-clickCaptureButton('drive');c:draw()
-assert(s.isOpen and root.spec_enterable.cameras[1].isRotatable)
+clickCaptureButton('close');c:draw()
+assert(not s.isOpen and root.spec_enterable.cameras[1].isRotatable)
 assert(not root.spec_enterable.cameras[2].isRotatable)
 assert(not c:mouseEvent(s.x+.1,s.y+.1,true,false,1))
 c:togglePanel();clickCaptureButton('close')
 assert(not s.isOpen and not g_inputBinding:getShowMouseCursor())
 ''')
+
+    def test_optional_independent_labels_and_distinct_save_feedback(self):
+        self.lua.execute('''
+local c=VehicleGeometryCapture;c:togglePanel();local s=c.screen
+clickCaptureButton('tags')
+for i=1,3 do clickCaptureButton('steering') end
+for i=1,3 do clickCaptureButton('runningGear') end
+for i=1,2 do clickCaptureButton('pivots') end
+assert(c:tags(root).steering==4 and c:tags(root).runningGear==4 and c:tags(root).pivots==3)
+clickCaptureButton('capture');assert(c.saveFeedback=='Saved #1: Test tractor')
+clickCaptureButton('capture');assert(c.saveFeedback=='Saved #2: Test tractor')
+clickCaptureButton('machine');clickCaptureButton('implement');clickCaptureButton('implement')
+assert(c:tags(tool).implement==3 and not c:tags(tool).steering)
+clickCaptureButton('capture');assert(c.saveFeedback=='Saved #3: PW 100-12')
+clickCaptureButton('tags');s:layout();assert(s.h==.30)
+for _,b in ipairs(s.buttons) do assert(b.id~='drive') end
+''')
+        profiles=[json.loads(p.read_text()) for p in self.folder.glob('*.json')]
+        tractor=next(p for p in profiles if p['identity']['name']=='Test tractor')
+        self.assertEqual(tractor['labels']['steering'],'articulated')
+        self.assertEqual(tractor['labels']['runningGear'],'four-track')
+        self.assertEqual(tractor['labels']['pivots'],'multiple-pivots')
 
     def test_engine_void_write_flush_and_close_are_successful(self):
         self.lua.execute('''

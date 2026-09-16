@@ -160,6 +160,10 @@ function C:capture()
     local root,object=self:vehicle(),self:selection()
     if not root or not object then return self:notify('Enter a tractor and select a machine first.') end
     local ok,path=pcall(self.saveObject,self,object,root)
+    if ok then
+        self.saveCount=(self.saveCount or 0)+1
+        self.saveFeedback=string.format('Saved #%d: %s',self.saveCount,G.identity(object).name)
+    end
     return self:notify(ok and ('Saved: '..path:match('[^/]+$')) or ('Capture failed: '..tostring(path)))
 end
 

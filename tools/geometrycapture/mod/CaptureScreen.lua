@@ -11,7 +11,7 @@ end
 -- Restore the OLD cameras, cancel any held click/drag, then bind pointer
 -- interaction to the NEW vehicle. Never leave a visible but dead panel.
 function VGCCaptureScreen:onVehicleChanged()
-    local interactive=self.isOpen and self.pointerOwned
+    local interactive=self.isOpen
     self:setPointer(false)
     self.drag,self.pressed=nil,nil
     if interactive then self:setPointer(true) end
@@ -60,7 +60,7 @@ function VGCCaptureScreen:close()
 end
 
 function VGCCaptureScreen:layout()
-    self.h=.30
+    self.h=self.showTags and .468 or .30
     self.w=math.min(.6,.28*(16/9)/(g_screenAspectRatio or 16/9))
     self.x=math.max(0,math.min(1-self.w,self.x))
     self.y=math.max(0,math.min(1-self.h,self.y))
@@ -82,13 +82,29 @@ function VGCCaptureScreen:layout()
     selector('machine',object and VGCGeometry.identity(object).name or 'Enter a tractor',function(step)
         c.selected=((c.selected-1+step)%math.max(1,count))+1
     end,c.recording~=nil or not object)
+    if self.showTags then
+        local names={steering='Steering',runningGear='Tracks / wheels',implement='Implement',pivots='Pivots'}
+        for _,field in ipairs(c.tagFields) do
+            local tagField=field
+            local index=object and c:tags(object)[field] or 1
+            selector(field,names[field]..': '..c.tagOptions[field][index or 1],function(step)
+                c:cycleTag(tagField,step)
+            end,not object or c.recording~=nil)
+        end
+    end
     button('capture','Save dimensions',self.x+.012,y,self.w-.024,.033,function() c:capture() end,not object)
     y=y-.043
     button('record',c.recording and 'Stop recording' or 'Start recording',self.x+.012,y,self.w-.024,.033,
         function() c:toggleRecord() end,not object and not c.recording)
     self.scopeY=y-.018
     y=y-.057
-    button('drive','Drive / camera',self.x+.012,y,self.w-.024,.030,function() self:setPointer(false) end)
+    button('tags',self.showTags and 'Hide optional machine labels' or 'Optional machine labels',
+        self.x+.012,y,self.w-.024,.030,function()
+            -- Keep the title in place when expanding the optional controls.
+            local top=self.y+self.h
+            self.showTags=not self.showTags
+            self.y=top-(self.showTags and .468 or .30)
+        end)
     self.statusY=y-.024
 end
 
@@ -137,7 +153,7 @@ function VGCCaptureScreen:draw()
     drawFilledRect(self.x,self.y+self.h-.04,self.w,.04,.1,.35,.23,1)
     setTextAlignment(RenderText.ALIGN_LEFT);setTextColor(1,1,1,1)
     setTextBold(true)
-    renderText(self.x+.012,self.y+self.h-.028,.015,'GEOMETRY CAPTURE v0.4 - drag')
+    renderText(self.x+.012,self.y+self.h-.028,.015,'GEOMETRY CAPTURE v0.5 - drag')
     setTextBold(false)
     for _,b in ipairs(self.buttons) do
         local hover=self.mouseX and inside(b,self.mouseX,self.mouseY)
@@ -152,12 +168,12 @@ function VGCCaptureScreen:draw()
     renderText(self.x+.012,self.scopeY,.012,'Recording: current vehicle + attached tools')
     local status=self.capture.recording and string.format('Recording: %d samples / %.1f s',
         self.capture.recording.samples,(self.capture.clock-self.capture.recording.started)/1000) or 'Ready'
-    if not self.pointerOwned then status='Driving - Capture shortcut restores buttons' end
+    if not self.capture.recording then status='Drive normally; close X for free camera' end
     renderText(self.x+.012,self.statusY,.013,status)
     -- Keep confirmations to one line in the compact HUD. Full errors and
     -- filenames are still printed in log.txt, never silently discarded.
     local message=self.capture.message or ''
-    if message:sub(1,7)=='Saved: ' then message='Dimensions saved; state captured automatically.' end
+    if message:sub(1,7)=='Saved: ' then message=self.capture.saveFeedback or message end
     if message:sub(1,15)=='Recording saved' then message='Recording saved.' end
     while #message>4 and getTextWidth(.012,message)>self.w-.024 do message=message:sub(1,-5)..'...' end
     renderText(self.x+.012,self.y+.011,.012,message)
