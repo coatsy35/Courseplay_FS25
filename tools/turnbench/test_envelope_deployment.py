@@ -78,6 +78,18 @@ local _,minimum=EnvelopeTurnPlanner.deploymentLead(measured,false)
 assert(measured.deploymentLead==minimum and f.object.lowerCount==0)
 """)
 
+    def test_candidate_preparation_continues_during_folding(self):
+        self.lua.execute("""
+local p,f=deploymentFixture(1)
+f.turn.prepareStarted=0
+f.controller.isRotationActive=function() return true end
+local updates=0
+f.turn.updatePreparation=function() updates=updates+1 end
+f.turn:prepare()
+assert(updates==1 and not f.turn.planner)
+assert(f.object.sideCommands==0 and f.object.lowerCount==0)
+""")
+
     def test_v025_second_row_exit_completes_within_bounded_wait(self):
         points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-first-pike-outer-headland.json').read_text())
         self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
@@ -109,6 +121,53 @@ assert(t:getForwardSpeed()==16)
 local p,f=deploymentFixture(1);configureV026Exit(p,f,savedField)
 attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
 assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+""")
+
+    def test_v027_exit_reaches_fieldwork(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-first-pike-outer-headland.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute("""
+local p,f=deploymentFixture(1);configureV027Exit(p,f,savedField)
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+""")
+
+    def test_long_narrow_angled_field_entries(self):
+        self.lua.execute("""
+for _,angle in ipairs({-60,-25,25,60}) do
+    local p,f=narrowAngledDeploymentFixture(angle)
+    attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+    assert(f.workedDistance>=8 and f.strategy.resumed==1)
+end
+""")
+
+    def test_stock_k_turn_entry_reaches_fieldwork(self):
+        self.lua.execute("""
+local p=envelopeFixture(4,0,0,3,4,25,1,50)
+p.start={x=p.goal.x,z=p.goal.z+25,t=math.pi,phi=math.pi}
+local f=makeEnvelopeLiveFixture(p)
+AIUtil.getSteeringParameters=function() return nil,0 end
+AIUtil.hasChainedAttachments=function() return false end
+local ppc=PurePursuitController(f.vehicle)
+local proximity={registerBlockingObjectListener=function() end,unregisterBlockingObjectListener=function() end}
+local turn=EnvelopeKTurn(f.vehicle,f.strategy,ppc,proximity,f.context,nil,4)
+turn.endingTurnCourse=Course(f.vehicle,{{x=p.start.x,z=p.start.z},{x=p.goal.x,z=p.goal.z-30}},true)
+ppc:setCourse(turn.endingTurnCourse);ppc:initialize(1)
+f.vehicle.speed=8
+assert(not turn:endTurn(0) and not turn.entryGuard,'captured a moving K-turn arrival')
+f.vehicle.speed=0;turn:endTurn(0)
+local guard=assert(turn.entryGuard)
+f.turn=guard
+-- Scene services normally supplied by GIANTS, as in the other live fixtures.
+guard.getLowerImplementNode=function() return f.context.workStartNode end
+guard.workStartHandler.shouldLowerThisImplement=function() return guard.lowerRequested or false,guard.lastContact or -100 end
+p.planFixture=function()
+    guard:prepare()
+    repeat guard:updatePlanner() until not guard.planner
+    return assert(guard.result)
+end
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1)
 """)
 
     def test_recorded_initial_loop_deploys_and_enters_on_both_sides(self):

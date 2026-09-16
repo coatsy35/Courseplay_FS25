@@ -46,6 +46,10 @@ def audit(archive,output):
               ('v026-default-cp-speeds',{'v026Exit':True,'turnSpeed':8,'fieldSpeed':20}),
               ('default-cp-speeds',{'turnSpeed':8,'fieldSpeed':20}),
               ('configured-cp-speeds',{'turnSpeed':12,'fieldSpeed':25})]
+    cases += [('v027-later-exit',{'v027Exit':True}),
+              ('v027-later-exit-lag',{'v027Exit':True,'steeringTimeConstant':.2}),
+              ('v027-default-cp-speeds',{'v027Exit':True,'turnSpeed':8,'fieldSpeed':20})]
+    cases += [(f'narrow-1km-angle-{angle}',{'narrowAngle':angle}) for angle in (-60,-25,25,60)]
     with ZipFile(archive) as z:
         runtime={n:z.read(n) for n in z.namelist() if n.endswith('.lua')}
         mismatches=[n for n,data in runtime.items() if (ROOT/n).read_bytes()!=data]
@@ -58,10 +62,10 @@ def audit(archive,output):
             test=DeploymentTests();test.setUp()
             # Use the shipped experimental modules, after loading the regular
             # CP/scene fixture. Every other packaged Lua source was compared too.
-            for module in ('EnvelopeTurnPlanner','EnvelopeTurnGeometry','EnvelopeCourseTurn','EnvelopeStartRowOnly'):
+            for module in ('EnvelopeTurnPlanner','EnvelopeTurnGeometry','EnvelopeCourseTurn','EnvelopeStartRowOnly','EnvelopeKTurn'):
                 test.lua.execute(runtime[f'scripts/ai/turns/{module}.lua'].decode())
             test.lua.globals().options=test.lua.table_from(options)
-            if 'savedArrival' in options or 'firstExitOffset' in options or 'v023Arrival' in options or 'v024Arrival' in options or 'v025Exit' in options or 'v026Exit' in options:
+            if 'savedArrival' in options or 'firstExitOffset' in options or 'v023Arrival' in options or 'v024Arrival' in options or 'v025Exit' in options or 'v026Exit' in options or 'v027Exit' in options:
                 points=json.loads((ROOT/'tools/turnbench/fixtures/t7-first-pike-outer-headland.json').read_text())
                 test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
             start=time.perf_counter()
@@ -71,6 +75,8 @@ def audit(archive,output):
 p,f=deploymentFixture(options.side or 1)
 if options.v025Exit then configureV025SecondExit(p,f,savedField) end
 if options.v026Exit then configureV026Exit(p,f,savedField) end
+if options.v027Exit then configureV027Exit(p,f,savedField) end
+if options.narrowAngle then p,f=narrowAngledDeploymentFixture(options.narrowAngle) end
 if options.savedArrival~=nil then configureSavedStraightEntry(p,f,savedField,options.savedArrival) end
 if options.firstExitOffset~=nil then configureRecordedFirstExit(p,f,savedField,options.firstExitOffset) end
 if options.v023Arrival or options.v024Arrival then
@@ -94,7 +100,9 @@ p.stateFixture=function(current,state)
         end
     end
 end
+local originalTick=p.tickFixture
 p.tickFixture=function(current)
+    if originalTick then originalTick(current) end
     current.peakSpeed=math.max(current.peakSpeed or 0,current.vehicle:getLastSpeed())
 end
 attachFieldworkHandover(p,f)

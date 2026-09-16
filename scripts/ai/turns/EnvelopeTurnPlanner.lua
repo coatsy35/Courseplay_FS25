@@ -432,6 +432,83 @@ function E.simulate(p,path,tailStart,step,boundary,collect)
     return result
 end
 
+-- Compare short stock-Dubins connections with independent outgoing and
+-- incoming leads. This permits asymmetric turns without imposing a bulb shape.
+-- Every shortlisted candidate is replayed with the actual implement envelope.
+function E.newDirectSearch(p)
+    local candidates={}
+    -- Shorter connections retain the full measured deployment reserve. The
+    -- established fallback alone owns its separately validated compact entry.
+    local lead=p.deploymentLead
+    local staged={};for k,v in pairs(p) do staged[k]=v end
+    staged.goal=E.point(p.goal.x,p.goal.z,p.goal.t,0,-lead);staged.goal.t=p.goal.t
+    staged.deploymentLead=nil;staged.deploymentTarget=true
+    local lever=math.max(p.width,p.length or 0)
+    local factors,families={1,1.25,1.5,2},{'LSL','RSR','LSR','RSL','LRL','RLR'}
+    local generated,total=0,4*3*3*3*6
+    local index,simulation,verified=1,nil,false
+    local rejections={}
+    return {getProgress=function() return index-1 end,update=function(_,budget)
+        -- Generate one analytic candidate per batch as well as time-slicing
+        -- simulation. Building the catalogue must not freeze a game frame.
+        if generated<total then
+            local n=generated
+            local family=families[n%6+1];n=math.floor(n/6)
+            local biasIndex=n%3;n=math.floor(n/3)
+            local incoming=(n%3+1)*lever;n=math.floor(n/3)
+            local outward=(n%3)*p.radius;n=math.floor(n/3)
+            local radius=p.radius*factors[n+1]
+            local biasLimit=math.min(p.width,incoming*incoming/(6*radius)*0.95)
+            local bias=biasIndex==0 and 0 or (biasIndex==1 and -biasLimit or biasLimit)
+            local path,tail=E.makePath(staged,incoming,4,radius,outward,bias,family)
+            generated=generated+1
+            if path then
+                local length=lead
+                for j=2,#path do length=length+math.sqrt((path[j].x-path[j-1].x)^2+(path[j].z-path[j-1].z)^2) end
+                -- Reject analytically outside routes before replaying the
+                -- articulated combination. This is screening only: survivors
+                -- still require the full swept-envelope/PPC validation.
+                local inside=not p.maxRouteLength or length<p.maxRouteLength
+                if inside then
+                    for _,point in ipairs(path) do
+                        if not p.contains(point.x,point.z) then inside=false;break end
+                    end
+                end
+                if inside then
+                    candidates[#candidates+1]={path=path,tail=tail,length=length,family=family,bias=bias,
+                        radius=radius,bend=incoming-4,straight=4,extension=outward,order=generated}
+                end
+            end
+            if generated==total then
+                table.sort(candidates,function(a,b) return a.length==b.length and a.order<b.order or a.length<b.length end)
+            end
+            return nil
+        end
+        local c=candidates[index]
+        if not c then
+            return {ok=false,reason='short connection shortlist exhausted',attempts=index-1,rejections=rejections}
+        end
+        if not simulation then simulation=E.newSimulation(staged,c.path,c.tail,0.15,true,false) end
+        local result=simulation:update(budget)
+        if not result then return nil end
+        if result.ok and not verified then
+            simulation=E.newSimulation(staged,c.path,c.tail,0.075,true,true)
+            verified=true;return nil
+        end
+        simulation=nil;verified=false
+        if not result.ok then rejections[result.reason]=(rejections[result.reason] or 0)+1 end
+        if result.ok then
+            result.attempts=index;result.radius=c.radius;result.bend=c.bend
+            result.straight=c.straight;result.extension=c.extension;result.bias=c.bias
+            result.deploymentLead=lead;result.directConnection=true;result.routeLength=c.length
+            result.pathFamily=c.family
+            return result
+        end
+        index=index+1
+        return nil
+    end}
+end
+
 -- Search stages preserve the original zero/left/right/root-solved candidate
 -- order without retaining a Lua call stack across game updates.
 function E.newSearch(p)
@@ -441,6 +518,41 @@ function E.newSearch(p)
     -- the working position; this target is never used as a lowering boundary.
     -- Every candidate retains the real field containment and joint limits.
     if p.deploymentLead and p.deploymentLead>0 then
+        if not p.directSearchComplete and not (p.turnHint and p.turnHint.directConnection) and
+                math.abs(E.wrap(p.start.t-p.goal.t))>=math.pi/2 then
+            local broad={};for k,v in pairs(p) do broad[k]=v end
+            broad.directSearchComplete=true
+            local baselineSearch=E.newSearch(broad)
+            local baseline,direct
+            return {getProgress=function()
+                    return (baseline and baseline.attempts or baselineSearch:getProgress())+
+                        (direct and direct:getProgress() or 0)
+                end,update=function(_,budget)
+                    if not baseline then
+                        baseline=baselineSearch:update(budget)
+                        if not baseline then return nil end
+                        local shorter={};for k,v in pairs(p) do shorter[k]=v end
+                        if baseline.ok then
+                            local length=0
+                            for i=2,#baseline.path do
+                                local a,b=baseline.path[i-1],baseline.path[i]
+                                length=length+math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)
+                            end
+                            shorter.maxRouteLength=length
+                        end
+                        direct=E.newDirectSearch(shorter)
+                        return nil
+                    end
+                    local result=direct:update(budget)
+                    if not result then return nil end
+                    if result.ok then
+                        local finish=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.front+12)
+                        addLine(result.path,result.path[#result.path],finish)
+                        return result
+                    end
+                    return baseline
+                end}
+        end
         local staged={}
         for k,v in pairs(p) do staged[k]=v end
         staged.goal=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.deploymentLead)
@@ -599,6 +711,7 @@ function E.newSearch(p)
             result.attempts,result.straight,result.bend=attempts,straight,bend
             result.radius,result.extension,result.bias=radius,extension,bias
             result.usedTurnHint=not compactSeed and usingHint and true or false
+            result.directConnection=result.usedTurnHint and hint.directConnection or nil
             result.preferWorked=loopSide~=nil and not families[familyIndex]
             result.pathFamily=(usingHint and hint.pathFamily) or families[familyIndex]
             return result
@@ -634,7 +747,7 @@ function E.turnSide(p)
 end
 
 function E.turnHint(p,result)
-    return {pathFamily=result.pathFamily,bendRatio=result.bend/p.width,radiusRatio=result.radius/p.radius,
+    return {directConnection=result.directConnection,pathFamily=result.pathFamily,bendRatio=result.bend/p.width,radiusRatio=result.radius/p.radius,
         biasRatio=result.bias/(p.width*E.turnSide(p)),extensionRatio=result.extension/p.width,
         preferWorked=result.preferWorked,
         workedSideRelative=p.workedSide and p.workedSide*E.turnSide(p) or nil}

@@ -154,17 +154,13 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
         end
     end
     guard.stopWithReason=function(g,reason)
-        if g.geometry and not g.result and not g.lowerRequested and not self.recoveryAttempted and not g.planningTimedOut then
+        if g.geometry and not g.result and not g.lowerRequested and not self.recoveryAttempted then
             -- The original/local approach is infeasible. Reuse the row-turn
             -- planner from this stopped pose, keeping the original entry and
             -- checking the complete trailer motion, footprint and lowering.
             -- Execute through EnvelopeCourseTurn too: stock StartRowOnly does
             -- not enforce the combination's steering radius while tracking.
             self.recoveryAttempted=true
-            -- Account for calculation across attempts, but not the physical
-            -- centring animation between them.
-            g.planningWaitUsed=g.planningWaitStarted and g_currentMission.time-g.planningWaitStarted or 0
-            g.planningWaitStarted=nil
             g:log('initial approach cannot align: %s; checking a complete envelope recovery to waypoint %d',reason,self.entryIx)
             -- Initial entry has no finishRow transition. Emit the same stock
             -- event explicitly before attempting a bulb: the working-side

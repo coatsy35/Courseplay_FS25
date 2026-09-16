@@ -412,10 +412,14 @@ function AIDriveStrategyFieldWorkCourse:startTurn(ix)
             Logging.info('[CP envelope] %s: stock CP turn selected: %s', CpUtil.getName(self.vehicle), reason)
         end
     end
-    if useEnvelope then
+    local canKTurn=AITurn.canMakeKTurn(self.vehicle,self.turnContext,self.workWidth,self:isTurnOnFieldActive())
+    if canKTurn and useEnvelope then
+        self.aiTurn = EnvelopeKTurn(self.vehicle,self,self.ppc,self.proximityController,
+                self.turnContext,self.course,self.workWidth)
+    elseif useEnvelope then
         self.aiTurn = EnvelopeCourseTurn(self.vehicle, self, self.ppc, self.proximityController,
                 self.turnContext, self.course, self.workWidth)
-    elseif AITurn.canMakeKTurn(self.vehicle, self.turnContext, self.workWidth, self:isTurnOnFieldActive()) then
+    elseif canKTurn then
         self.aiTurn = KTurn(self.vehicle, self, self.ppc, self.proximityController, self.turnContext, self.workWidth)
     else
         self.aiTurn = CourseTurn(self.vehicle, self, self.ppc, self.proximityController, self.turnContext, self.course, self.workWidth)

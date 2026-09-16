@@ -3,8 +3,16 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.27**, packaged mod version **8.1.0.127**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.27` records identify it.
+Current test: **v0.28**, packaged mod version **8.1.0.128**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.28` records identify it.
+
+Version 0.28 compares shorter asymmetric connections with a validated fallback,
+continues candidate preparation during folding and removes the three-second
+search failure. Stock K-turn eligibility is retained with guarded final entry.
+CP speed settings and full envelope/entry validation remain in force.
+See [v0.28 qualification](v028-qualification.md) for tests and limitations.
+
+### Version 0.27
 
 Version 0.27 removes the experimental fixed speed caps. CP's field speed applies
 in the middle of long turns and turn speed on final approaches. Braking uses the

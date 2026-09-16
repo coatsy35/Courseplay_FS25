@@ -135,46 +135,38 @@ c:onTurnEndProgress(f.context.workStartNode,false,true,false)
 assert(f.object.sideCommands==1)
 ''')
 
-    def test_difficult_turn_can_continue_past_one_second(self):
+    def test_elapsed_time_does_not_reject_an_unfinished_search(self):
         self.lua.execute("""
 local f=initialFixture();f.starter:getDriveData(16)
 local g=assert(f.starter.guard)
-g.geometry={};g.planningWaitStarted=0
+g.geometry={}
 local updates=0;g.planner={update=function() updates=updates+1 end}
-g_currentMission.time=1500;g:updatePlanner()
-assert(updates>0 and not f.vehicle.stopped and not g.planningTimedOut)
-g_currentMission.time=3000;g:updatePlanner()
-assert(f.vehicle.stopped and g.planningTimedOut and f.object.lowerCount==0)
+for _,time in ipairs({1500,3000,10000}) do
+    g_currentMission.time=time;g:updatePlanner()
+    assert(updates>0 and not f.vehicle.stopped and f.object.lowerCount==0)
+end
 """)
 
-    def test_stopped_planner_deadline_does_not_restart_recovery(self):
-        self.lua.execute('''
+    def test_exhausted_search_stops_without_lowering(self):
+        self.lua.execute("""
 local f=initialFixture();f.starter:getDriveData(16)
 local g=assert(f.starter.guard)
-g.geometry={};g.planningWaitStarted=0
-g.planner={update=function() error('ran search after stopped deadline') end}
-g_currentMission.time=3000
-g:updatePlanner()
-assert(f.vehicle.stopped and g.planningTimedOut and not f.starter.recoveryAttempted)
-assert(f.object.lowerCount==0)
-''')
+f.starter.recoveryAttempted=true
+g.geometry={}
+g.planner={update=function() return {ok=false,reason='all candidates exhausted',attempts=96} end}
+g_currentMission.time=10000;g:updatePlanner()
+assert(f.vehicle.stopped and f.object.lowerCount==0)
+""")
 
-    def test_centring_time_is_excluded_but_failed_search_time_is_retained(self):
-        self.lua.execute('''
+    def test_search_error_stops_without_driving_unchecked_path(self):
+        self.lua.execute("""
 local f=initialFixture();f.starter:getDriveData(16)
 local g=assert(f.starter.guard)
-g.geometry={radius=9,length=9,front=-11};g.planningWaitStarted=100
-g_currentMission.time=400
-g:stopWithReason('test failed first search')
-assert(g.planningWaitUsed==300 and not g.planningWaitStarted)
-g_currentMission.time=7400 -- seven seconds of physical centring
-g:startPlanning()
-assert(g.planningWaitStarted==7100,'animation consumed calculation budget')
-g.planner={update=function() error('continued past cumulative deadline') end}
-g_currentMission.time=10100
+f.starter.recoveryAttempted=true
+g.geometry={};g.planner={update=function() error('invalid search data') end}
 g:updatePlanner()
-assert(f.vehicle.stopped and g.planningTimedOut and f.object.lowerCount==0)
-''')
+assert(f.vehicle.stopped and f.object.lowerCount==0)
+""")
 
 
 if __name__=='__main__': unittest.main()

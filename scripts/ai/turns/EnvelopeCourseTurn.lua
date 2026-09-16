@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.27'
+EnvelopeCourseTurn.TEST_VERSION = '0.28'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -120,8 +120,6 @@ function EnvelopeCourseTurn:updatePreparation()
 end
 
 function EnvelopeCourseTurn:prepare()
-    -- Speculation is useful while finishing a working row. Starting it once
-    -- already stopped immediately discards the same search in startPlanning.
     if self.vehicle:getLastSpeed()>0.2 then return end
     if not self:ensureFieldBoundary() then return end
     -- AITurn.finishRow already emitted the stock onFinishRow event, which
@@ -131,12 +129,14 @@ function EnvelopeCourseTurn:prepare()
         if controller.isRotatablePlow and controller:isRotatablePlow() then
             self.needsWorkingGeometry=true
             if controller:isRotationActive() then
+                self:updatePreparation()
                 if g_currentMission.time-self.prepareStarted>30000 then self:stopWithReason('plough centring did not finish') end
                 return
             end
         end
     end
-    self:startPlanning()
+    self:startPlanning(self.initialRemainingPath)
+    self.initialRemainingPath=nil
 end
 
 -- Loaded courses can lack the generator's transient field polygon. Use CP's
@@ -171,7 +171,6 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
     self:releasePreparation()
     self.state=self.states.ENVELOPE_PLANNING
     self.planningStarted=g_currentMission.time
-    self.planningWaitStarted=self.planningWaitStarted or self.planningStarted-(self.planningWaitUsed or 0)
     self.planningProgressLogged=nil
     self.planner={update=function()
         self:log('measuring %s envelope',self.needsWorkingGeometry and 'centred-turn' or 'working')
@@ -341,13 +340,8 @@ end
 coroutine library. Each call below advances a small sample batch. ]]
 
 function EnvelopeCourseTurn:updatePlanner()
-    -- Never turn an infeasible start into tens of seconds of stopped retries.
-    -- A failed deadline remains a failure: it cannot admit an unchecked path.
-    if self.planningWaitStarted and g_currentMission.time-self.planningWaitStarted>=3000 then
-        self.planningTimedOut=true
-        self:stopWithReason('planning exceeded the three-second stopped budget')
-        return
-    end
+    -- The planner owns a finite candidate search. Elapsed wall time is not
+    -- evidence that no path exists; keep yielding between bounded batches.
     local started=getTimeSec()
     local ok,result
     repeat
@@ -385,8 +379,6 @@ function EnvelopeCourseTurn:updatePlanner()
         end
     end
     self.result=result
-    self.planningWaitStarted=nil
-    self.planningWaitUsed=nil
     self.entrySpeedLimit=nil
     local points={}
     for i,wp in ipairs(result.path) do
@@ -399,6 +391,15 @@ function EnvelopeCourseTurn:updatePlanner()
     self.ppc:setCourse(self.turnCourse)
     self.ppc:initialize(1)
     self.state=self.states.TURNING
+    if result.directConnection then
+        result.routeLength=0
+        for i=2,#result.path do
+            local a,b=result.path[i-1],result.path[i]
+            result.routeLength=result.routeLength+math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)
+        end
+        self:log('SELECTED shorter connection: %d candidates, %.1f m route, outgoing %.1f m, incoming %.1f m; full envelope verified',
+            result.attempts,result.routeLength,result.extension,result.bend+result.straight)
+    end
     if result.repairedApproach then
         self:log('SELECTED local entry correction: %d trials, lateral lead %.3f m, predicted edge error %.3f m, worst admission error %.3f m, reused shape %s; no second loop',result.attempts,result.bias,result.entryError,result.maxEntryError or result.entryError,tostring(result.usedHint or false))
     elseif result.retainedApproach then

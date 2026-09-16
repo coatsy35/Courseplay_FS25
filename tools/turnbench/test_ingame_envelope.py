@@ -18,6 +18,7 @@ require('PurePursuitController')
 require('EnvelopeTurnPlanner')
 require('EnvelopeTurnGeometry')
 require('EnvelopeCourseTurn')
+require('EnvelopeKTurn')
 require('EnvelopeStartRowOnly')
 productionTurningRadius = AIUtil.getTurningRadius
 -- FS25 does not expose this desktop Lua library. Keep it absent for ALL tests.
@@ -1150,6 +1151,25 @@ local simulation=EnvelopeTurnPlanner.newSimulation(p,{{x=0,z=0},{x=0,z=100}},2,0
 assert(simulation:update(3)==nil and calls==3)
 assert(simulation:update(5)==nil and calls==8)
 ''')
+
+    def test_stock_k_turn_hands_over_to_entry_guard_without_lowering(self):
+        self.lua.execute("""
+local p=envelopeFixture(4,0,0,3,4,25,1,50)
+local f=makeEnvelopeLiveFixture(p)
+AIUtil.getSteeringParameters=function() return nil,0 end
+AIUtil.hasChainedAttachments=function() return false end
+local proximity={registerBlockingObjectListener=function() end}
+local turn=EnvelopeKTurn(f.vehicle,f.strategy,PurePursuitController(f.vehicle),proximity,f.context,nil,4)
+turn.endingTurnCourse=Course(f.vehicle,{{x=0,z=0},{x=0,z=10}},true)
+turn.ppc:setCourse(turn.endingTurnCourse);turn.ppc:initialize(1)
+turn.state=turn.states.ENDING_TURN
+turn:onWaypointPassed(2,turn.endingTurnCourse)
+assert(turn.entryGuard and f.strategy.aiTurn==turn.entryGuard)
+assert(f.object.lowerCount==0 and f.strategy.resumed==0)
+assert(turn.entryGuard.state==turn.entryGuard.states.ENVELOPE_PREPARING)
+turn.entryGuard:prepare()
+assert(turn.entryGuard.state==turn.entryGuard.states.ENVELOPE_PLANNING)
+""")
 
     def test_constructor_preparation_and_incremental_lifecycle(self):
         self.lua.execute('''

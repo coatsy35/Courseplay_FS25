@@ -205,6 +205,23 @@ function configureV026Exit(p,f,field)
     f:setPose(p.start)
 end
 
+-- v0.27 failure at 15:33:02. Raised dimensions and pose are recorded;
+-- turnover uses the previous working-side proxy, not an observed failed turn.
+function configureV027Exit(p,f,field)
+    configureRecordedFirstExit(p,f,field,0)
+    p.start={x=-235.315,z=-26.349,t=math.rad(-.050),phi=math.rad(9.829)}
+    p.goal={x=-240.911,z=-40.060,t=-math.pi}
+    p.hitchX=.009;p.hitchZ=-1.634;p.length=11.26;p.axleOffsetX=0
+    p.work={{x=-.006,z=-2.801,towed=true},{x=.008,z=-1.663,towed=true},
+        {x=-.006,z=-15.227,towed=true,rear=true},{x=.008,z=-15.227,towed=true,rear=true}}
+    p.slope=math.tan(math.rad(-41.7));p.headland=44.6
+    f.turn.entrySlope=p.slope;f.turn.headlandSeed=p.headland
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    f:setPose(p.start)
+end
+
 function attachFieldworkHandover(p,f)
     local s,t=f.strategy,f.turn
     s.vehicle=f.vehicle;s.settings=f.vehicle:getCpSettings();s.workWidth=p.width;s.ppc=t.ppc
@@ -258,4 +275,27 @@ function attachFieldworkHandover(p,f)
         if s.state==s.states.WORKING then f.workedDistance=contact end
         return f.workedDistance>=8
     end
+end
+
+-- Synthetic 140 m wide, 1 km long parallelogram; no real map is required.
+function narrowAngledDeploymentFixture(angle)
+    local p=envelopeFixture(5.6,11.31,1.3,4.6,18.3,angle,angle>0 and 1 or -1,50.4)
+    for _,m in ipairs(p.work) do m.x=m.x*.1 end
+    local f=makeEnvelopeLiveFixture(p)
+    addStockPloughFixture(f);f.turn.needsWorkingGeometry=true
+    local edge=p.headland*math.sqrt(1+p.slope*p.slope)
+    f.vehicle.cpGetFieldPolygon=function() return {
+        {x=-70,z=-1000-70*p.slope},{x=70,z=-1000+70*p.slope},
+        {x=70,z=edge+70*p.slope},{x=-70,z=edge-70*p.slope}} end
+    p.tickFixture=function(current)
+        if current.object.playing and g_currentMission.time>=current.object.animationEnd then
+            current.object.animation=current.object.targetAnimation;current.object.playing=false
+            for _,m in ipairs(p.work) do m.x=m.x/.1 end
+        end
+    end
+    f.turn.ppc=PurePursuitController(f.vehicle)
+    f.logs={}
+    f.turn.log=function(_,format,...) f.logs[#f.logs+1]=string.format(format,...) end
+    p.stateFixture=function() end
+    return p,f
 end
