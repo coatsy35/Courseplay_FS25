@@ -85,9 +85,7 @@ function AIDriveStrategyFieldWorkCourse:start(course, startIx, jobParameters)
         job:setStartFieldWorkCourse(nil, nil)
         self.course = course
         self:startAlignmentTurn(course, startIx, alignmentCourse, alignmentCourseStartIx)
-    elseif distance > 2 * self.turningRadius or
-            (self.settings.envelopeAlignedTurns:getValue() and not course:isOnHeadland(startIx)
-                and EnvelopeTurnGeometry.supported(self.vehicle)) then
+    elseif distance > 2 * self.turningRadius then
         self:debug('Start waypoint is far (%.1f m), use alignment course to get there.', distance)
         self.course = course
         self:startAlignmentTurn(course, startIx)
@@ -107,7 +105,6 @@ end
 
 --- Event raised when the driver has finished.
 function AIDriveStrategyFieldWorkCourse:onFinished(hasFinished)
-    if self.workStarter and self.workStarter.release then self.workStarter:release() end
     AIDriveStrategyCourse.onFinished(self, hasFinished)
     self.remainingTime:reset()
 end
@@ -515,15 +512,6 @@ end
 ---@param startIx number index of waypoint of fieldWorkCourse where the work should start
 ---@param alignmentCourse Course an optional course if the caller already has one
 ---@param alignmentStartIx number index to start the alignment course (if supplied)
-function AIDriveStrategyFieldWorkCourse:createRowStarter(context,course)
-    if self.settings.envelopeAlignedTurns:getValue() and
-            not self.fieldWorkCourse:isOnHeadland(context.turnEndWpIx) and EnvelopeTurnGeometry.supported(self.vehicle) then
-        self:raiseImplements()
-        return EnvelopeStartRowOnly(self.vehicle,self,self.ppc,context,course)
-    end
-    return StartRowOnly(self.vehicle,self,self.ppc,context,course)
-end
-
 function AIDriveStrategyFieldWorkCourse:startAlignmentTurn(fieldWorkCourse, startIx, alignmentCourse, alignmentStartIx)
     if alignmentCourse then
         -- there is an alignment course, use that one, if there is a start ix, then only
@@ -535,17 +523,11 @@ function AIDriveStrategyFieldWorkCourse:startAlignmentTurn(fieldWorkCourse, star
     end
     self.ppc:setShortLookaheadDistance()
     if alignmentCourse then
-        -- GIANTS preparation can unfold/turn the plough before our turn
-        -- controller exists. Defer that event until its checked final straight.
-        local deferPreparation=self.settings.envelopeAlignedTurns:getValue() and
-            not fieldWorkCourse:isOnHeadland(startIx) and self.haveRotatablePlow and
-            self:haveRotatablePlow() and EnvelopeTurnGeometry.supported(self.vehicle)
-        if not deferPreparation then self:prepareForFieldWork() end
+        self:prepareForFieldWork()
         local fm, bm = self:getFrontAndBackMarkers()
         self.turnContext = RowStartOrFinishContext(self.vehicle, fieldWorkCourse, startIx, startIx, self.turnNodes,
                 self:getWorkWidth(), fm, bm, self:getTurnEndSideOffset(false), self:getTurnEndForwardOffset())
-        self.workStarter = self:createRowStarter(self.turnContext,alignmentCourse)
-        self.workStarter.deferPreparation=deferPreparation
+        self.workStarter = StartRowOnly(self.vehicle, self, self.ppc, self.turnContext, alignmentCourse)
         self.state = self.states.DRIVING_TO_WORK_START_WAYPOINT
         self:startCourse(self.workStarter:getCourse(), 1)
     else
@@ -718,7 +700,7 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToConnectingPathEnd(con
 end
 
 function AIDriveStrategyFieldWorkCourse:startCourseToWorkStart(course)
-    self.workStarter = self:createRowStarter(self.turnContext,course)
+    self.workStarter = StartRowOnly(self.vehicle, self, self.ppc, self.turnContext, course)
     self.state = self.states.DRIVING_TO_WORK_START_WAYPOINT
     self:raiseImplements()
     self.ppc:setShortLookaheadDistance()
@@ -777,12 +759,7 @@ function AIDriveStrategyFieldWorkCourse:setOffsetX()
 end
 
 function AIDriveStrategyFieldWorkCourse:calculateTightTurnOffset()
-    if self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT and self.workStarter and self.workStarter.envelopeAlignment then
-        -- Envelope entry measures against the original working row. A changing
-        -- lateral compensation on its temporary approach moves that target and
-        -- can pull a long trailer away from the path being checked.
-        self.tightTurnOffset = 0
-    elseif self.state == self.states.WORKING or self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT then
+    if self.state == self.states.WORKING or self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT then
         -- when rounding small islands or to start on a course with curves
         self.tightTurnOffset = AIUtil.calculateTightTurnOffset(self.vehicle, self.turningRadius, self.course,
                 self.tightTurnOffset)

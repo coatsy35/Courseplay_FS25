@@ -51,36 +51,7 @@ function deploymentFixture(side)
     return p,f
 end
 
--- Saved T7 first-pike course: use its outer headland CENTRELINE as a
--- conservative inset boundary. Arrival yaw and hydraulic transform remain
--- synthetic; a separate unit check covers the stock approach's handover
--- policy, not GIANTS' execution of the complete drive-to-work path.
-function configureSavedStraightEntry(p,f,field,arrivalAngle)
-    f.turn.initialRowGoal={x=p.goal.x,z=p.goal.z,t=p.goal.t}
-    f.vehicle.cpGetFieldPolygon=function() return field end
-    f.strategy.vehicle=f.vehicle;f.strategy.workWidth=p.width
-    f.strategy.frontMarkerDistance=-3.7;f.strategy.backMarkerDistance=-17.4
-    local course={getWaypointPosition=function() return p.goal.x,0,p.goal.z end,
-        getWaypointYRotation=function() return p.goal.t end,getNumberOfHeadlands=function() return 9 end}
-    local offset,fits=EnvelopeTurnGeometry.outerEntryOffset(f.strategy,course,1,-p.length)
-    assert(fits and offset < -24)
-    p.start={x=p.goal.x,z=p.goal.z+offset,t=0,phi=math.rad(arrivalAngle)}
-    f:setPose(p.start)
-    p.planFixture=function()
-        local path={}
-        for z=p.start.z,p.goal.z+12,0.5 do path[#path+1]={x=p.start.x,z=z} end
-        f.turn:startPlanning(path)
-        for i=1,1000 do
-            g_currentMission.time=g_currentMission.time+50
-            f.turn:updatePlanner()
-            if not f.turn.planner then return assert(f.turn.result,table.concat(f.logs,'\n')) end
-        end
-        error('straight entry validation did not finish')
-    end
-end
 
--- 16 September 08:50:47: measured centred pose after the first short row.
--- Field centreline and subsequent working transform are explicit proxies.
 function configureRecordedFirstExit(p,f,field,offsetChange)
     p.start={x=-156.818,z=-97.468,t=math.rad(.036),phi=math.rad(9.652)}
     -- Logged target omitted CP's twice-current-offset correction at the

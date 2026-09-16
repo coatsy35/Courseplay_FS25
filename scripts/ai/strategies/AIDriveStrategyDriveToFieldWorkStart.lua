@@ -70,17 +70,7 @@ function AIDriveStrategyDriveToFieldWorkStart:start(course, startIx, jobParamete
     local x, _, z = course:getWaypointPosition(startIx)
     self.startPosition = {x = x, z = z}
     local distance = course:getDistanceBetweenVehicleAndWaypoint(self.vehicle, startIx)
-    local envelopeEntry=self.settings.envelopeAlignedTurns:getValue() and
-        not course:isOnHeadland(startIx) and EnvelopeTurnGeometry.supported(self.vehicle)
-    -- Even a nearby start needs an outward staging approach when the attached
-    -- equipment is not yet lined up. Keep using CP's normal pathfinder for it.
-    if envelopeEntry and self.vehicle.cpDetectFieldBoundary and not self.vehicle:cpIsFieldBoundaryDetectionRunning() then
-        local polygon=self.vehicle:cpGetFieldPolygon()
-        if not polygon or #polygon<3 or not EnvelopeTurnPlanner.inside({x=x,z=z},polygon) then
-            self.vehicle:cpDetectFieldBoundary(x,z)
-        end
-    end
-    if distance < AIDriveStrategyDriveToFieldWorkStart.minDistanceToDrive and not envelopeEntry then
+    if distance < AIDriveStrategyDriveToFieldWorkStart.minDistanceToDrive then
         self:debug('Closer than %.0f m to start waypoint (%d), start fieldwork directly',
                 AIDriveStrategyDriveToFieldWorkStart.minDistanceToDrive, startIx)
         self.state = self.states.WORK_START_REACHED
@@ -114,12 +104,6 @@ function AIDriveStrategyDriveToFieldWorkStart:getDriveData(dt, vX, vY, vZ)
     self:updateLowFrequencyImplementControllers()
     self:updateLowFrequencyPathfinder()
 
-    -- At the last waypoint there may be no further waypoint-change event.
-    -- Recheck alignment while PPC finishes settling onto the straight.
-    if self.envelopeEntry and self.state==self.states.DRIVING_TO_WORK_START then
-        self:onWaypointChange(self.ppc:getCurrentWaypointIx(),self.ppc:getCourse())
-    end
-
     local moveForwards = not self.ppc:isReversing()
     local gx, gz, _
 
@@ -135,17 +119,13 @@ function AIDriveStrategyDriveToFieldWorkStart:getDriveData(dt, vX, vY, vZ)
         self:setMaxSpeed(0)
         local isReadyToDrive, blockingVehicle = self.vehicle:getIsAIReadyToDrive()
         if isReadyToDrive or not self.settings.foldImplementAtEnd:getValue() then
-            -- Physical centring is a separate readiness condition. The stock
-            -- preparation timeout must never bypass an active plough animation.
-            if self:prepareEnvelopeTransport() then
-                self.state = self.states.DRIVING_TO_WORK_START
-                self:debug('Ready to drive to work start')
-            end
+            self.state = self.states.DRIVING_TO_WORK_START
+            self:debug('Ready to drive to work start')
         else
             self:debugSparse('Not ready to drive because of %s, preparing ...', CpUtil.getName(blockingVehicle))
             if not self.vehicle:getIsAIPreparingToDrive() then
                 self.prepareTimeout = self.prepareTimeout + dt
-                if 2000 < self.prepareTimeout and self:prepareEnvelopeTransport() then
+                if 2000 < self.prepareTimeout then
                     self:debug('Timeout preparing, continue anyway')
                     self.state = self.states.DRIVING_TO_WORK_START
                 end
@@ -193,16 +173,6 @@ function AIDriveStrategyDriveToFieldWorkStart:startCourseWithPathfinding(course,
     -- always drive a behind the target waypoint so there's room to straighten out towed implements
     -- a bit before start working
     self.zOffset = math.min(-self.frontMarkerDistance, -steeringLength)
-    self.envelopeEntry=self.settings.envelopeAlignedTurns:getValue() and
-        not course:isOnHeadland(ix) and EnvelopeTurnGeometry.supported(self.vehicle)
-    if self.envelopeEntry then
-        local fits
-        self.zOffset,fits=EnvelopeTurnGeometry.outerEntryOffset(self,course,ix,self.zOffset)
-        self.envelopeEntryHeading=course:getWaypointYRotation(ix)
-        context:mustBeAccurate(true)
-        Logging.info('[CP envelope] initial CP pathfinder target %.2f m before row %d; aligned full-width target fits %s',
-            -self.zOffset,ix,tostring(fits))
-    end
     self:debug('Pathfinding to waypoint %d, with zOffset %.1f = min(%.1f, %.1f)', ix, self.zOffset,
             -self.frontMarkerDistance, -steeringLength)
 
@@ -242,19 +212,7 @@ end
 -----------------------------------------------------------------------------------------------------------------------
 ---@param course Course
 function AIDriveStrategyDriveToFieldWorkStart:onWaypointChange(ix, course)
-    -- The stock early handover prepares/unfolds implements while the approach
-    -- may still be on its arc. Envelope entries retain the transport state
-    -- until the last straight segment, rather than deploying and re-centring.
-    local straightEntry=true
-    if self.envelopeEntry then
-        local pose=EnvelopeTurnGeometry.pose(self.vehicle:getAIDirectionNode())
-        straightEntry=math.abs(EnvelopeTurnPlanner.wrap(pose.t-self.envelopeEntryHeading))<=EnvelopeTurnPlanner.angleTolerance
-        for i=math.max(1,ix),course:getNumberOfWaypoints()-1 do
-            if math.abs(EnvelopeTurnPlanner.wrap(course:getWaypointYRotation(i)-self.envelopeEntryHeading))>
-                    EnvelopeTurnPlanner.angleTolerance then straightEntry=false;break end
-        end
-    end
-    if course:isCloseToLastWaypoint(self.envelopeEntry and 1 or 15) and straightEntry then
+    if course:isCloseToLastWaypoint(15) then
         self.state = self.states.WORK_START_REACHED
         -- just in case no one takes the wheel in a few seconds
         self.emergencyBrake:set(false, 2000)
@@ -321,32 +279,4 @@ end
 ---@param implement table
 function AIDriveStrategyDriveToFieldWorkStart:giantsPostFoldHeaderWithWheelsFix(implement)
     implement.spec_foldable.controlledActionFold:addAIEventListener(implement, "onAIImplementPrepare", -1, true)
-end
-
-function AIDriveStrategyDriveToFieldWorkStart:prepareEnvelopeTransport()
-    if not self.envelopeEntry then return true end
-    -- GIANTS' completed transport preparation already chose the permitted
-    -- folded position (which may require a side rotation first). Do not
-    -- immediately override it with another centring command. When transport
-    -- folding is disabled, retain CP's normal centred turning preparation.
-    local transportReady=self.settings and self.settings.foldImplementAtEnd:getValue() and
-        self.vehicle:getIsAIReadyToDrive()
-    self.envelopeCentredPloughs=self.envelopeCentredPloughs or {}
-    for _,object in pairs(self.vehicle:getChildVehicles()) do
-        local rotation=object.spec_plow and object.spec_plow.rotationPart
-        if rotation and rotation.turnAnimation then
-            if object:getIsAnimationPlaying(rotation.turnAnimation) then return false end
-            if not self.envelopeCentredPloughs[object] then
-                self.envelopeCentredPloughs[object]=true
-                -- A transport-folded plough cannot safely be turned over.
-                -- Keep it folded. Only centre an already unfolded plough,
-                -- including when the user's transport-fold option is off.
-                if not transportReady and object:getIsPlowRotationAllowed() then
-                    PlowCenterTurnEvent.sendEvent(object)
-                    return false
-                end
-            end
-        end
-    end
-    return true
 end

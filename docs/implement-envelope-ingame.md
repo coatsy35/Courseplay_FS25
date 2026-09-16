@@ -3,8 +3,14 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.28**, packaged mod version **8.1.0.128**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.28` records identify it.
+Current test: **v0.29**, packaged mod version **8.1.0.129**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.29` records identify it.
+
+Version 0.29 restores stock CP first/nearest/last startup behaviour and removes
+the experimental initial-entry controller and outward headland target.
+See [v0.29 qualification](v029-qualification.md) for evidence and checks.
+
+### Version 0.28
 
 Version 0.28 compares shorter asymmetric connections with a validated fallback,
 continues candidate preparation during folding and removes the three-second

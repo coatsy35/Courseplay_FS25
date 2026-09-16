@@ -15,19 +15,18 @@ def method(lua,cls,name):
 
 
 class TurnCycleTests(unittest.TestCase):
-    def test_initial_plough_preparation_is_deferred_to_envelope_controller(self):
+    def test_initial_plough_preparation_uses_stock_controller(self):
         test_envelope_initial_entry.InitialEntryTests.setUp(self)
-        for name in ('createRowStarter','startAlignmentTurn'):
+        for name in ('startAlignmentTurn',):
             method(self.lua,'AIDriveStrategyFieldWorkCourse',name)
         self.lua.execute('''
 local f=initialFixture();local s=f.strategy;local prepared=0
 s.prepareForFieldWork=function() prepared=prepared+1 end
 s.haveRotatablePlow=function() return true end
 s.getTurnEndSideOffset=function() return 0 end
-s.createRowStarter=AIDriveStrategyFieldWorkCourse.createRowStarter
 AIDriveStrategyFieldWorkCourse.startAlignmentTurn(s,s.fieldWorkCourse,1,f.starter:getCourse(),1)
-assert(prepared==0 and s.workStarter.deferPreparation)
-assert(s.workStarter:prepareInitialPosition() and s.workStarter.initialNeedsWorkingGeometry)
+assert(prepared==1 and not s.workStarter.deferPreparation)
+assert(s.workStarter.name=='StartRowOnly')
 ''')
 
     def test_short_row_handover_uses_normal_plough_offset_without_changing_state(self):

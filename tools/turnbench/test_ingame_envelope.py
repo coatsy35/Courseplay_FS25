@@ -19,7 +19,6 @@ require('EnvelopeTurnPlanner')
 require('EnvelopeTurnGeometry')
 require('EnvelopeCourseTurn')
 require('EnvelopeKTurn')
-require('EnvelopeStartRowOnly')
 productionTurningRadius = AIUtil.getTurningRadius
 -- FS25 does not expose this desktop Lua library. Keep it absent for ALL tests.
 coroutine=nil
