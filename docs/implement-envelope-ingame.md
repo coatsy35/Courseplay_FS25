@@ -3,8 +3,16 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.29**, packaged mod version **8.1.0.129**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.29` records identify it.
+Current test: **v0.30**, packaged mod version **8.1.0.130**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.30` records identify it.
+
+Version 0.30 interleaves short and broad route searches and records the actual
+field polygon, measured footprint and boundary rejection source. The v0.29
+live stall is not yet reproduced: this is a search scheduling and diagnostic
+build, not a verified correction of that stall.
+See [v0.30 qualification](v030-qualification.md).
+
+### Version 0.29
 
 Version 0.29 restores stock CP first/nearest/last startup behaviour and removes
 the experimental initial-entry controller and outward headland target.

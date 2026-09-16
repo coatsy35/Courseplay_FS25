@@ -234,7 +234,7 @@ function G.capture(turn)
         hitchX=0,hitchZ=0,work={},footprint={},objects={},loweringLead=0.5,
         -- This is a conservative numerical ceiling, NOT a drawbar collision
         -- certificate. Any smaller exposed physical yaw stop takes precedence.
-        maxArticulation=math.rad(85),workCentreX=0}
+        maxArticulation=math.rad(85),workCentreX=0,bounds={},boundaryFailures={}}
     if not finite(p.radius) or p.radius<=0 then return nil,'invalid CP turning radius' end
     local hitchLocal
     if trailer then
@@ -327,6 +327,8 @@ function G.capture(turn)
         if not (finite(zMax) and finite(zMin) and finite(xMax) and finite(xMin)) then
             return nil,'invalid scanned equipment bounds'
         end
+        p.bounds[#p.bounds+1]={towed=towed,xMin=xMin,xMax=xMax,zMin=zMin,zMax=zMax,
+            hitchX=hl and hl.x or 0,hitchZ=hl and hl.z or 0,collisionScanComplete=complete,centred=centred}
         local left,right,back=WorkWidthUtil.getAIMarkers(object,true)
         if left then
             if not right or not back then return nil,'incomplete working markers' end
@@ -372,6 +374,7 @@ function G.capture(turn)
     local polygon=vehicle.cpGetFieldPolygon and vehicle:cpGetFieldPolygon()
     local islands=vehicle.cpGetIslandPolygons and vehicle:cpGetIslandPolygons() or {}
     if not polygon or #polygon<3 then return nil,'field polygon unavailable; generate the course on this field first' end
+    p.fieldPolygon,p.islandPolygons=polygon,islands
     local fieldCheck=E.polygonChecker(polygon,E.reserve+0.18,true)
     local islandChecks={}
     for _,island in ipairs(islands) do islandChecks[#islandChecks+1]=E.polygonChecker(island,E.reserve+0.18,false) end
@@ -387,13 +390,18 @@ function G.capture(turn)
         if column[iz]~=nil then return column[iz] end
         local q={x=ix/4,z=iz/4}
         local valid=fieldCheck(q)
+        local reason=not valid and 'polygon clearance' or nil
         if valid then
             for _,check in ipairs(islandChecks) do
-                if not check(q) then valid=false end
+                if not check(q) then valid=false;reason='island clearance' end
                 if not valid then break end
             end
         end
-        if valid then valid=CpFieldUtil.isOnField(q.x,q.z) and true or false end
+        if valid then
+            valid=CpFieldUtil.isOnField(q.x,q.z) and true or false
+            if not valid then reason='field ground data' end
+        end
+        if reason and not p.boundaryFailures[reason] then p.boundaryFailures[reason]=q end
         column[iz]=valid
         return valid
     end

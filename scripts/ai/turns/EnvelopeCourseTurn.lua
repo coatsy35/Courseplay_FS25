@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.29'
+EnvelopeCourseTurn.TEST_VERSION = '0.30'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -250,6 +250,15 @@ function EnvelopeCourseTurn:logGeometry(p)
         p.radius,p.width,p.hitchX,p.hitchZ,p.length or 0,p.axleOffsetX or 0,p.front,math.deg(math.atan(p.slope)),p.headland)
     self:log('snapshot: start %.3f/%.3f heading %.3f tool %.3f, goal %.3f/%.3f heading %.3f, lookahead %.3f, tractor radius %.3f',
         p.start.x,p.start.z,math.deg(p.start.t),math.deg(p.start.phi),p.goal.x,p.goal.z,math.deg(p.goal.t),p.lookahead,p.trackingRadius or p.radius)
+    self:log('joint yaw limit: %.3f degrees',math.deg(p.maxArticulation))
+    for i,b in ipairs(p.bounds or {}) do
+        self:log('footprint %d: towed %s, x %.3f/%.3f z %.3f/%.3f, hitch %.3f/%.3f, centred %s, complete scan %s',
+            i,tostring(b.towed),b.xMin,b.xMax,b.zMin,b.zMax,b.hitchX,b.hitchZ,tostring(b.centred),tostring(b.collisionScanComplete))
+    end
+    for i,q in ipairs(p.fieldPolygon or {}) do self:log('field vertex %d: %.3f/%.3f',i,q.x,q.z) end
+    for j,polygon in ipairs(p.islandPolygons or {}) do
+        for i,q in ipairs(polygon) do self:log('island %d vertex %d: %.3f/%.3f',j,i,q.x,q.z) end
+    end
     for i,m in ipairs(p.work) do
         self:log('work marker %d: %.3f/%.3f, towed %s, rear %s',i,m.x,m.z,tostring(m.towed),tostring(m.rear))
     end
@@ -366,6 +375,9 @@ function EnvelopeCourseTurn:updatePlanner()
         for reason,count in pairs(result.rejections or {}) do self:log('candidate rejections: %s = %d',reason,count) end
         if result.attempts then
             self:log('search exhausted: %d trials, best predicted edge error %s m',result.attempts,tostring(result.bestError))
+            for reason,q in pairs(self.geometry and self.geometry.boundaryFailures or {}) do
+                self:log('first rejected boundary sample: %s at %.3f/%.3f',reason,q.x,q.z)
+            end
         end
         self:stopWithReason(result.reason); return
     end

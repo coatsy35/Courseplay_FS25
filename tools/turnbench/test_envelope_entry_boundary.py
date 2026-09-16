@@ -32,6 +32,36 @@ for _,reserve in ipairs({0,.5,1}) do
 end
 ''')
 
+    def test_short_route_is_considered_before_broad_search_exhausts(self):
+        self.lua.execute("""
+local E=EnvelopeTurnPlanner
+local p=envelopeFixture(6,11,2,4,16,35,1,55)
+p.deploymentLead=20
+local calls=0
+E.newDirectSearch=function()
+    return {getProgress=function() return calls end,update=function()
+        calls=calls+1
+        return {ok=true,attempts=1,path={{x=0,z=0},{x=0,z=1}}}
+    end}
+end
+local search=E.newSearch(p)
+local result=search:update(1)
+assert(calls==1 and result and result.ok,
+    'a ready short route must not wait for the broad catalogue to exhaust')
+""")
+
+    def test_boundary_diagnostics_distinguish_ground_data_from_polygon(self):
+        self.lua.execute("""
+local f=makeEnvelopeLiveFixture(envelopeFixture(6,11,2,4,16,0,1,55))
+CpFieldUtil.isOnField=function(x,z) return x<10 end
+local p=assert(EnvelopeTurnGeometry.capture(f.turn))
+assert(not p.contains(20,0) and not p.contains(201,0))
+assert(p.boundaryFailures['field ground data'].x==20)
+assert(p.boundaryFailures['polygon clearance'].x==201)
+assert(#p.fieldPolygon==4 and #p.bounds==2)
+assert(not p.bounds[1].towed and p.bounds[2].towed)
+""")
+
     def test_elapsed_time_does_not_reject_an_unfinished_search(self):
         self.lua.execute("""
 local f=makeEnvelopeLiveFixture(envelopeFixture(6,9,2,11,12,0,1,54))

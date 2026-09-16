@@ -523,32 +523,44 @@ function E.newSearch(p)
             local broad={};for k,v in pairs(p) do broad[k]=v end
             broad.directSearchComplete=true
             local baselineSearch=E.newSearch(broad)
-            local baseline,direct
+            local shorter={};for k,v in pairs(p) do shorter[k]=v end
+            local direct=E.newDirectSearch(shorter)
+            local baseline,connection
+            local directNext=false
+            local function routeLength(result)
+                local length=0
+                for i=2,#result.path do
+                    local a,b=result.path[i-1],result.path[i]
+                    length=length+math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)
+                end
+                return length
+            end
             return {getProgress=function()
                     return (baseline and baseline.attempts or baselineSearch:getProgress())+
-                        (direct and direct:getProgress() or 0)
+                        (connection and connection.attempts or direct:getProgress())
                 end,update=function(_,budget)
-                    if not baseline then
+                    -- Interleave the two catalogues: a difficult broad search
+                    -- must not prevent a short feasible route being considered.
+                    directNext=not directNext
+                    if not connection and (directNext or baseline) then
+                        connection=direct:update(budget)
+                    elseif not baseline then
                         baseline=baselineSearch:update(budget)
-                        if not baseline then return nil end
-                        local shorter={};for k,v in pairs(p) do shorter[k]=v end
-                        if baseline.ok then
-                            local length=0
-                            for i=2,#baseline.path do
-                                local a,b=baseline.path[i-1],baseline.path[i]
-                                length=length+math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)
-                            end
-                            shorter.maxRouteLength=length
-                        end
-                        direct=E.newDirectSearch(shorter)
-                        return nil
+                        if baseline and baseline.ok then shorter.maxRouteLength=routeLength(baseline) end
                     end
-                    local result=direct:update(budget)
-                    if not result then return nil end
-                    if result.ok then
+                    if connection and connection.ok then
                         local finish=E.point(p.goal.x,p.goal.z,p.goal.t,0,-p.front+12)
-                        addLine(result.path,result.path[#result.path],finish)
-                        return result
+                        addLine(connection.path,connection.path[#connection.path],finish)
+                        if baseline and baseline.ok and routeLength(baseline)<routeLength(connection) then return baseline end
+                        return connection
+                    end
+                    if not baseline or not connection then return nil end
+                    if not baseline.ok then
+                        baseline.attempts=(baseline.attempts or 0)+(connection.attempts or 0)
+                        baseline.rejections=baseline.rejections or {}
+                        for reason,count in pairs(connection.rejections or {}) do
+                            baseline.rejections[reason]=(baseline.rejections[reason] or 0)+count
+                        end
                     end
                     return baseline
                 end}
