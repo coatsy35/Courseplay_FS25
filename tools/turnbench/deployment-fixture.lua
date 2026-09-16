@@ -13,8 +13,7 @@ function deploymentFixture(side)
     addStockPloughFixture(f)
     f.object.setRotationMax=function(self,whichSide)
         local _,_,_,_,state=EnvelopeTurnGeometry.assessLive(t.geometry,f.vehicle)
-        assert(math.abs(EnvelopeTurnPlanner.wrap(state.t-t.geometry.goal.t))<=EnvelopeTurnPlanner.angleTolerance,
-            'rotation before tractor alignment')
+        assert(EnvelopeTurnPlanner.canDeploy(t.geometry,state),'rotation before combination alignment')
         for i=math.max(1,t.ppc:getCurrentWaypointIx()),#t.result.path-1 do
             local a,b=t.result.path[i],t.result.path[i+1]
             assert(math.abs(EnvelopeTurnPlanner.wrap(math.atan2(b.x-a.x,b.z-a.z)-t.geometry.goal.t))<=
@@ -57,6 +56,7 @@ end
 -- synthetic; a separate unit check covers the stock approach's handover
 -- policy, not GIANTS' execution of the complete drive-to-work path.
 function configureSavedStraightEntry(p,f,field,arrivalAngle)
+    f.turn.initialRowGoal={x=p.goal.x,z=p.goal.z,t=p.goal.t}
     f.vehicle.cpGetFieldPolygon=function() return field end
     f.strategy.vehicle=f.vehicle;f.strategy.workWidth=p.width
     f.strategy.frontMarkerDistance=-3.7;f.strategy.backMarkerDistance=-17.4
@@ -117,6 +117,9 @@ end
 function configureV023Entry(p,f)
     p.start={x=-156.892,z=-141.964,t=math.rad(-5.521),phi=math.rad(35.833)}
     p.goal={x=-154.860,z=-118.820,t=0}
+    -- Row centre reconstructed from the logged field-detection/course start
+    -- (-157.8, -118.8); this is a proxy, not a captured high-precision polygon.
+    f.turn.initialRowGoal={x=-157.8,z=-118.820,t=0}
     p.hitchX=.049;p.hitchZ=-1.626;p.length=11.28;p.axleOffsetX=.01
     p.work={{x=-.031,z=-2.732,towed=true},{x=.018,z=-1.705,towed=true},
         {x=-.031,z=-15.312,towed=true,rear=true},{x=.018,z=-15.312,towed=true,rear=true}}
@@ -145,6 +148,18 @@ function configureV023Entry(p,f)
         end
         error('v0.23 entry planning did not finish')
     end
+end
+
+-- Latest v0.24 arrival, 16 September 11:08:55. Subsequent deployment
+-- transform and boundary are the explicitly labelled proxies above.
+function configureV024Entry(p,f)
+    configureV023Entry(p,f)
+    p.start={x=-156.930,z=-141.746,t=math.rad(-6.762),phi=math.rad(35.186)}
+    p.goal.x=-154.854
+    p.headland=72.7;f.turn.headlandSeed=p.headland
+    f.context.workStartNode.x=p.goal.x
+    f.context.turnEndWpNode.node.x=p.goal.x
+    f:setPose(p.start)
 end
 
 function attachFieldworkHandover(p,f)

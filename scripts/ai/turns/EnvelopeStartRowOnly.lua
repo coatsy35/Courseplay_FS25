@@ -131,6 +131,10 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
     self.guard=guard
     guard.deferPreparation=self.deferPreparation
     guard.needsWorkingGeometry=needsWorkingGeometry
+    if needsWorkingGeometry then
+        local x,_,z=self.fieldWorkCourse:getWaypoint(self.entryIx):getPosition()
+        guard.initialRowGoal={x=x,z=z,t=self.fieldWorkCourse:getWaypointYRotation(self.entryIx)}
+    end
     guard.entrySlope=EnvelopeTurnGeometry.initialEntrySlope(self.fieldWorkCourse,self.entryIx)
     guard.startPlanning=function(g,path)
         self:refreshEntryContext()

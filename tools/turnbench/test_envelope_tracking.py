@@ -33,7 +33,7 @@ end
 local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,14.3,1,62)
 local f=makeEnvelopeLiveFixture(p);local t=f.turn
 t.geometry=assert(EnvelopeTurnGeometry.capture(t));t.geometry.goal.t=0
-local live={x=.13,z=-8,t=0,phi=0}
+local live={x=.20,z=-8,t=0,phi=0}
 t.result={tailStart=2,path={{x=0,z=-9},{x=0,z=-8},{x=0,z=5}},
     frames={{ix=2,x=0,z=-8,t=0,phi=0}}}
 t.ppc.getCurrentWaypointIx=function() return 2 end
@@ -42,7 +42,7 @@ assert(not t:checkApproachTracking(-8,live))
 assert(checks==1 and t.approachCorrected and f.object.lowerCount==0)
 -- No repeated correction or relaxed admission.
 assert(t:checkApproachTracking(-7,live) and checks==1)
-assert(EnvelopeTurnPlanner.edgeTolerance==.1)
+assert(EnvelopeTurnPlanner.entryTolerance(p)==.25)
 ''')
 
     def test_drift_check_interpolates_between_prediction_samples(self):

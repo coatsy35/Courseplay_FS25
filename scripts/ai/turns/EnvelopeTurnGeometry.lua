@@ -540,5 +540,5 @@ function G.assessLive(p,vehicle)
             if not m.rear then contact=math.max(contact,z-p.slope*(x-p.workCentreX)) end
         end
     end
-    return error<=E.edgeTolerance and angle<=E.angleTolerance,error,angle,contact,s
+    return error<=E.entryTolerance(p) and angle<=E.angleTolerance,error,angle,contact,s
 end

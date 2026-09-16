@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.24'
+EnvelopeCourseTurn.TEST_VERSION = '0.25'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -172,20 +172,17 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         self.geometry=p
         if self.needsWorkingGeometry then
             local front,back=-math.huge,math.huge
-            for _,m in ipairs(p.work) do
-                front=math.max(front,m.z);back=math.min(back,m.z)
-            end
-            -- A centred plough's narrow markers hide the early contact of its
-            -- unfolded wing on pikes. Reserve that nominal half-width sweep
-            -- against the local inner-boundary slope as well as its length.
-            -- The deployment point is reached by a moving PPC-controlled
-            -- tractor, not by the static plan endpoint. Leave one lookahead
-            -- plus the stopping distance at our 8 km/h approach cap (using
-            -- the same conservative 1 m/s² deceleration as the entry gate).
-            -- Otherwise turnover/braking consumes the space needed to steer
-            -- the newly measured working envelope onto the original row.
+            for _,m in ipairs(p.work) do front=math.max(front,m.z);back=math.min(back,m.z) end
             local controlReserve=p.lookahead+(8/3.6)^2/2
-            p.deploymentLead=math.max(p.length or 0,front-back)+math.abs(p.slope)*p.width/2+controlReserve
+            -- Initial folded travel uses the generated row centre, never an
+            -- automatic offset measured in the opposite/transport plough state.
+            -- Row turns retain their existing working-side preparation space.
+            if self.initialRowGoal then
+                p.goal=self.initialRowGoal
+                p.deploymentLead=p.width/2+math.abs(p.slope)*p.width/2+controlReserve
+            else
+                p.deploymentLead=math.max(p.length or 0,front-back)+math.abs(p.slope)*p.width/2+controlReserve
+            end
         end
         -- Only the yaw response changes: collision/work marker positions keep
         -- their measured physical geometry. Never substitute an observed
@@ -265,14 +262,9 @@ function EnvelopeCourseTurn:checkWorkingPosition()
                         EnvelopeTurnPlanner.angleTolerance then return true end
         end
         local _,_,_,_,live=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
-        -- Keep the plough centred throughout the bulb and steering lead.
-        -- Deploy when the tractor is ON that straight, then draw forwards to
-        -- align the working implement before lowering. Requiring the centred
-        -- tool to be straight first consumed the very run-in needed after its
-        -- working frame/offset changed. This is NOT the lowering admission.
-        local lateral=EnvelopeTurnPlanner.localPoint(live,self.geometry.goal)
-        if math.abs(EnvelopeTurnPlanner.wrap(live.t-self.geometry.goal.t))>EnvelopeTurnPlanner.angleTolerance or
-                math.abs(lateral)>math.min(0.5,self.geometry.width*0.1) then return true end
+        -- Prediction and execution require the entire raised combination to
+        -- be aligned, not merely the tractor reaching its straight segment.
+        if not EnvelopeTurnPlanner.canDeploy(self.geometry,live) then return true end
         self.deploymentReady=true
     end
     if self.deferPreparation then
@@ -550,10 +542,9 @@ function EnvelopeCourseTurn:checkApproachTracking(contact,live)
             local lateral=(actual.x-predicted.x)*math.cos(p.goal.t)-(actual.z-predicted.z)*math.sin(p.goal.t)
             deviation=math.max(deviation,math.abs(lateral))
         end
-        -- A 25 cm trigger was larger than the 10 cm admission allowance: the
-        -- v0.18 run could drift to 13 cm without ever requesting correction.
-        -- Intervene at the planning margin, while steering space remains.
-        if deviation<=EnvelopeTurnPlanner.planningEdgeTolerance then return true end
+        -- Intervene at the width-relative planning margin while steering
+        -- space remains. Smaller drift stays within the live allowance.
+        if deviation<=EnvelopeTurnPlanner.entryTolerance(self.geometry)*0.6 then return true end
         self.approachCorrectionPending=true
         self:log('approach differs from prediction by %.3f m at contact %.2f; stopping for one local correction',deviation,contact)
         if self.measuredResponseLength then

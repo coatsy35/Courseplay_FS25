@@ -53,6 +53,17 @@ end
         end = source.index('\nend', start) + len('\nend')
         self.lua.execute('AIDriveStrategyFieldWorkCourse=AIDriveStrategyFieldWorkCourse or {}\n' + source[start:end])
 
+    def test_folded_entry_keeps_original_row_despite_automatic_offset(self):
+        self.lua.execute("""
+local f=initialFixture();local s=f.strategy
+s.updateFieldworkOffset=function(_,course) course:setOffset(2.7,0) end
+f.starter:startEntryCheck(true)
+local goal=assert(f.starter.guard.initialRowGoal)
+local x,_,z=s.fieldWorkCourse:getWaypoint(1):getPosition()
+assert(goal.x==x and goal.z==z)
+assert(math.abs(f.starter.guard.turnContext.workStartNode.x-goal.x)>2)
+""")
+
     def test_short_row_handoff_preserves_first_turn_and_stock_fallback(self):
         self.load_strategy_method('resumeFieldworkAfterTurn')
         self.lua.execute('''

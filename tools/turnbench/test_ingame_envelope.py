@@ -126,7 +126,7 @@ assert(fastNodes>0 and not p.activeTracker) -- final validation still uses PPC
                 p = self.lua.globals().envelopeFixture(5.6,11.1,1.9,4.6,18.3,angle,1,headland)
                 r = self.lua.globals().EnvelopeTurnPlanner.plan(p)
                 self.assertTrue(r['ok'], (r['reason'],r['attempts']))
-                self.assertLessEqual(r['entryError'], .1)
+                self.assertLessEqual(r['entryError'], .15)
                 self.assertLess(r['maxArticulation'], math.radians(85))
                 print('PW',angle,headland,r['attempts'],r['bias'],r['entryError'])
 
@@ -177,7 +177,7 @@ for _,mirror in ipairs({1,-1}) do
     local oldLow,oldHigh=extents(shortest)
     local newLow,newHigh=extents(preferred)
     assert(newLow<oldLow-3 and newHigh<oldHigh-3)
-    assert(preferred.entryError<=E.planningEdgeTolerance)
+    assert(preferred.entryError<=(E.entryTolerance(p)*.6))
     for _,s in ipairs(preferred.frames) do assert(E.checkFootprint(p,s)) end
     p.turnHint=E.turnHint(p,preferred)
     local reused=E.plan(p)
@@ -542,7 +542,7 @@ local search=E.newApproachSearch(p)
 local result
 repeat result=search:update(256) until result
 assert(result.ok and result.repairedApproach,result.reason)
-assert(result.entryError<=E.edgeTolerance and result.distance<40)
+assert(result.entryError<=E.entryTolerance(p) and result.distance<40)
 for i=2,#result.path do
     local a,b=result.path[i-1],result.path[i]
     local _,forward=E.localPoint(b,{x=a.x,z=a.z,t=p.goal.t})
@@ -587,7 +587,7 @@ for _,mirror in ipairs({1,-1}) do
     assert(result.ok and result.repairedApproach,result.reason)
     -- The reserved tracking margin needs more trials than v0.8's first
     -- threshold-grazing candidate, but must remain a bounded local correction.
-    assert(result.attempts<32 and result.maxEntryError<=E.repairEdgeTolerance)
+    assert(result.attempts<32 and result.maxEntryError<=(E.entryTolerance(p)*.8))
     assert(math.abs(result.bias)>0.1 and result.distance<40)
     for i=2,#result.path do
         local a,b=result.path[i-1],result.path[i]
@@ -621,7 +621,7 @@ for _,mirror in ipairs({1,-1}) do
     for _,s in ipairs(result.frames) do
         local _,error,_,contact=E.assess(p,s)
         if contact>=E.loweringGateContact then
-            assert(error<=E.repairEdgeTolerance)
+            assert(error<=(E.entryTolerance(p)*.8))
             checked=checked+1
         end
     end
@@ -659,7 +659,7 @@ for _,mirror in ipairs({1,-1}) do
         p.contains=function() return true end
         local r=run(p)
         assert(r.ok and r.attempts<=32,r.reason)
-        assert(r.maxEntryError<=E.repairEdgeTolerance)
+        assert(r.maxEntryError<=(E.entryTolerance(p)*.8))
         -- The retained worst error includes every fine admission sample.
         for _,s in ipairs(r.frames) do
             local aligned,error,_,contact=E.assess(p,s)
@@ -669,7 +669,7 @@ for _,mirror in ipairs({1,-1}) do
             biasRatio=r.bias/(p.width*E.approachSide(p))}
         local cached=run(p)
         assert(cached.ok and cached.maxEntryError<=r.maxEntryError+1e-9)
-        if r.maxEntryError<=E.planningEdgeTolerance then
+        if r.maxEntryError<=(E.entryTolerance(p)*.6) then
             assert(cached.usedHint and cached.attempts==1)
         else
             assert(cached.attempts>1 and cached.hintMarginError)
@@ -684,7 +684,7 @@ for _,mirror in ipairs({1,-1}) do
 end
 ''')
 
-    def test_v12_marginal_cached_entry_is_refined_before_execution(self):
+    def test_v12_small_cached_error_is_revalidated_without_needless_refinement(self):
         self.lua.execute('''
 local E=EnvelopeTurnPlanner
 local function run(p)
@@ -708,10 +708,10 @@ for _,mirror in ipairs({1,-1}) do
     p.approachHint={factorA=0.1,factorB=0.1,straightRatio=4/p.width,
         biasRatio=0.645*mirror/(p.width*E.approachSide(p))}
     local refined=run(p)
-    assert(refined.ok and not refined.usedHint,refined.reason)
-    assert(refined.hintMarginError>0.06 and refined.hintMarginError<E.repairEdgeTolerance)
-    assert(refined.maxEntryError<0.02 and refined.attempts<=8)
-    assert(refined.straight==4 and E.edgeTolerance==0.1)
+    assert(refined.ok and refined.usedHint,refined.reason)
+    assert(refined.maxEntryError>0.06 and refined.maxEntryError<E.entryTolerance(p)*.6)
+    assert(refined.attempts==1)
+    assert(refined.straight==4 and E.entryTolerance(p)==0.25)
     for _,s in ipairs(refined.frames) do assert(E.checkFootprint(p,s)) end
     -- This good shape can still take the fast path next time, with full checks.
     p.approachHint={factorA=refined.factorA,factorB=refined.factorB,straightRatio=refined.straight/p.width,
@@ -748,7 +748,7 @@ for _,mirror in ipairs({1,-1}) do
     local r=run(p)
     assert(r.ok,r.reason)
     assert(r.attempts<=24 and r.straight==4 and math.abs(r.bias)>2)
-    assert(r.maxEntryError<=E.planningEdgeTolerance and r.maxArticulation<p.maxArticulation)
+    assert(r.maxEntryError<=(E.entryTolerance(p)*.6) and r.maxArticulation<p.maxArticulation)
     for _,s in ipairs(r.frames) do assert(E.checkFootprint(p,s)) end
     for i=2,#r.path do assert(r.path[i].z>r.path[i-1].z) end
     p.approachHint={factorA=r.factorA,factorB=r.factorB,straightRatio=r.straight/p.width,
@@ -985,12 +985,12 @@ for _,persistent in ipairs({false,true}) do
     g_currentMission.time=0
     assert(not f.turn:endTurn(16) and f.object.lowerCount==1)
     -- Lowering can displace markers while the tractor itself stays stationary.
-    for _,node in ipairs({f.object.left,f.object.right,f.object.back}) do node.x=node.x+0.15 end
+    for _,node in ipairs({f.object.left,f.object.right,f.object.back}) do node.x=node.x+0.30 end
     g_currentMission.time=500
     assert(not f.turn:endTurn(16) and not f.vehicle.stopped)
     assert(not f.turn.entryReleased and f.strategy.resumed==0)
     if not persistent then
-        for _,node in ipairs({f.object.left,f.object.right,f.object.back}) do node.x=node.x-0.15 end
+        for _,node in ipairs({f.object.left,f.object.right,f.object.back}) do node.x=node.x-0.30 end
     end
     g_currentMission.time=2600
     local canDrive=f.turn:endTurn(16)

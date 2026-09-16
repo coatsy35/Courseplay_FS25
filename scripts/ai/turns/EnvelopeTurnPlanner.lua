@@ -14,14 +14,12 @@ must arrive on their nominal row lines. Tractor heading alone is insufficient.
 EnvelopeTurnPlanner = {}
 local E = EnvelopeTurnPlanner
 E.angleTolerance = math.rad(2)
-E.edgeTolerance = 0.1
--- Reserve half the live allowance for physical tracking and hydraulic settling.
--- Candidate acceptance must not aim at the same threshold that stops the rig.
-E.planningEdgeTolerance = E.edgeTolerance / 2
--- The preferred margin is an optimisation target. Local repair may retain a
--- finely verified result with at least a quarter of the live allowance spare.
--- Do not turn a fraction of a millimetre above the target into "no path".
-E.repairEdgeTolerance = E.edgeTolerance * 0.75
+-- Allow small tracking/settling differences without admitting a visibly
+-- curved entry. Bound the width-relative lateral allowance; heading and
+-- collision checks remain independent. Planning reserves 40%, repair 20%.
+function E.entryTolerance(p)
+    return math.max(0.1,math.min(0.25,p.width*0.05))
+end
 E.reserve = 0.5
 -- Shared with the live lowering gate: align BEFORE stopping, not only at the
 -- later boundary-crossing sample. The tractor brakes towards 0.5 m clearance.
@@ -40,6 +38,16 @@ function E.localPoint(p, reference)
     local dx, dz = p.x - reference.x, p.z - reference.z
     return dx * math.cos(reference.t) - dz * math.sin(reference.t),
         dx * math.sin(reference.t) + dz * math.cos(reference.t)
+end
+
+-- Deployment is a separate raised-state admission, shared by the predictor
+-- and the live controller. A straight tractor with a jack-knifed implement
+-- must keep drawing forwards; it must never trigger turnover at that point.
+function E.canDeploy(p, state)
+    local lateral=E.localPoint(state,p.goal)
+    return math.abs(lateral)<=math.min(0.5,p.width*0.1)
+        and math.abs(E.wrap(state.t-p.goal.t))<=E.angleTolerance
+        and (not p.length or math.abs(E.wrap(state.phi-p.goal.t))<=E.angleTolerance)
 end
 
 -- Shared by prediction and live target conversion. CP's combination radius is
@@ -80,7 +88,7 @@ function E.assess(p, state)
             contact = math.max(contact, z - p.slope * (x - p.workCentreX))
         end
     end
-    return error <= E.edgeTolerance and angle <= E.angleTolerance,
+    return error <= E.entryTolerance(p) and angle <= E.angleTolerance,
         error, angle, contact, rearError,(minError+maxError)/2,minError,maxError
 end
 
@@ -310,15 +318,9 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
         -- straight combination with room left for the measured working
         -- correction, not millimetre positioning of folded soil markers.
         local tolerance=p.deploymentTarget and math.min(0.5,p.width*0.1) or
-            (optimiseEntry and E.repairEdgeTolerance or E.planningEdgeTolerance)
-        if p.deploymentTarget and p.deploymentTractorOnly then
-            -- This is a raised staging point, not working admission. Match
-            -- the runtime's tractor-on-straight deployment condition; forcing
-            -- folded soil markers to align here excludes useful compact bulbs.
-            local lateral=E.localPoint(s,p.goal)
-            error,angle,rear,balanced=math.abs(lateral),math.abs(E.wrap(s.t-p.goal.t)),lateral,lateral
-        end
+            (optimiseEntry and (E.entryTolerance(p)*0.8) or (E.entryTolerance(p)*0.6))
         aligned=angle<=E.angleTolerance and error<=tolerance
+        if p.deploymentTarget then aligned=aligned and E.canDeploy(p,s) end
         local articulation=math.abs(E.wrap(s.t-s.phi))
         maxArticulation=math.max(maxArticulation,articulation)
         if p.length and articulation > p.maxArticulation then return finish({ok=false,reason='joint angle'}) end
@@ -327,8 +329,8 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
             frames[#frames+1]={x=s.x,z=s.z,t=s.t,phi=s.phi,distance=travelled,contact=contact,aligned=aligned,ix=ix}
         end
         if p.deploymentApproach and ix>=tailStart then
-            local lateral,longitudinal=E.localPoint(s,p.goal)
-            if math.abs(E.wrap(s.t-p.goal.t))<=E.angleTolerance and math.abs(lateral)<=math.min(0.5,p.width*0.1) then
+            local _,longitudinal=E.localPoint(s,p.goal)
+            if E.canDeploy(p,s) then
                 -- A stock approach can reach its straight too late to deploy
                 -- and correct the working-side offset. Reject it while still
                 -- raised, before spending that space or turning the plough.
@@ -492,7 +494,6 @@ function E.newSearch(p)
     local compactSeed,compactPending=initialRecovery,p.canCompactReturn
     local compactUseful=false
     local compactIndex=1
-    local candidateModel=p
     local initial=true
     local function nextGroup()
         if compactSeed then
@@ -532,22 +533,16 @@ function E.newSearch(p)
             (not usingHint and preferWorked and p.workedSide or nil)) or nil
         local result
         if not simulation then
-            candidateModel=p
-            if compactSeed then
-                candidateModel={}
-                for k,v in pairs(p) do candidateModel[k]=v end
-                candidateModel.deploymentTractorOnly=true
-            end
             path,tail=E.makePath(p,straight+bend,straight,radius,extension,bias,loopSide)
             attempts=attempts+1
             verified=false
-            if path then simulation=E.newSimulation(candidateModel,path,tail,0.15,false,false)
+            if path then simulation=E.newSimulation(p,path,tail,0.15,false,false)
             else result={ok=false,reason='no analytic path'} end
         end
         result=result or simulation:update(budget)
         if not result then return nil end
         if result.ok and not verified then
-            simulation=E.newSimulation(candidateModel,path,tail,0.075,true,true)
+            simulation=E.newSimulation(p,path,tail,0.075,true,true)
             verified=true
             return nil
         end
@@ -775,7 +770,7 @@ function E.newApproachSearch(p)
         -- screen shapes, never to reject a promising shape without running the
         -- production tracker. Only the unchanged fine tolerance admits a path.
         if not verified and (result.ok or (result.alignmentError and
-                (result.error or math.huge)<=E.edgeTolerance*1.5)) then
+                (result.error or math.huge)<=E.entryTolerance(p)*1.5)) then
             simulation=E.newSimulation(p,path,2,0.075,true,true,true)
             verified,fineGroup,fineVerificationStart=true,true,true;return nil
         end
@@ -786,7 +781,7 @@ function E.newApproachSearch(p)
             result.repairedApproach=true
             result.factorA,result.factorB=usingHint and hint.factorA or factors[ai],usingHint and hint.factorB or factors[bi]
             result.usedHint=usingHint and true or false
-            if usingHint and result.maxEntryError>E.planningEdgeTolerance then hintMarginError=result.maxEntryError end
+            if usingHint and result.maxEntryError>(E.entryTolerance(p)*0.6) then hintMarginError=result.maxEntryError end
             result.hintMarginError=hintMarginError
             if not bestVerified or result.maxEntryError<bestVerified.maxEntryError then bestVerified=result end
             -- A remembered shape is a search seed, not a reason to accept less
@@ -794,8 +789,8 @@ function E.newApproachSearch(p)
             -- reached 10.2 cm live. Keep this verified candidate as a fallback,
             -- then run the same bounded refinement used for a fresh shape.
             -- Well-aligned cached shapes still return after their first trial.
-            if result.maxEntryError<=E.planningEdgeTolerance or
-                    (fastPass and stage=='secant' and verified and result.maxEntryError<=E.repairEdgeTolerance) then
+            if result.maxEntryError<=(E.entryTolerance(p)*0.6) or
+                    (fastPass and stage=='secant' and verified and result.maxEntryError<=(E.entryTolerance(p)*0.8)) then
                 bestVerified.attempts=attempts
                 bestVerified.hintMarginError=hintMarginError
                 return bestVerified
@@ -855,8 +850,8 @@ function E.newApproachSearch(p)
                 advance()
                 return nil
             end
-            if stage=='secant' and currentError and math.abs(currentError)<E.planningEdgeTolerance/4 and
-                    objective>E.repairEdgeTolerance then
+            if stage=='secant' and currentError and math.abs(currentError)<(E.entryTolerance(p)*0.6)/4 and
+                    objective>(E.entryTolerance(p)*0.8) then
                 -- The two sides are already balanced, but their spread is too
                 -- wide: another lateral shift cannot fix that tangent shape.
                 -- Try a different pull-in/straight instead of spending twelve

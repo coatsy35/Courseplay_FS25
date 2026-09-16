@@ -3,8 +3,19 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.24**, packaged mod version **8.1.0.124**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.24` records identify it.
+Current test: **v0.25**, packaged mod version **8.1.0.125**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.25` records identify it.
+
+Version 0.25 requires both tractor and trailer alignment before deployment,
+uses the original generated row centre during folded initial travel, and
+applies CP's working offset after deployment. Lateral admission is 5% of working
+width, bounded to 0.10–0.25 m; planning and repair retain margins. The two-degree
+heading limit, physical footprint checks and one-second stopped-planning budget
+are unchanged. **99 regression tests and 34 packaged execution cases pass**.
+See [v0.25 qualification](v025-qualification.md). This remains an experimental
+build requiring in-game confirmation.
+
+### Version 0.24
 
 Version 0.24 rejects a retained stock approach if it reaches the deployment
 straight with too little run-in. The raised recovery draws forwards before a
