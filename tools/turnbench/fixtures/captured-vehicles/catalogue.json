@@ -1,0 +1,2086 @@
+{
+  "schema": "cp-bench-captured-geometry",
+  "schemaVersion": 1,
+  "units": {
+    "length": "metres",
+    "angle": "radians"
+  },
+  "limitations": [
+    "Profiles retain machine-root coordinates and captured direction vectors; root axes are not assumed to face forwards.",
+    "Declared dimensions and joint stops are not measured collision clearance.",
+    "Labels are user annotations, not geometry overrides or certified steering classification.",
+    "No field boundary, terrain physics or unobserved folded/working state is invented.",
+    "Full joint chains are retained. A simulator must explicitly support them before running a case."
+  ],
+  "vehicles": [
+    {
+      "identity": {
+        "configurations": {
+          "baseColor": 1,
+          "designColor": 1,
+          "fillUnit": 1,
+          "folding": 1,
+          "rimColor": 1,
+          "wheel": 1
+        },
+        "id": "Series_3420_2385bfeb",
+        "model": "H:/FarmSim_Mods/FS25_Mods/FS25_Bourgault_Series_3420/xml/Series_3420.xml",
+        "name": "3420-100 Paralink Hoe Drill"
+      },
+      "profiles": [
+        {
+          "file": "profiles/Series_3420_2385bfeb_automatic_20260916_102017_40.json",
+          "sha256": "0e270970c314272cdb874eb000f126af5cd8dfbe95e66ce708f028518c64360c",
+          "capturedAt": "2026-09-16T10:20:17",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.02777799964,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.005796780019,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/Series_3420_2385bfeb_automatic_20260916_102017_40.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "baseColor": 1,
+          "cover": 1,
+          "fillUnit": 1,
+          "fillVolume": 1,
+          "rimColor": 1,
+          "wheel": 1
+        },
+        "id": "Series_71300_2ae3f32f",
+        "model": "H:/FarmSim_Mods/FS25_Mods/FS25_Bourgault_Series_3420/xml/Series_71300.xml",
+        "name": "71300 Air Cart"
+      },
+      "profiles": [
+        {
+          "file": "profiles/Series_71300_2ae3f32f_automatic_20260916_102017_41.json",
+          "sha256": "57e06e756e435475f29fbfac5a633d71cb7807b961b8677948868d9d21b720d1",
+          "capturedAt": "2026-09-16T10:20:17",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0,
+            "inWorkPosition": true,
+            "lowered": null,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.002809734072,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/Series_71300_2ae3f32f_automatic_20260916_102017_41.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cover": 1,
+          "fillUnit": 1,
+          "fillVolume": 1,
+          "wheel": 3
+        },
+        "id": "aircartPD1000_2461e8b5",
+        "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/vaderstad/aircartPD1000/aircartPD1000.xml",
+        "name": "PD 1000"
+      },
+      "profiles": [
+        {
+          "file": "profiles/aircartPD1000_2461e8b5_automatic_20260916_094331_5.json",
+          "sha256": "0c85c6660addac1c1f54164fdab4cbd99952ccc79d08ce00930bbf545d9ea1aa",
+          "capturedAt": "2026-09-16T09:43:31",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0,
+            "inWorkPosition": true,
+            "lowered": null,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/aircartPD1000_2461e8b5_automatic_20260916_094331_5.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cover": 1,
+          "fillUnit": 1,
+          "fillVolume": 1,
+          "folding": 1,
+          "ridgeMarker": 1,
+          "vehicleType": 1,
+          "wheel": 1
+        },
+        "id": "aquilaDrive400_1d0bfb9b",
+        "model": "data/vehicles/agromasz/aquilaDrive400/aquilaDrive400.xml",
+        "name": "AQUILA DRIVE 400"
+      },
+      "profiles": [
+        {
+          "file": "profiles/aquilaDrive400_1d0bfb9b_automatic_20260916_094521_14.json",
+          "sha256": "6200439e2b69dacc3446202cc2b2e28c097f99c42ddb2cf3094b2227d9f476e4",
+          "capturedAt": "2026-09-16T09:45:21",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.200000003,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 5.980613858e-126,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/aquilaDrive400_1d0bfb9b_automatic_20260916_101919_34.json",
+          "sha256": "ab7ef6320af2b8187adfb09a267553a61ab773516ac59ec6a87eabf42d840057",
+          "capturedAt": "2026-09-16T10:19:19",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.200000003,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.001975422806,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/aquilaDrive400_1d0bfb9b_automatic_20260916_101919_34.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cover": 1,
+          "design": 1,
+          "fillUnit": 1,
+          "fillVolume": 1,
+          "folding": 1,
+          "wheel": 3
+        },
+        "id": "avatar1225_51876f36",
+        "model": "data/vehicles/horsch/avatar1225/avatar1225.xml",
+        "name": "Avatar 12.25 SD"
+      },
+      "profiles": [
+        {
+          "file": "profiles/avatar1225_51876f36_automatic_20260916_101552_19.json",
+          "sha256": "a574556e789500c85b897c4043bec0fb5dba6c20471fb54dc21666b914b67dfb",
+          "capturedAt": "2026-09-16T10:15:52",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.06666699797,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/avatar1225_51876f36_automatic_20260916_101950_37.json",
+          "sha256": "d0e6c760dd1274b0222af907e32a0a9ea7b581d2da3e9a5bac72b264d14104e6",
+          "capturedAt": "2026-09-16T10:19:50",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.06666699797,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.003036840689,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/avatar1225_51876f36_automatic_20260916_101950_37.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cropSensor": 1,
+          "fillUnit": 1,
+          "motor": 1,
+          "wheel": 1
+        },
+        "id": "bigRoy1080_306bd96a",
+        "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/versatile/bigRoy1080/bigRoy1080.xml",
+        "name": "Big Roy 1080"
+      },
+      "profiles": [
+        {
+          "file": "profiles/bigRoy1080_306bd96a_automatic_20260916_094610_16.json",
+          "sha256": "2fbf39ede84df8a4eb36eb27aa83d6dafa4f83968c554d9ef1f277e60b2847cf",
+          "capturedAt": "2026-09-16T09:46:10",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.001440529039,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/bigRoy1080_306bd96a_automatic_20260916_101545_17.json",
+          "sha256": "06e9ef5e56f7c891547162ea2f6c3d22f9ea0b3bf82efd876c811c05d2d4f31e",
+          "capturedAt": "2026-09-16T10:15:45",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "articulated"
+          }
+        },
+        {
+          "file": "profiles/bigRoy1080_306bd96a_automatic_20260916_101552_18.json",
+          "sha256": "533ae9b82b54b178aa121c275776d5dbe14e6e2a84b74ecbe4a993ff139b296d",
+          "capturedAt": "2026-09-16T10:15:52",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "articulated"
+          }
+        },
+        {
+          "file": "profiles/bigRoy1080_306bd96a_automatic_20260916_101950_36.json",
+          "sha256": "43cc714ce3567d15f556ecf8c3296b9d824b5060bfeee999d04f4a0fa6f8c251",
+          "capturedAt": "2026-09-16T10:19:50",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.0007902404094,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "articulated"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/bigRoy1080_306bd96a_automatic_20260916_101950_36.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cover": 1,
+          "fillUnit": 1,
+          "fillVolume": 1,
+          "folding": 1,
+          "wheel": 2
+        },
+        "id": "citan15001C_12a989a5",
+        "model": "data/vehicles/amazone/citan15001C/citan15001C.xml",
+        "name": "Citan 15001-C"
+      },
+      "profiles": [
+        {
+          "file": "profiles/citan15001C_12a989a5_automatic_20260916_101748_24.json",
+          "sha256": "78dcbe0cd1f9d5b45e4503f9c10de6b550f2e48c802a6ea9ec5c722c8d220703",
+          "capturedAt": "2026-09-16T10:17:48",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.1333000064,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.003311792299,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/citan15001C_12a989a5_automatic_20260916_102058_44.json",
+          "sha256": "5983fc2cf08ee5c6be27e3f733b62bce533c650966fa2df2717de2463fcbe9ad",
+          "capturedAt": "2026-09-16T10:20:58",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.1333000064,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 3.139191919e-09,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/citan15001C_12a989a5_automatic_20260916_102058_44.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cover": 1,
+          "fillUnit": 1,
+          "fillVolume": 1,
+          "folding": 1,
+          "wheel": 1
+        },
+        "id": "espro6000RC_4d453858",
+        "model": "data/vehicles/kuhn/espro6000RC/espro6000RC.xml",
+        "name": "ESPRO 6000 RC"
+      },
+      "profiles": [
+        {
+          "file": "profiles/espro6000RC_4d453858_automatic_20260916_101818_28.json",
+          "sha256": "d5c1ecc8485e43dfa9d608907ccc603a8c4f3daf9d3d368a64c952033d70a099",
+          "capturedAt": "2026-09-16T10:18:18",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.0625,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.002070385694,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/espro6000RC_4d453858_automatic_20260916_101818_28.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "fillUnit": 1,
+          "frontloader": 1,
+          "motor": 1,
+          "wheel": 1
+        },
+        "id": "fastrac4220_41bb00e0",
+        "model": "H:/FarmSim_Mods/FS25_Mods/FS25_FS22RewrittenPack_I_K/vehicles/jcb/fastrac4220/fastrac4220.xml",
+        "name": "Fastrac 4220"
+      },
+      "profiles": [
+        {
+          "file": "profiles/fastrac4220_41bb00e0_automatic_20260916_101817_26.json",
+          "sha256": "8549f900338f4b41f87fd80adff9862e6af16803e58bc7ec9b7c0ab3ea0e3c9b",
+          "capturedAt": "2026-09-16T10:18:17",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.002174065259,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "front-wheel-steer"
+          }
+        },
+        {
+          "file": "profiles/fastrac4220_41bb00e0_automatic_20260916_101818_27.json",
+          "sha256": "c8c9a1955ab60d55cdab04457902a90a3c999dec1eb2d873abe3a2945ff7127c",
+          "capturedAt": "2026-09-16T10:18:18",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.002174065259,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "front-wheel-steer"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/fastrac4220_41bb00e0_automatic_20260916_101818_27.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cover": 1,
+          "fillUnit": 1,
+          "fillVolume": 1,
+          "folding": 1,
+          "wheel": 1
+        },
+        "id": "planter4900_0f0f8970",
+        "model": "data/vehicles/kinze/planter4900/planter4900.xml",
+        "name": "4905 Blue Drive"
+      },
+      "profiles": [
+        {
+          "file": "profiles/planter4900_0f0f8970_automatic_20260916_094422_10.json",
+          "sha256": "c06caf61966853c9e970b3ea906e3d06d9d60e81e1378a75104c60bb0fcfa66e",
+          "capturedAt": "2026-09-16T09:44:22",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0,
+            "inWorkPosition": true,
+            "lowered": true,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.002601271118,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/planter4900_0f0f8970_automatic_20260916_101856_31.json",
+          "sha256": "073beeb227efc471e667ca4f1fc0a870089561581ed14f482b46ef174820deab",
+          "capturedAt": "2026-09-16T10:18:56",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0,
+            "inWorkPosition": true,
+            "lowered": true,
+            "movingDirection": -1,
+            "ploughRotationTime": null,
+            "speedKph": 9.063680903,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/planter4900_0f0f8970_automatic_20260916_101856_31.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "folding": 1,
+          "wheel": 1
+        },
+        "id": "pw10012_7c87ec16",
+        "model": "data/vehicles/kverneland/pw10012/pw10012.xml",
+        "name": "PW 100 - 12"
+      },
+      "profiles": [
+        {
+          "file": "profiles/pw10012_7c87ec16_automatic_20260916_211457_6.json",
+          "sha256": "ed583e3a8b6ed33dacee7c38dbad03f846b7393b315a6917ab407d0cd7ea0160",
+          "capturedAt": "2026-09-16T21:14:57",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 1,
+            "inWorkPosition": true,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": 1,
+            "speedKph": 1.645922797e-129,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/pw10012_7c87ec16_automatic_20260916_211457_6.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "attacherJoint": 3,
+          "cropSensor": 1,
+          "design": 1,
+          "design2": 1,
+          "design3": 1,
+          "fillUnit": 1,
+          "motor": 1,
+          "wheel": 2
+        },
+        "id": "quadtrac715_6c6cf0da",
+        "model": "data/vehicles/caseIH/quadtrac715/quadtrac715.xml",
+        "name": "Steiger 715 Quadtrac"
+      },
+      "profiles": [
+        {
+          "file": "profiles/quadtrac715_6c6cf0da_automatic_20260916_094310_1.json",
+          "sha256": "9ad6c393c4a529326ea456b150c8ca5a72cec1d5c2a73ee39d68af06ff966f5a",
+          "capturedAt": "2026-09-16T09:43:10",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 5.892525908e-160,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/quadtrac715_6c6cf0da_automatic_20260916_094330_2.json",
+          "sha256": "40680e0f3703dfda70654340dba57ca35b6e9f97aee7bcb6c43185824591a1b6",
+          "capturedAt": "2026-09-16T09:43:30",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "multiple-pivots",
+            "runningGear": "four-track",
+            "steering": "articulated"
+          }
+        },
+        {
+          "file": "profiles/quadtrac715_6c6cf0da_automatic_20260916_094331_3.json",
+          "sha256": "82c41a763f9202fe88ae86e4de65c42df08f0591489d6bc675a0066acf71d810",
+          "capturedAt": "2026-09-16T09:43:31",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "multiple-pivots",
+            "runningGear": "four-track",
+            "steering": "articulated"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/quadtrac715_6c6cf0da_automatic_20260916_094331_3.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "attacherJoint": 1,
+          "cropSensor": 1,
+          "design2": 1,
+          "fillUnit": 1,
+          "motor": 4,
+          "wheel": 1
+        },
+        "id": "series8RT_2c46e970",
+        "model": "data/vehicles/johnDeere/series8RT/series8RT.xml",
+        "name": "8RT 410"
+      },
+      "profiles": [
+        {
+          "file": "profiles/series8RT_2c46e970_automatic_20260916_094520_12.json",
+          "sha256": "f35f125dd893255f9e2a207a314012db82b4ba487607c93af9bb8a8453100486",
+          "capturedAt": "2026-09-16T09:45:20",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 1.608654221e-115,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "twin-track",
+            "steering": "not-applicable"
+          }
+        },
+        {
+          "file": "profiles/series8RT_2c46e970_automatic_20260916_094521_13.json",
+          "sha256": "12dc7ed89fd2036910344c9c939ef7c0c4f085d4654db8fd3e99227b7eb78d1d",
+          "capturedAt": "2026-09-16T09:45:21",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 9.363599944e-126,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "twin-track",
+            "steering": "not-applicable"
+          }
+        },
+        {
+          "file": "profiles/series8RT_2c46e970_automatic_20260916_101919_33.json",
+          "sha256": "626ec43fb835e6aa17de7729ec7103c5303b72fb6778439c3719e0f74c76d141",
+          "capturedAt": "2026-09-16T10:19:19",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.0009196853433,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "twin-track",
+            "steering": "not-applicable"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/series8RT_2c46e970_automatic_20260916_101919_33.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "attacherJoint": 1,
+          "component": 1,
+          "cropSensor": 1,
+          "cylindered": 1,
+          "design": 1,
+          "design2": 1,
+          "design3": 1,
+          "fillUnit": 1,
+          "motor": 5,
+          "wheel": 57
+        },
+        "id": "series9R_1031412a",
+        "model": "data/vehicles/johnDeere/series9R/series9R.xml",
+        "name": "9R 640"
+      },
+      "profiles": [
+        {
+          "file": "profiles/series9R_1031412a_automatic_20260916_094352_7.json",
+          "sha256": "b92c9d259eb41e1420627a7decb117f8c7f31182d131b159e167b8f5e7c333c5",
+          "capturedAt": "2026-09-16T09:43:52",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 1,
+            "ploughRotationTime": null,
+            "speedKph": 0.009225319083,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/series9R_1031412a_automatic_20260916_094420_8.json",
+          "sha256": "5334c87e439be067f1cb392e77206831a68063f12fb502c8c94ff9e77cfc8fdb",
+          "capturedAt": "2026-09-16T09:44:20",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.001479331098,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "multiple-pivots",
+            "runningGear": "twin-track",
+            "steering": "articulated"
+          }
+        },
+        {
+          "file": "profiles/series9R_1031412a_automatic_20260916_094422_9.json",
+          "sha256": "a7b9345c8e1b9588e329dab7e18a0eb52e92002fbc2fdc631633465954221294",
+          "capturedAt": "2026-09-16T09:44:22",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.001479331098,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "multiple-pivots",
+            "runningGear": "twin-track",
+            "steering": "articulated"
+          }
+        },
+        {
+          "file": "profiles/series9R_1031412a_automatic_20260916_101855_30.json",
+          "sha256": "0d8ae47456195a1029a82923a7639c22ec264b5d6e0be93138aea11a4b08572d",
+          "capturedAt": "2026-09-16T10:18:55",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": -1,
+            "ploughRotationTime": null,
+            "speedKph": 9.082739066,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "multiple-pivots",
+            "runningGear": "twin-track",
+            "steering": "articulated"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/series9R_1031412a_automatic_20260916_101855_30.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "attacherJoint": 2,
+          "cropSensor": 1,
+          "cylindered": 2,
+          "design": 2,
+          "design2": 1,
+          "design3": 1,
+          "fillUnit": 1,
+          "frontloader": 1,
+          "motor": 5,
+          "rimColor": 2,
+          "wheel": 14
+        },
+        "id": "t7_3a9ea847",
+        "model": "data/vehicles/newHolland/t7/t7.xml",
+        "name": "T7.300"
+      },
+      "profiles": [
+        {
+          "file": "profiles/t7_3a9ea847_automatic_20260916_211356_1.json",
+          "sha256": "30595603cbf9bebff39fdec2921d574e9f9154590b4c81ded5b2a9a2ef44d234",
+          "capturedAt": "2026-09-16T21:13:56",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.007196715794,
+            "steeringInput": -0.5666706364,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/t7_3a9ea847_automatic_20260916_211418_2.json",
+          "sha256": "65cef6e11b80165758e0d722d0f1cc8eb5a5d8153f6f465a3eee751f1a06b9f5",
+          "capturedAt": "2026-09-16T21:14:18",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.02830826151,
+            "steeringInput": -0.5666706364,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/t7_3a9ea847_automatic_20260916_211438_3.json",
+          "sha256": "1363c4f3004f328c6d8838a0b50482617aa2eb901b30446e32fffde33a276fdc",
+          "capturedAt": "2026-09-16T21:14:38",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.008467635902,
+            "steeringInput": -0.5666706364,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        },
+        {
+          "file": "profiles/t7_3a9ea847_automatic_20260916_211455_4.json",
+          "sha256": "8359b3f305f85ab34e5e0f10d90bf600b5716329d7c414973dad5a1842bb0672",
+          "capturedAt": "2026-09-16T21:14:55",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 1.471185336e-107,
+            "steeringInput": -0.5666706364,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "front-wheel-steer"
+          }
+        },
+        {
+          "file": "profiles/t7_3a9ea847_automatic_20260916_211457_5.json",
+          "sha256": "a48092979a236d387f5843088fb39adc9e87bcf36f41755aeed34220b92de7da",
+          "capturedAt": "2026-09-16T21:14:57",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 6.230712258e-129,
+            "steeringInput": -0.5666706364,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "front-wheel-steer"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/t7_3a9ea847_automatic_20260916_211457_5.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cropSensor": 1,
+          "fillUnit": 1,
+          "motor": 1,
+          "wheel": 43
+        },
+        "id": "t8_3512d8c8",
+        "model": "data/vehicles/newHolland/t8/t8.xml",
+        "name": "T8.350 GENESIS"
+      },
+      "profiles": [
+        {
+          "file": "profiles/t8_3512d8c8_automatic_20260916_101724_22.json",
+          "sha256": "65b7fdf1b0383a96e2ef6f1ae4d17abb4bfa8fc4ca2894e791f5eba2f21f0c11",
+          "capturedAt": "2026-09-16T10:17:24",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 6.204193998e-101,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "front-wheel-steer"
+          }
+        },
+        {
+          "file": "profiles/t8_3512d8c8_automatic_20260916_101748_23.json",
+          "sha256": "ed13ffa22490320d4881a8113e5fb5a0a14711b2955c1f101168350d9fd8cc83",
+          "capturedAt": "2026-09-16T10:17:48",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.003767419209,
+            "steeringInput": 0.1667409704,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "front-wheel-steer"
+          }
+        },
+        {
+          "file": "profiles/t8_3512d8c8_automatic_20260916_102058_43.json",
+          "sha256": "b1030fb1e2105087ceea24966a985784629b31643d29b54145f7fb0537b9d781",
+          "capturedAt": "2026-09-16T10:20:58",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 2.199562206e-09,
+            "steeringInput": -0.1750578241,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "single-pivot",
+            "runningGear": "wheeled",
+            "steering": "front-wheel-steer"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/t8_3512d8c8_automatic_20260916_102058_43.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "fillUnit": 1,
+          "folding": 1,
+          "wheel": 1
+        },
+        "id": "toolbarXL84_0e620833",
+        "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/vaderstad/toolbarXL84/toolbarXL84.xml",
+        "name": "Seed Hawk 84"
+      },
+      "profiles": [
+        {
+          "file": "profiles/toolbarXL84_0e620833_automatic_20260916_094331_4.json",
+          "sha256": "df71b290be4e92507d982a13a820e1bf1f9223ceaa3c9400f14c77ffa2a359ec",
+          "capturedAt": "2026-09-16T09:43:31",
+          "state": {
+            "articulationRad": null,
+            "crabSteeringMode": null,
+            "foldAnimationTime": 0.05000000075,
+            "inWorkPosition": false,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0,
+            "steeringInput": 0,
+            "turnedOn": false
+          },
+          "labels": {
+            "implement": "unspecified",
+            "pivots": "unspecified",
+            "runningGear": "unspecified",
+            "steering": "unspecified"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/toolbarXL84_0e620833_automatic_20260916_094331_4.json"
+    },
+    {
+      "identity": {
+        "configurations": {
+          "cropSensor": 1,
+          "design": 2,
+          "design2": 1,
+          "fillUnit": 1,
+          "motor": 1,
+          "rimColor": 2,
+          "wheel": 6
+        },
+        "id": "versatile1156_1130290a",
+        "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/ford/versatile1156/versatile1156.xml",
+        "name": "1156"
+      },
+      "profiles": [
+        {
+          "file": "profiles/versatile1156_1130290a_automatic_20260916_101638_21.json",
+          "sha256": "d8d9bb1eea16335c193b363ecbcc74768f55214eb5a920d363b6e6e00765a484",
+          "capturedAt": "2026-09-16T10:16:38",
+          "state": {
+            "articulationRad": 0.09404677957,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": 0,
+            "ploughRotationTime": null,
+            "speedKph": 0.02138196247,
+            "steeringInput": -0.1995734647,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "multiple-pivots",
+            "runningGear": "wheeled",
+            "steering": "articulated"
+          }
+        },
+        {
+          "file": "profiles/versatile1156_1130290a_automatic_20260916_102017_39.json",
+          "sha256": "a908c60a6d5abde48614b626630726de1e4ae58a8506ccc087faaebdc96f307c",
+          "capturedAt": "2026-09-16T10:20:17",
+          "state": {
+            "articulationRad": 0,
+            "crabSteeringMode": 1,
+            "foldAnimationTime": null,
+            "inWorkPosition": null,
+            "lowered": false,
+            "movingDirection": -1,
+            "ploughRotationTime": null,
+            "speedKph": 0.006495801505,
+            "steeringInput": 0,
+            "turnedOn": null
+          },
+          "labels": {
+            "implement": "trailed",
+            "pivots": "multiple-pivots",
+            "runningGear": "wheeled",
+            "steering": "articulated"
+          }
+        }
+      ],
+      "defaultProfile": "profiles/versatile1156_1130290a_automatic_20260916_102017_39.json"
+    }
+  ],
+  "combinations": [
+    {
+      "id": "c8a4b38fd734a5e0",
+      "name": "1156 + 3420-100 Paralink Hoe Drill + 71300 Air Cart",
+      "members": [
+        {
+          "instance": 1,
+          "vehicleId": "versatile1156_1130290a",
+          "parentInstance": null,
+          "jointIndex": null
+        },
+        {
+          "instance": 2,
+          "vehicleId": "Series_3420_2385bfeb",
+          "parentInstance": 1,
+          "jointIndex": 1
+        },
+        {
+          "instance": 3,
+          "vehicleId": "Series_71300_2ae3f32f",
+          "parentInstance": 2,
+          "jointIndex": 1
+        }
+      ],
+      "recordings": [
+        {
+          "file": "recordings/motion_20260916_102017_42.jsonl.gz",
+          "sourceSha256": "a6e25e88098f650d8454fa3464b329fe1fcb12804ba33806cd8404e098df2429",
+          "samples": 303,
+          "complete": true,
+          "end": {
+            "elapsedMs": 34078.60156,
+            "reason": "user",
+            "samples": 303,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "cropSensor": 1,
+                  "design": 2,
+                  "design2": 1,
+                  "fillUnit": 1,
+                  "motor": 1,
+                  "rimColor": 2,
+                  "wheel": 6
+                },
+                "id": "versatile1156_1130290a",
+                "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/ford/versatile1156/versatile1156.xml",
+                "name": "1156"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "versatile1156_1130290a_automatic_20260916_102017_39.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "baseColor": 1,
+                  "designColor": 1,
+                  "fillUnit": 1,
+                  "folding": 1,
+                  "rimColor": 1,
+                  "wheel": 1
+                },
+                "id": "Series_3420_2385bfeb",
+                "model": "H:/FarmSim_Mods/FS25_Mods/FS25_Bourgault_Series_3420/xml/Series_3420.xml",
+                "name": "3420-100 Paralink Hoe Drill"
+              },
+              "instance": 2,
+              "jointIndex": 1,
+              "parentInstance": 1,
+              "profileFile": "Series_3420_2385bfeb_automatic_20260916_102017_40.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "baseColor": 1,
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "rimColor": 1,
+                  "wheel": 1
+                },
+                "id": "Series_71300_2ae3f32f",
+                "model": "H:/FarmSim_Mods/FS25_Mods/FS25_Bourgault_Series_3420/xml/Series_71300.xml",
+                "name": "71300 Air Cart"
+              },
+              "instance": 3,
+              "jointIndex": 1,
+              "parentInstance": 2,
+              "profileFile": "Series_71300_2ae3f32f_automatic_20260916_102017_41.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "9c17b4912a90bcb6",
+      "name": "8RT 410 + AQUILA DRIVE 400",
+      "members": [
+        {
+          "instance": 1,
+          "vehicleId": "series8RT_2c46e970",
+          "parentInstance": null,
+          "jointIndex": null
+        },
+        {
+          "instance": 2,
+          "vehicleId": "aquilaDrive400_1d0bfb9b",
+          "parentInstance": 1,
+          "jointIndex": 3
+        }
+      ],
+      "recordings": [
+        {
+          "file": "recordings/motion_20260916_094521_15.jsonl.gz",
+          "sourceSha256": "9f94c716632b76cca66e4189cb76a004f4d292bcd38ca35dfc6820135d1ece7a",
+          "samples": 397,
+          "complete": true,
+          "end": {
+            "elapsedMs": 45525.57978,
+            "reason": "user",
+            "samples": 397,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "attacherJoint": 1,
+                  "cropSensor": 1,
+                  "design2": 1,
+                  "fillUnit": 1,
+                  "motor": 4,
+                  "wheel": 1
+                },
+                "id": "series8RT_2c46e970",
+                "model": "data/vehicles/johnDeere/series8RT/series8RT.xml",
+                "name": "8RT 410"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "series8RT_2c46e970_automatic_20260916_094521_13.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "ridgeMarker": 1,
+                  "vehicleType": 1,
+                  "wheel": 1
+                },
+                "id": "aquilaDrive400_1d0bfb9b",
+                "model": "data/vehicles/agromasz/aquilaDrive400/aquilaDrive400.xml",
+                "name": "AQUILA DRIVE 400"
+              },
+              "instance": 2,
+              "jointIndex": 3,
+              "parentInstance": 1,
+              "profileFile": "aquilaDrive400_1d0bfb9b_automatic_20260916_094521_14.json"
+            }
+          ]
+        },
+        {
+          "file": "recordings/motion_20260916_101919_35.jsonl.gz",
+          "sourceSha256": "8f3e354b2c82178ba338113e89258472f77e46fff72ceb372ddd7465bd99ce39",
+          "samples": 240,
+          "complete": true,
+          "end": {
+            "elapsedMs": 27406.89474,
+            "reason": "user",
+            "samples": 240,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "attacherJoint": 1,
+                  "cropSensor": 1,
+                  "design2": 1,
+                  "fillUnit": 1,
+                  "motor": 4,
+                  "wheel": 1
+                },
+                "id": "series8RT_2c46e970",
+                "model": "data/vehicles/johnDeere/series8RT/series8RT.xml",
+                "name": "8RT 410"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "series8RT_2c46e970_automatic_20260916_101919_33.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "ridgeMarker": 1,
+                  "vehicleType": 1,
+                  "wheel": 1
+                },
+                "id": "aquilaDrive400_1d0bfb9b",
+                "model": "data/vehicles/agromasz/aquilaDrive400/aquilaDrive400.xml",
+                "name": "AQUILA DRIVE 400"
+              },
+              "instance": 2,
+              "jointIndex": 3,
+              "parentInstance": 1,
+              "profileFile": "aquilaDrive400_1d0bfb9b_automatic_20260916_101919_34.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "7494e23ef46572ad",
+      "name": "9R 640 + 4905 Blue Drive",
+      "members": [
+        {
+          "instance": 1,
+          "vehicleId": "series9R_1031412a",
+          "parentInstance": null,
+          "jointIndex": null
+        },
+        {
+          "instance": 2,
+          "vehicleId": "planter4900_0f0f8970",
+          "parentInstance": 1,
+          "jointIndex": 2
+        }
+      ],
+      "recordings": [
+        {
+          "file": "recordings/motion_20260916_094422_11.jsonl.gz",
+          "sourceSha256": "831bd4b918bc05cbcaf2d9c15801f0322cf77de07d12f684064ec35f0f3ff835",
+          "samples": 319,
+          "complete": true,
+          "end": {
+            "elapsedMs": 39450.316,
+            "reason": "vehicle changed",
+            "samples": 319,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "attacherJoint": 1,
+                  "component": 1,
+                  "cropSensor": 1,
+                  "cylindered": 1,
+                  "design": 1,
+                  "design2": 1,
+                  "design3": 1,
+                  "fillUnit": 1,
+                  "motor": 5,
+                  "wheel": 57
+                },
+                "id": "series9R_1031412a",
+                "model": "data/vehicles/johnDeere/series9R/series9R.xml",
+                "name": "9R 640"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "series9R_1031412a_automatic_20260916_094422_9.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "wheel": 1
+                },
+                "id": "planter4900_0f0f8970",
+                "model": "data/vehicles/kinze/planter4900/planter4900.xml",
+                "name": "4905 Blue Drive"
+              },
+              "instance": 2,
+              "jointIndex": 2,
+              "parentInstance": 1,
+              "profileFile": "planter4900_0f0f8970_automatic_20260916_094422_10.json"
+            }
+          ]
+        },
+        {
+          "file": "recordings/motion_20260916_101856_32.jsonl.gz",
+          "sourceSha256": "2d919bbc2345668aa9c7e32be4f743eca352b4325d033007c4cbe67236fc59ed",
+          "samples": 163,
+          "complete": true,
+          "end": {
+            "elapsedMs": 20336.8049,
+            "reason": "vehicle changed",
+            "samples": 163,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "attacherJoint": 1,
+                  "component": 1,
+                  "cropSensor": 1,
+                  "cylindered": 1,
+                  "design": 1,
+                  "design2": 1,
+                  "design3": 1,
+                  "fillUnit": 1,
+                  "motor": 5,
+                  "wheel": 57
+                },
+                "id": "series9R_1031412a",
+                "model": "data/vehicles/johnDeere/series9R/series9R.xml",
+                "name": "9R 640"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "series9R_1031412a_automatic_20260916_101855_30.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "wheel": 1
+                },
+                "id": "planter4900_0f0f8970",
+                "model": "data/vehicles/kinze/planter4900/planter4900.xml",
+                "name": "4905 Blue Drive"
+              },
+              "instance": 2,
+              "jointIndex": 2,
+              "parentInstance": 1,
+              "profileFile": "planter4900_0f0f8970_automatic_20260916_101856_31.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "5842e524732eaaa2",
+      "name": "Big Roy 1080 + Avatar 12.25 SD",
+      "members": [
+        {
+          "instance": 1,
+          "vehicleId": "bigRoy1080_306bd96a",
+          "parentInstance": null,
+          "jointIndex": null
+        },
+        {
+          "instance": 2,
+          "vehicleId": "avatar1225_51876f36",
+          "parentInstance": 1,
+          "jointIndex": 1
+        }
+      ],
+      "recordings": [
+        {
+          "file": "recordings/motion_20260916_101552_20.jsonl.gz",
+          "sourceSha256": "1fb2b8f89b4dc4a3035ff90184f226bf9a54393609de716b8119068fbf2105c1",
+          "samples": 253,
+          "complete": true,
+          "end": {
+            "elapsedMs": 30315.05601,
+            "reason": "vehicle changed",
+            "samples": 253,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "cropSensor": 1,
+                  "fillUnit": 1,
+                  "motor": 1,
+                  "wheel": 1
+                },
+                "id": "bigRoy1080_306bd96a",
+                "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/versatile/bigRoy1080/bigRoy1080.xml",
+                "name": "Big Roy 1080"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "bigRoy1080_306bd96a_automatic_20260916_101552_18.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "design": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "wheel": 3
+                },
+                "id": "avatar1225_51876f36",
+                "model": "data/vehicles/horsch/avatar1225/avatar1225.xml",
+                "name": "Avatar 12.25 SD"
+              },
+              "instance": 2,
+              "jointIndex": 1,
+              "parentInstance": 1,
+              "profileFile": "avatar1225_51876f36_automatic_20260916_101552_19.json"
+            }
+          ]
+        },
+        {
+          "file": "recordings/motion_20260916_101950_38.jsonl.gz",
+          "sourceSha256": "7a84addbdc0ce9038273e35e9cf79e3ea966565a62659e0545fddbcba45095da",
+          "samples": 216,
+          "complete": true,
+          "end": {
+            "elapsedMs": 24491.38559,
+            "reason": "user",
+            "samples": 216,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "cropSensor": 1,
+                  "fillUnit": 1,
+                  "motor": 1,
+                  "wheel": 1
+                },
+                "id": "bigRoy1080_306bd96a",
+                "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/versatile/bigRoy1080/bigRoy1080.xml",
+                "name": "Big Roy 1080"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "bigRoy1080_306bd96a_automatic_20260916_101950_36.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "design": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "wheel": 3
+                },
+                "id": "avatar1225_51876f36",
+                "model": "data/vehicles/horsch/avatar1225/avatar1225.xml",
+                "name": "Avatar 12.25 SD"
+              },
+              "instance": 2,
+              "jointIndex": 1,
+              "parentInstance": 1,
+              "profileFile": "avatar1225_51876f36_automatic_20260916_101950_37.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1a6ece2c52e2ba8d",
+      "name": "Fastrac 4220 + ESPRO 6000 RC",
+      "members": [
+        {
+          "instance": 1,
+          "vehicleId": "fastrac4220_41bb00e0",
+          "parentInstance": null,
+          "jointIndex": null
+        },
+        {
+          "instance": 2,
+          "vehicleId": "espro6000RC_4d453858",
+          "parentInstance": 1,
+          "jointIndex": 1
+        }
+      ],
+      "recordings": [
+        {
+          "file": "recordings/motion_20260916_101818_29.jsonl.gz",
+          "sourceSha256": "07dae1688508f8e37e9402e7a617465f66f07e95fb24e817375bbd2de773f6bb",
+          "samples": 138,
+          "complete": true,
+          "end": {
+            "elapsedMs": 15466.70919,
+            "reason": "vehicle changed",
+            "samples": 138,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "fillUnit": 1,
+                  "frontloader": 1,
+                  "motor": 1,
+                  "wheel": 1
+                },
+                "id": "fastrac4220_41bb00e0",
+                "model": "H:/FarmSim_Mods/FS25_Mods/FS25_FS22RewrittenPack_I_K/vehicles/jcb/fastrac4220/fastrac4220.xml",
+                "name": "Fastrac 4220"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "fastrac4220_41bb00e0_automatic_20260916_101818_27.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "wheel": 1
+                },
+                "id": "espro6000RC_4d453858",
+                "model": "data/vehicles/kuhn/espro6000RC/espro6000RC.xml",
+                "name": "ESPRO 6000 RC"
+              },
+              "instance": 2,
+              "jointIndex": 1,
+              "parentInstance": 1,
+              "profileFile": "espro6000RC_4d453858_automatic_20260916_101818_28.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "8b2e3e4157f79ede",
+      "name": "Steiger 715 Quadtrac + Seed Hawk 84 + PD 1000",
+      "members": [
+        {
+          "instance": 1,
+          "vehicleId": "quadtrac715_6c6cf0da",
+          "parentInstance": null,
+          "jointIndex": null
+        },
+        {
+          "instance": 2,
+          "vehicleId": "toolbarXL84_0e620833",
+          "parentInstance": 1,
+          "jointIndex": 2
+        },
+        {
+          "instance": 3,
+          "vehicleId": "aircartPD1000_2461e8b5",
+          "parentInstance": 2,
+          "jointIndex": 1
+        }
+      ],
+      "recordings": [
+        {
+          "file": "recordings/motion_20260916_094331_6.jsonl.gz",
+          "sourceSha256": "bc5c3def4841c1e8ef2afad88ce0eca5c5fbb67d2027b543bfcbcc381399c715",
+          "samples": 133,
+          "complete": true,
+          "end": {
+            "elapsedMs": 16412.86379,
+            "reason": "user",
+            "samples": 133,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "attacherJoint": 3,
+                  "cropSensor": 1,
+                  "design": 1,
+                  "design2": 1,
+                  "design3": 1,
+                  "fillUnit": 1,
+                  "motor": 1,
+                  "wheel": 2
+                },
+                "id": "quadtrac715_6c6cf0da",
+                "model": "data/vehicles/caseIH/quadtrac715/quadtrac715.xml",
+                "name": "Steiger 715 Quadtrac"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "quadtrac715_6c6cf0da_automatic_20260916_094331_3.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "fillUnit": 1,
+                  "folding": 1,
+                  "wheel": 1
+                },
+                "id": "toolbarXL84_0e620833",
+                "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/vaderstad/toolbarXL84/toolbarXL84.xml",
+                "name": "Seed Hawk 84"
+              },
+              "instance": 2,
+              "jointIndex": 2,
+              "parentInstance": 1,
+              "profileFile": "toolbarXL84_0e620833_automatic_20260916_094331_4.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "wheel": 3
+                },
+                "id": "aircartPD1000_2461e8b5",
+                "model": "H:/Steam/steamapps/common/Farming Simulator 25/pdlc/plainsAndPrairiesPack/vehicles/vaderstad/aircartPD1000/aircartPD1000.xml",
+                "name": "PD 1000"
+              },
+              "instance": 3,
+              "jointIndex": 1,
+              "parentInstance": 2,
+              "profileFile": "aircartPD1000_2461e8b5_automatic_20260916_094331_5.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1dca405999eda844",
+      "name": "T7.300 + PW 100 - 12",
+      "members": [
+        {
+          "instance": 1,
+          "vehicleId": "t7_3a9ea847",
+          "parentInstance": null,
+          "jointIndex": null
+        },
+        {
+          "instance": 2,
+          "vehicleId": "pw10012_7c87ec16",
+          "parentInstance": 1,
+          "jointIndex": 1
+        }
+      ],
+      "recordings": [
+        {
+          "file": "recordings/motion_20260916_211457_7.jsonl.gz",
+          "sourceSha256": "25e83b9ebf5f680b8683ed394bbbbf511331ab326c238a2b04fda1b80d66540c",
+          "samples": 1157,
+          "complete": true,
+          "end": {
+            "elapsedMs": 121205.8064,
+            "reason": "user",
+            "samples": 1157,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "attacherJoint": 2,
+                  "cropSensor": 1,
+                  "cylindered": 2,
+                  "design": 2,
+                  "design2": 1,
+                  "design3": 1,
+                  "fillUnit": 1,
+                  "frontloader": 1,
+                  "motor": 5,
+                  "rimColor": 2,
+                  "wheel": 14
+                },
+                "id": "t7_3a9ea847",
+                "model": "data/vehicles/newHolland/t7/t7.xml",
+                "name": "T7.300"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "t7_3a9ea847_automatic_20260916_211457_5.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "folding": 1,
+                  "wheel": 1
+                },
+                "id": "pw10012_7c87ec16",
+                "model": "data/vehicles/kverneland/pw10012/pw10012.xml",
+                "name": "PW 100 - 12"
+              },
+              "instance": 2,
+              "jointIndex": 1,
+              "parentInstance": 1,
+              "profileFile": "pw10012_7c87ec16_automatic_20260916_211457_6.json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "108c1255edbe7422",
+      "name": "T8.350 GENESIS + Citan 15001-C",
+      "members": [
+        {
+          "instance": 1,
+          "vehicleId": "t8_3512d8c8",
+          "parentInstance": null,
+          "jointIndex": null
+        },
+        {
+          "instance": 2,
+          "vehicleId": "citan15001C_12a989a5",
+          "parentInstance": 1,
+          "jointIndex": 1
+        }
+      ],
+      "recordings": [
+        {
+          "file": "recordings/motion_20260916_101748_25.jsonl.gz",
+          "sourceSha256": "5fa47a5e2b9cd3ac97d96844987cf5e14871a648f40618e9057ea022be433f67",
+          "samples": 110,
+          "complete": true,
+          "end": {
+            "elapsedMs": 13099.92382,
+            "reason": "user",
+            "samples": 110,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "cropSensor": 1,
+                  "fillUnit": 1,
+                  "motor": 1,
+                  "wheel": 43
+                },
+                "id": "t8_3512d8c8",
+                "model": "data/vehicles/newHolland/t8/t8.xml",
+                "name": "T8.350 GENESIS"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "t8_3512d8c8_automatic_20260916_101748_23.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "wheel": 2
+                },
+                "id": "citan15001C_12a989a5",
+                "model": "data/vehicles/amazone/citan15001C/citan15001C.xml",
+                "name": "Citan 15001-C"
+              },
+              "instance": 2,
+              "jointIndex": 1,
+              "parentInstance": 1,
+              "profileFile": "citan15001C_12a989a5_automatic_20260916_101748_24.json"
+            }
+          ]
+        },
+        {
+          "file": "recordings/motion_20260916_102058_45.jsonl.gz",
+          "sourceSha256": "70442aa9fa1e71f20b5d452ec7bf60c27488a566db19d5127bf8ec02e0c4a2be",
+          "samples": 190,
+          "complete": true,
+          "end": {
+            "elapsedMs": 22458.97951,
+            "reason": "vehicle changed",
+            "samples": 190,
+            "type": "end"
+          },
+          "members": [
+            {
+              "identity": {
+                "configurations": {
+                  "cropSensor": 1,
+                  "fillUnit": 1,
+                  "motor": 1,
+                  "wheel": 43
+                },
+                "id": "t8_3512d8c8",
+                "model": "data/vehicles/newHolland/t8/t8.xml",
+                "name": "T8.350 GENESIS"
+              },
+              "instance": 1,
+              "jointIndex": null,
+              "parentInstance": null,
+              "profileFile": "t8_3512d8c8_automatic_20260916_102058_43.json"
+            },
+            {
+              "identity": {
+                "configurations": {
+                  "cover": 1,
+                  "fillUnit": 1,
+                  "fillVolume": 1,
+                  "folding": 1,
+                  "wheel": 2
+                },
+                "id": "citan15001C_12a989a5",
+                "model": "data/vehicles/amazone/citan15001C/citan15001C.xml",
+                "name": "Citan 15001-C"
+              },
+              "instance": 2,
+              "jointIndex": 1,
+              "parentInstance": 1,
+              "profileFile": "citan15001C_12a989a5_automatic_20260916_102058_44.json"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
