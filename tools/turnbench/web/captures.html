@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Courseplay · Captured machines</title><link rel="stylesheet" href="/captures.css"><script src="/captures.js" defer></script></head>
+<body><header><b>Courseplay · Captured machines</b><a href="/">Turn bench</a></header>
+<main><aside><h1>Recorded combinations</h1><label>Recording<select id="recording"></select></label><p id="summary"></p><div id="machines"></div>
+<label><input type="checkbox" id="traces" checked> Show machine paths</label><label><input type="checkbox" id="work" checked> Show lowered work-area sweep</label>
+<p>Measured playback: each tractor, drill and cart retains its own recorded movement. Coloured crosses show hitch and axle positions. Body rectangles use declared sizes, not collision meshes.</p>
+<p>Green shading means the recorded tool was lowered. It does not prove soil was worked; these captures contain no field boundary or coverage map.</p>
+<h2>Predictive-model gaps</h2><ul><li>The current turn solver supports one trailer, not chained carts.</li><li>Articulated and skid steering response still needs calibration.</li><li>No safe drawbar collision limits were measured.</li></ul><p id="status" role="status"></p></aside>
+<section><canvas id="capture-canvas" aria-label="Recorded tractor and attachment movement"></canvas><footer><button id="restart">Restart</button><button id="play">Play</button><input id="time" type="range" min="0" value="0" step="1" aria-label="Recording position"><output id="clock"></output><select id="speed" aria-label="Playback speed"><option>1</option><option selected>4</option><option>16</option><option>64</option></select><span>×</span></footer></section></main></body></html>

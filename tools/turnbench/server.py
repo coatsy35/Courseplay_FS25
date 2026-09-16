@@ -12,6 +12,8 @@ from engine import ROOT, SOURCES, compare, implement_catalogue
 STATIC = Path(__file__).resolve().parent / 'web'
 SLOTS = threading.BoundedSemaphore(2)
 FILES = {'/': ('index.html', 'text/html'), '/app.js': ('app.js', 'text/javascript'),
+         '/captures': ('captures.html', 'text/html'), '/captures.js': ('captures.js', 'text/javascript'),
+         '/captures.css': ('captures.css', 'text/css'),
          '/style.css': ('style.css', 'text/css'), '/lucide.min.js': ('lucide.min.js', 'text/javascript')}
 
 
@@ -49,6 +51,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self.local_request():
+            return
+        if self.path == '/api/captures' or self.path.startswith('/api/captures/'):
+            from captured import catalogue, recording
+            try:
+                data=catalogue() if self.path=='/api/captures' else recording(self.path.removeprefix('/api/captures/'))
+                self.send(200,json.dumps(data,allow_nan=False).encode())
+            except ValueError as exc:
+                self.send(404,json.dumps({'error':str(exc)}).encode())
             return
         if self.path == '/api/implements':
             self.send(200,json.dumps(implement_catalogue()).encode())
