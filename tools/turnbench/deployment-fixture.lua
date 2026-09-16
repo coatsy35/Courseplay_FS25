@@ -225,6 +225,15 @@ function configureV030Exit(p,f,field)
     f:setPose(p.start)
 end
 
+-- v0.31 failed exit, with the actual CP settings from savegame18.
+function configureV031Exit(p,f,field)
+    configureV030Exit(p,f,field)
+    p.start={x=-235.316,z=-26.295,t=math.rad(-.041),phi=math.rad(9.816)}
+    p.headland=44.6;f.turn.headlandSeed=p.headland
+    p.turnSpeed=20;p.fieldSpeed=27
+    f:setPose(p.start)
+end
+
 function attachFieldworkHandover(p,f)
     local s,t=f.strategy,f.turn
     s.vehicle=f.vehicle;s.settings=f.vehicle:getCpSettings();s.workWidth=p.width;s.ppc=t.ppc

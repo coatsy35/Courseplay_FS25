@@ -145,6 +145,39 @@ assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==
 assert(f.initialAttempts<100,'recorded geometry exhausted the broad catalogue')
 """)
 
+    def test_v031_exit_at_saved_cp_speeds(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute("""
+local p,f=deploymentFixture(1);configureV031Exit(p,f,savedField)
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+assert(f.initialAttempts<100)
+""")
+
+    def test_v031_saved_speeds_with_slower_steering(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute("""
+local p,f=deploymentFixture(1);configureV031Exit(p,f,savedField)
+p.steeringTimeConstant=.5
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+""")
+
+    def test_braking_distance_follows_curve_and_waypoint_lead(self):
+        self.lua.execute("""
+local E=EnvelopeTurnPlanner
+local path={{x=0,z=0},{x=3,z=4},{x=3,z=14}}
+local stop={x=3,z=12,ix=3}
+assert(math.abs(E.distanceToStop(path,2,{x=0,z=0},stop,0)-13)<.001)
+assert(math.abs(E.distanceToStop(path,3,{x=3,z=10},stop,0)-2)<.001)
+assert(E.distanceToStop(path,4,{x=3,z=13},stop,0)==0)
+local p=envelopeFixture(5.6,11,2,4,17,25,1,60)
+p.approachSpeed=8;local lead=E.deploymentLead(p)
+p.approachSpeed=20;assert(E.deploymentLead(p)==lead)
+""")
+
     def test_long_narrow_angled_field_entries(self):
         self.lua.execute("""
 for _,angle in ipairs({-60,-25,25,60}) do

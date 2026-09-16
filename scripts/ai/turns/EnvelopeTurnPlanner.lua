@@ -31,10 +31,32 @@ E.loweringGateContact = -0.65
 function E.deploymentLead(p, initial)
     local front,back=-math.huge,math.huge
     for _,m in ipairs(p.work) do front=math.max(front,m.z);back=math.min(back,m.z) end
-    local reserve=p.lookahead+((p.approachSpeed or 0)/3.6)^2/2+math.abs(p.slope)*p.width/2
+    -- Deployment space describes the machine and the row, not cruising speed.
+    -- Brake along the incoming route; adding v^2/2 here moves the target into
+    -- the outer boundary when the user raises CP's turn-speed setting.
+    -- Keep a tracking lookahead at both transitions: arrival at the raised
+    -- deployment pose and departure onto the working-position approach.
+    local reserve=2*p.lookahead+math.abs(p.slope)*p.width/2
     local full=math.max(p.length or 0,front-back)+reserve
     if initial then return p.width/2+reserve end
     return full,math.max(p.width,p.length or 0)/2+reserve
+end
+
+-- Remaining course distance to a predicted stopping pose. PPC's current
+-- waypoint leads the tractor; include that lead and subtract the stop's own
+-- offset from its waypoint. Before the final straight, this includes the arc.
+function E.distanceToStop(path,ix,state,stop,heading)
+    local _,straight=E.localPoint(stop,{x=state.x,z=state.z,t=heading})
+    if ix>stop.ix then return math.max(0,straight) end
+    local point=path[ix]
+    local distance=math.sqrt((point.x-state.x)^2+(point.z-state.z)^2)
+    for i=ix,stop.ix-1 do
+        local a,b=path[i],path[i+1]
+        distance=distance+math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)
+    end
+    local last=path[stop.ix]
+    local _,offset=E.localPoint(stop,{x=last.x,z=last.z,t=heading})
+    return math.max(0,distance+offset)
 end
 
 function E.wrap(a)

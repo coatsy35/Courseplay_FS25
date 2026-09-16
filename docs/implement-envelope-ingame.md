@@ -3,8 +3,17 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.31**, packaged mod version **8.1.0.131**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.31` records identify it.
+Current test: **v0.32**, packaged mod version **8.1.0.132**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.32` records identify it.
+
+Version 0.32 separates deployment space from speed-dependent braking. The
+latest failure is reproduced with the saved T7 settings (20 km/h turn, 27 km/h
+field); the previous replay incorrectly used 8 km/h. Braking follows remaining
+route distance, including the arc before the final straight. Deployment space
+retains tracking lookahead at both raised and working-position transitions.
+See [v0.32 qualification](v032-qualification.md).
+
+### Version 0.31
 
 Version 0.31 prepares the field boundary while finishing the row and uses the
 boundary/islands for containment, removing the additional soil-density veto.

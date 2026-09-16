@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.31'
+EnvelopeCourseTurn.TEST_VERSION = '0.32'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -260,6 +260,8 @@ function EnvelopeCourseTurn:logGeometry(p)
         p.radius,p.width,p.hitchX,p.hitchZ,p.length or 0,p.axleOffsetX or 0,p.front,math.deg(math.atan(p.slope)),p.headland)
     self:log('snapshot: start %.3f/%.3f heading %.3f tool %.3f, goal %.3f/%.3f heading %.3f, lookahead %.3f, tractor radius %.3f',
         p.start.x,p.start.z,math.deg(p.start.t),math.deg(p.start.phi),p.goal.x,p.goal.z,math.deg(p.goal.t),p.lookahead,p.trackingRadius or p.radius)
+    self:log('planning inputs: CP turn speed %.2f km/h, field speed %.2f km/h, deployment lead %s m, response length %s, steering response %s',
+        p.approachSpeed,self.settings.fieldSpeed:getValue(),tostring(p.deploymentLead),tostring(p.responseLength),tostring(p.steeringResponseTime))
     self:log('joint yaw limit: %.3f degrees',math.deg(p.maxArticulation))
     for i,b in ipairs(p.bounds or {}) do
         self:log('footprint %d: towed %s, x %.3f/%.3f z %.3f/%.3f, hitch %.3f/%.3f, centred %s, complete scan %s',
@@ -476,16 +478,21 @@ function EnvelopeCourseTurn:getDriveData(dt)
     local deploymentSpeedLimit=math.huge
     if self.needsWorkingGeometry and self.result and (self.result.deploymentLead or self.result.requiresDeployment) and self.result.frames then
         local stop=self.result.deploymentStop
-        if stop and self.ppc:getCurrentWaypointIx()>=self.result.tailStart then
+        if stop then
             local live=EnvelopeTurnGeometry.pose(self.vehicle:getAIDirectionNode())
-            local _,remaining=EnvelopeTurnPlanner.localPoint(stop,{x=live.x,z=live.z,t=self.geometry.goal.t})
+            local ix=self.ppc:getCurrentWaypointIx()
+            local remaining=EnvelopeTurnPlanner.distanceToStop(self.result.path,ix,live,stop,self.geometry.goal.t)
             local _,_,_,_,state=EnvelopeTurnGeometry.assessLive(self.geometry,self.vehicle)
             local yaw=math.abs(EnvelopeTurnPlanner.wrap(state.phi-self.geometry.goal.t))
             local settling=(self.geometry.length or 0)*math.log(math.max(1,
                 yaw/(EnvelopeTurnPlanner.angleTolerance*0.9)))
             local heading=math.abs(EnvelopeTurnPlanner.wrap(state.t-self.geometry.goal.t))
             local turning=math.max(0,heading-EnvelopeTurnPlanner.angleTolerance*0.9)*self.geometry.radius
-            deploymentSpeedLimit=3.6*math.sqrt(math.max(0,2*math.max(remaining,settling,turning)))
+            if ix>=self.result.tailStart then remaining=math.max(remaining,settling,turning) end
+            -- Allow the measured steering response to settle to 95% on approach:
+            -- d = v * responseTime + v^2 / (2a), with a = 1 m/s^2.
+            local response=-math.log(0.05)*(self.measuredSteeringResponse or 0)
+            deploymentSpeedLimit=3.6*(math.sqrt(response*response+math.max(0,2*remaining))-response)
         end
     end
     if self.geometry and self.state~=self.states.ENVELOPE_STOPPED then

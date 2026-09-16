@@ -50,6 +50,9 @@ def audit(archive,output):
               ('v027-default-cp-speeds',{'v027Exit':True,'turnSpeed':8,'fieldSpeed':20})]
     cases += [('v030-measured-exit',{'v030Exit':True}),
               ('v030-measured-exit-lag',{'v030Exit':True,'steeringTimeConstant':.2})]
+    cases += [('v031-saved-cp-speeds',{'v031Exit':True}),
+              ('v031-saved-cp-speeds-lag',{'v031Exit':True,'steeringTimeConstant':.2}),
+              ('v031-saved-cp-speeds-slower-steering',{'v031Exit':True,'steeringTimeConstant':.5})]
     cases += [(f'narrow-1km-angle-{angle}',{'narrowAngle':angle}) for angle in (-60,-25,25,60)]
     with ZipFile(archive) as z:
         runtime={n:z.read(n) for n in z.namelist() if n.endswith('.lua')}
@@ -69,7 +72,7 @@ def audit(archive,output):
             if 'firstExitOffset' in options or 'v023Arrival' in options or 'v024Arrival' in options or 'v025Exit' in options or 'v026Exit' in options or 'v027Exit' in options:
                 points=json.loads((ROOT/'tools/turnbench/fixtures/t7-first-pike-outer-headland.json').read_text())
                 test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
-            if 'v030Exit' in options:
+            if 'v030Exit' in options or 'v031Exit' in options:
                 points=json.loads((ROOT/'tools/turnbench/fixtures/t7-v030-detected-field.json').read_text())
                 test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
             start=time.perf_counter()
@@ -81,13 +84,14 @@ if options.v025Exit then configureV025SecondExit(p,f,savedField) end
 if options.v026Exit then configureV026Exit(p,f,savedField) end
 if options.v027Exit then configureV027Exit(p,f,savedField) end
 if options.v030Exit then configureV030Exit(p,f,savedField) end
+if options.v031Exit then configureV031Exit(p,f,savedField) end
 if options.narrowAngle then p,f=narrowAngledDeploymentFixture(options.narrowAngle) end
 if options.firstExitOffset~=nil then configureRecordedFirstExit(p,f,savedField,options.firstExitOffset) end
 if options.v023Arrival or options.v024Arrival then
     if options.v024Arrival then configureV024Entry(p,f) else configureV023Entry(p,f) end
     f.vehicle.cpGetFieldPolygon=function() return savedField end
 end
-for _,key in ipairs({'timeStep','braking','steeringTimeConstant','physicsLength','turnSpeed','fieldSpeed'}) do p[key]=options[key] end
+for _,key in ipairs({'timeStep','braking','steeringTimeConstant','physicsLength','turnSpeed','fieldSpeed'}) do if options[key]~=nil then p[key]=options[key] end end
 if options.steps then
     p.stepSequence={}
     for i=0,3 do p.stepSequence[i+1]=options.steps[i] end
@@ -112,6 +116,7 @@ end
 attachFieldworkHandover(p,f)
 driveEnvelopeLiveFixture(p,f)
 if options.fieldSpeed then assert(f.peakSpeed>8,'CP configured field speed was capped') end
+if options.v031Exit then assert(f.peakSpeed>20,'saved CP field speed was capped') end
 ''')
             except Exception as exc: error=str(exc)
             f=test.lua.globals().f
