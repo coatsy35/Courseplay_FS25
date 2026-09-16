@@ -22,6 +22,11 @@ end
 -- rotation is permitted. In particular, never deploy a folded plough to measure it.
 function EnvelopeStartRowOnly:prepareInitialPosition()
     if self.vehicle:getLastSpeed()>0.2 then return false end
+    if self.deferPreparation then
+        self.initialNeedsWorkingGeometry=true
+        self.initialPrepared=true
+        return true
+    end
     for _,controller in pairs(self.driveStrategy.controllers) do
         if controller.isRotatablePlow and controller:isRotatablePlow() then
             self.initialNeedsWorkingGeometry=true
@@ -124,6 +129,7 @@ function EnvelopeStartRowOnly:startEntryCheck(needsWorkingGeometry)
     local guard=EnvelopeCourseTurn(self.vehicle,strategy,self.ppc,strategy.proximityController,
         self.turnContext,self.fieldWorkCourse,strategy:getWorkWidth())
     self.guard=guard
+    guard.deferPreparation=self.deferPreparation
     guard.needsWorkingGeometry=needsWorkingGeometry
     guard.entrySlope=EnvelopeTurnGeometry.initialEntrySlope(self.fieldWorkCourse,self.entryIx)
     guard.startPlanning=function(g,path)

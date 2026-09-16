@@ -79,6 +79,38 @@ function configureSavedStraightEntry(p,f,field,arrivalAngle)
     end
 end
 
+-- 16 September 08:50:47: measured centred pose after the first short row.
+-- Field centreline and subsequent working transform are explicit proxies.
+function configureRecordedFirstExit(p,f,field,offsetChange)
+    p.start={x=-156.818,z=-97.468,t=math.rad(.036),phi=math.rad(9.652)}
+    -- Logged target omitted CP's twice-current-offset correction at the
+    -- immediate short-row handover. Offset inferred from saved row -162.87.
+    p.goal={x=-163.328-2*(-.458),z=-110.360,t=-math.pi}
+    p.hitchX=.03;p.hitchZ=-1.649;p.length=11.28;p.axleOffsetX=.04
+    p.slope=math.tan(math.rad(-39.5));p.headland=46.5;p.front=-3.37
+    p.work={{x=-.093,z=-2.715,towed=true},{x=.045,z=-1.717,towed=true},
+        {x=-.093,z=-15.333,towed=true,rear=true},{x=.045,z=-15.333,towed=true,rear=true}}
+    f.vehicle.cpGetFieldPolygon=function() return field end
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    f.context.shouldPlowBeOnTheLeft=function() return true end
+    f.turn.entrySlope=p.slope;f.turn.headlandSeed=p.headland
+    f:setPose(p.start)
+    p.stateFixture=function(current,s)
+        if current.object.playing and g_currentMission.time>=current.object.animationEnd then
+            current.object.animation=current.object.targetAnimation;current.object.playing=false
+            p.work={{x=3.265,z=-2.150,towed=true},{x=-2.286,z=-2.465,towed=true},
+                {x=3.265,z=-16.123,towed=true,rear=true},{x=-2.286,z=-16.123,towed=true,rear=true}}
+            p.length=11.10
+            current.context.workStartNode.x=p.goal.x+offsetChange
+            -- Reuse the earlier observed deployment-frame change as a
+            -- synthetic assumption; this next turnover has not run in game.
+            s.phi=EnvelopeTurnPlanner.wrap(s.phi-math.rad(12.3))
+        end
+    end
+end
+
 function attachFieldworkHandover(p,f)
     local s,t=f.strategy,f.turn
     s.vehicle=f.vehicle;s.settings=f.vehicle:getCpSettings();s.workWidth=p.width;s.ppc=t.ppc

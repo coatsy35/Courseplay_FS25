@@ -34,6 +34,7 @@ def audit(archive,output):
            ('lowering-5cm-sideways',{'lowerShiftX':.05}),
            ('lowering-5cm-forwards',{'lowerShiftZ':.05})]
     cases += [(f'saved-pike-straight-arrival-{angle}',{'savedArrival':angle}) for angle in (0,5,-5,10,-10)]
+    cases += [(f'first-row-exit-offset-{offset}',{'firstExitOffset':offset}) for offset in (0,.5,-.5)]
     with ZipFile(archive) as z:
         runtime={n:z.read(n) for n in z.namelist() if n.endswith('.lua')}
         mismatches=[n for n,data in runtime.items() if (ROOT/n).read_bytes()!=data]
@@ -49,7 +50,7 @@ def audit(archive,output):
             for module in ('EnvelopeTurnPlanner','EnvelopeTurnGeometry','EnvelopeCourseTurn','EnvelopeStartRowOnly'):
                 test.lua.execute(runtime[f'scripts/ai/turns/{module}.lua'].decode())
             test.lua.globals().options=test.lua.table_from(options)
-            if 'savedArrival' in options:
+            if 'savedArrival' in options or 'firstExitOffset' in options:
                 points=json.loads((ROOT/'tools/turnbench/fixtures/t7-first-pike-outer-headland.json').read_text())
                 test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
             start=time.perf_counter()
@@ -58,6 +59,7 @@ def audit(archive,output):
                 test.lua.execute('''
 p,f=deploymentFixture(options.side or 1)
 if options.savedArrival~=nil then configureSavedStraightEntry(p,f,savedField,options.savedArrival) end
+if options.firstExitOffset~=nil then configureRecordedFirstExit(p,f,savedField,options.firstExitOffset) end
 for _,key in ipairs({'timeStep','braking','steeringTimeConstant','physicsLength'}) do p[key]=options[key] end
 if options.steps then
     p.stepSequence={}

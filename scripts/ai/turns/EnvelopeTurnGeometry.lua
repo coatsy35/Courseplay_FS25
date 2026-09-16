@@ -461,8 +461,11 @@ function G.capture(turn)
     local cache={}
     p.contains=function(x,z)
         local ix,iz=math.floor(x*4+0.5),math.floor(z*4+0.5)
-        local key=ix..':'..iz
-        if cache[key]~=nil then return cache[key] end
+        -- Numeric grid keys avoid allocating a coordinate string for every
+        -- sampled corner, while retaining exactly the same grid and reserve.
+        local column=cache[ix]
+        if not column then column={};cache[ix]=column end
+        if column[iz]~=nil then return column[iz] end
         local q={x=ix/4,z=iz/4}
         local valid=fieldCheck(q)
         if valid then
@@ -472,7 +475,7 @@ function G.capture(turn)
             end
         end
         if valid then valid=CpFieldUtil.isOnField(q.x,q.z) and true or false end
-        cache[key]=valid
+        column[iz]=valid
         return valid
     end
     p.workedSide=G.workedSide(turn)

@@ -177,7 +177,7 @@ end
 function AIDriveStrategyPlowCourse:getTurnEndSideOffset(isHeadlandTurn)
     -- on headland turns we do not rotate the plow, and since the course already has the offset, nothing to do,
     -- the context will calculate with the offset of the course already, no additional side offset is needed
-    if self:isWorking() and not isHeadlandTurn and self:haveRotatablePlow() then
+    if (self:isWorking() or self.envelopePendingRowTurn) and not isHeadlandTurn and self:haveRotatablePlow() then
         self:updatePlowOffset()
         -- need the double tool offset as the turn end waypoint still has the current offset, but after rotating,
         -- the plow will be on the other side, (one toolOffsetX would put it to 0 only)

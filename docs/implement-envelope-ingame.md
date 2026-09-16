@@ -3,8 +3,21 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.22**, packaged mod version **8.1.0.122**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.22` records identify it.
+Current test: **v0.23**, packaged mod version **8.1.0.123**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.23` records identify it.
+
+Version 0.22 entered work successfully in the 16 September live run, then
+exceeded the stopped planning budget after the first short row. Version 0.23
+preserves CP's plough-side offset at that immediate handover, tries a compact
+raised return turn before longer shapes, and defers initial GIANTS plough
+preparation until the envelope controller confirms the final straight.
+Footprint transforms and clearance-grid lookups are faster without changing
+their sample points, reserves or working-entry tolerances. See
+[v0.23 qualification](v023-qualification.md) for the replay scope and limitations.
+Validation: **96 regression tests and all 30 packaged execution cases pass**.
+The physical v0.23 sequence still requires its first in-game test.
+
+### Version 0.22
 
 Version 0.21 failed the subsequent live first-row entry despite passing its
 offline checks. Version 0.22 addresses that earlier approach: it keeps CP's

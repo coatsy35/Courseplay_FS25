@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.22'
+EnvelopeCourseTurn.TEST_VERSION = '0.23'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -268,6 +268,24 @@ function EnvelopeCourseTurn:checkWorkingPosition()
         if math.abs(EnvelopeTurnPlanner.wrap(live.t-self.geometry.goal.t))>EnvelopeTurnPlanner.angleTolerance or
                 math.abs(lateral)>math.min(0.5,self.geometry.width*0.1) then return true end
         self.deploymentReady=true
+    end
+    if self.deferPreparation then
+        if not self.preparationRequested then
+            self.preparationRequested=true
+            self.rotationStarted=g_currentMission.time
+            self.state=self.states.ENVELOPE_ROTATING
+            self.driveStrategy:prepareForFieldWork()
+            self:log('preparing plough on confirmed final straight')
+            return false -- allow GIANTS to start its physical animation
+        end
+        for _,controller in pairs(self.driveStrategy.controllers) do
+            if controller.isRotatablePlow and controller:isRotatablePlow() and
+                    (controller:isRotationActive() or not controller:getIsPlowRotationAllowed()) then
+                if g_currentMission.time-self.rotationStarted>30000 then self:stopWithReason('plough preparation did not finish') end
+                return false
+            end
+        end
+        self.deferPreparation=false
     end
     self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onTurnEndProgressEvent,
         self:getLowerImplementNode(),false,false,self.turnContext:shouldPlowBeOnTheLeft())

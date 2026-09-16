@@ -447,7 +447,11 @@ function AIDriveStrategyFieldWorkCourse:resumeFieldworkAfterTurn(ix)
     if pendingTurn then
         Logging.info('[CP envelope] %s: preserving short-row turn at waypoint %d on entry hand-off',
             CpUtil.getName(self.vehicle), pendingTurn)
+        -- Entry already settled/lowered, but CP's one-cycle lowering state is
+        -- still active. Preserve the ordinary plough-side offset for this turn.
+        self.envelopePendingRowTurn=true
         self:startTurn(pendingTurn)
+        self.envelopePendingRowTurn=nil
     end
 end
 
@@ -527,11 +531,17 @@ function AIDriveStrategyFieldWorkCourse:startAlignmentTurn(fieldWorkCourse, star
     end
     self.ppc:setShortLookaheadDistance()
     if alignmentCourse then
-        self:prepareForFieldWork()
+        -- GIANTS preparation can unfold/turn the plough before our turn
+        -- controller exists. Defer that event until its checked final straight.
+        local deferPreparation=self.settings.envelopeAlignedTurns:getValue() and
+            not fieldWorkCourse:isOnHeadland(startIx) and self.haveRotatablePlow and
+            self:haveRotatablePlow() and EnvelopeTurnGeometry.supported(self.vehicle)
+        if not deferPreparation then self:prepareForFieldWork() end
         local fm, bm = self:getFrontAndBackMarkers()
         self.turnContext = RowStartOrFinishContext(self.vehicle, fieldWorkCourse, startIx, startIx, self.turnNodes,
                 self:getWorkWidth(), fm, bm, self:getTurnEndSideOffset(false), self:getTurnEndForwardOffset())
         self.workStarter = self:createRowStarter(self.turnContext,alignmentCourse)
+        self.workStarter.deferPreparation=deferPreparation
         self.state = self.states.DRIVING_TO_WORK_START_WAYPOINT
         self:startCourse(self.workStarter:getCourse(), 1)
     else

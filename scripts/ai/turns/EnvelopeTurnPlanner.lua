@@ -148,9 +148,18 @@ end
 -- checks. Field polygons are complemented by GIANTS field-density queries in
 -- the runtime adapter, so an interior non-field patch is not silently ignored.
 function E.checkFootprint(p, state)
+    -- Hundreds of sampled edge points share two rigid transforms. Calculate
+    -- those once per pose, rather than repeating trigonometry and allocating
+    -- a point table for every point in every candidate step.
+    local st,ct=math.sin(state.t),math.cos(state.t)
+    local sp,cp=math.sin(state.phi or state.t),math.cos(state.phi or state.t)
+    local hx=state.x+(p.hitchX or 0)*ct+(p.hitchZ or 0)*st
+    local hz=state.z-(p.hitchX or 0)*st+(p.hitchZ or 0)*ct
     for _, marker in ipairs(p.footprint) do
-        local q = E.marker(p, state, marker)
-        if not p.contains(q.x, q.z) then return false end
+        local x,z
+        if marker.towed then x,z=hx+marker.x*cp+marker.z*sp,hz-marker.x*sp+marker.z*cp
+        else x,z=state.x+marker.x*ct+marker.z*st,state.z-marker.x*st+marker.z*ct end
+        if not p.contains(x,z) then return false end
     end
     return true
 end
@@ -302,6 +311,13 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
         -- correction, not millimetre positioning of folded soil markers.
         local tolerance=p.deploymentTarget and math.min(0.5,p.width*0.1) or
             (optimiseEntry and E.repairEdgeTolerance or E.planningEdgeTolerance)
+        if p.deploymentTarget and p.deploymentTractorOnly then
+            -- This is a raised staging point, not working admission. Match
+            -- the runtime's tractor-on-straight deployment condition; forcing
+            -- folded soil markers to align here excludes useful compact bulbs.
+            local lateral=E.localPoint(s,p.goal)
+            error,angle,rear,balanced=math.abs(lateral),math.abs(E.wrap(s.t-p.goal.t)),lateral,lateral
+        end
         aligned=angle<=E.angleTolerance and error<=tolerance
         local articulation=math.abs(E.wrap(s.t-s.phi))
         maxArticulation=math.max(maxArticulation,articulation)
@@ -400,6 +416,10 @@ function E.newSearch(p)
         staged.goal.t=p.goal.t
         staged.deploymentLead=nil
         staged.deploymentTarget=true
+        -- A row-to-row reversal can deploy on its compact return straight.
+        -- Initial same-direction recoveries retain their stronger settling
+        -- target, which reserves room for their different entry geometry.
+        staged.canCompactReturn=math.abs(E.wrap(p.start.t-p.goal.t))>=math.pi/2
         if p.newTracker then staged.newTracker=function(path,screening) return p.newTracker(path,screening) end end
         local search=E.newSearch(staged)
         return {getProgress=function() return search:getProgress() end,update=function(_,budget)
@@ -456,8 +476,26 @@ function E.newSearch(p)
         and math.abs(hint.biasRatio)<=2 and hint.extensionRatio>=0 and hint.extensionRatio<=10
         and hint.workedSideRelative==(p.workedSide and p.workedSide*E.turnSide(p) or nil)
     if usingHint then bias=hint.biasRatio*p.width*E.turnSide(p) end
+    local compactSeed,compactPending=false,p.canCompactReturn
+    local compactUseful=false
+    local compactIndex=1
+    local candidateModel=p
     local initial=true
     local function nextGroup()
+        if compactSeed then
+            compactIndex=compactIndex+1
+            if compactIndex<=2 then stage,bias,iterations='zero',0,0;return end
+            compactSeed=false;stage,iterations='zero',0
+            bias=usingHint and hint.biasRatio*p.width*E.turnSide(p) or 0
+            return
+        end
+        -- First retain a normally settled candidate if it fits. A compact
+        -- raised return is the bounded alternative, before exhausting dozens
+        -- of longer families against a tight/sloping boundary.
+        if compactPending and compactUseful then
+            compactPending=false;compactSeed=true;stage,bias,iterations='zero',0,0
+            return
+        end
         if usingHint then usingHint=false;stage,bias,iterations='zero',0,0;return end
         ei=ei+1
         if ei>#extensions then ei=1; fi=fi+1 end
@@ -473,23 +511,29 @@ function E.newSearch(p)
             end
         end
         if bi>#bends then return {ok=false,reason=lastReason or 'no aligned candidate',attempts=attempts,rejections=rejections} end
-        local bend=usingHint and hint.bendRatio*p.width or bends[bi]
-        local radius=p.radius*(usingHint and hint.radiusRatio or factors[fi])
-        local extension=usingHint and hint.extensionRatio*p.width or extensions[ei]
-        local loopSide=usingHint and hint.preferWorked and p.workedSide or
-            (not usingHint and preferWorked and p.workedSide or nil)
+        local bend=compactSeed and (compactIndex==1 and 12 or 8) or (usingHint and hint.bendRatio*p.width or bends[bi])
+        local radius=p.radius*(compactSeed and 1.1 or (usingHint and hint.radiusRatio or factors[fi]))
+        local extension=compactSeed and 0 or (usingHint and hint.extensionRatio*p.width or extensions[ei])
+        local loopSide=not compactSeed and (usingHint and hint.preferWorked and p.workedSide or
+            (not usingHint and preferWorked and p.workedSide or nil)) or nil
         local result
         if not simulation then
+            candidateModel=p
+            if compactSeed then
+                candidateModel={}
+                for k,v in pairs(p) do candidateModel[k]=v end
+                candidateModel.deploymentTractorOnly=true
+            end
             path,tail=E.makePath(p,straight+bend,straight,radius,extension,bias,loopSide)
             attempts=attempts+1
             verified=false
-            if path then simulation=E.newSimulation(p,path,tail,0.15,false,false)
+            if path then simulation=E.newSimulation(candidateModel,path,tail,0.15,false,false)
             else result={ok=false,reason='no analytic path'} end
         end
         result=result or simulation:update(budget)
         if not result then return nil end
         if result.ok and not verified then
-            simulation=E.newSimulation(p,path,tail,0.075,true,true)
+            simulation=E.newSimulation(candidateModel,path,tail,0.075,true,true)
             verified=true
             return nil
         end
@@ -497,11 +541,12 @@ function E.newSearch(p)
         if result.ok then
             result.attempts,result.straight,result.bend=attempts,straight,bend
             result.radius,result.extension,result.bias=radius,extension,bias
-            result.usedTurnHint=usingHint and true or false
+            result.usedTurnHint=not compactSeed and usingHint and true or false
             result.preferWorked=loopSide~=nil
             return result
         end
         lastReason=result.reason
+        compactUseful=compactUseful or result.reason=='field boundary'
         rejections[lastReason or 'unknown']=(rejections[lastReason or 'unknown'] or 0)+1
         local err=result.rearError
         if stage=='zero' then
@@ -588,7 +633,18 @@ function E.newApproachSearch(p)
     -- Include both compact and broader entry tangents in the quick screen.
     -- A nearly straight initial approach needs a different cubic from a tool
     -- arriving with substantial residual yaw after a bulb.
-    local families={{1,1,1},{1,2,1},{2,4,1},{1,1,2},{1,2,2},{1,4,4},{3,3,1}}
+    -- Screen a balanced cubic before strongly asymmetric tangents. It avoids
+    -- exhausting the stopped budget on several sharp leads when the measured
+    -- working envelope needs a smooth lateral correction.
+    local families={{1,1,1},{1,2,1},{2,4,1},{1,1,2},{1,2,2},{1,4,4}}
+    if math.abs(E.wrap(p.start.t-p.goal.t))<=E.angleTolerance then
+        table.insert(families,1,{3,3,1})
+    else
+        -- A tractor still pointing across the row needs its measured tangent
+        -- respected first; preserve the established asymmetric correction.
+        families[#families+1]={3,3,1}
+    end
+    ai,bi,si=families[1][1],families[1][2],families[1][3]
     local fastFamilyCount=#families
     local seen={}
     for _,f in ipairs(families) do seen[f[1]..':'..f[2]..':'..f[3]]=true end
