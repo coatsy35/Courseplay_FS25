@@ -325,6 +325,12 @@ end
 
 function AIDriveStrategyDriveToFieldWorkStart:prepareEnvelopeTransport()
     if not self.envelopeEntry then return true end
+    -- GIANTS' completed transport preparation already chose the permitted
+    -- folded position (which may require a side rotation first). Do not
+    -- immediately override it with another centring command. When transport
+    -- folding is disabled, retain CP's normal centred turning preparation.
+    local transportReady=self.settings and self.settings.foldImplementAtEnd:getValue() and
+        self.vehicle:getIsAIReadyToDrive()
     self.envelopeCentredPloughs=self.envelopeCentredPloughs or {}
     for _,object in pairs(self.vehicle:getChildVehicles()) do
         local rotation=object.spec_plow and object.spec_plow.rotationPart
@@ -335,7 +341,7 @@ function AIDriveStrategyDriveToFieldWorkStart:prepareEnvelopeTransport()
                 -- A transport-folded plough cannot safely be turned over.
                 -- Keep it folded. Only centre an already unfolded plough,
                 -- including when the user's transport-fold option is off.
-                if object:getIsPlowRotationAllowed() then
+                if not transportReady and object:getIsPlowRotationAllowed() then
                     PlowCenterTurnEvent.sendEvent(object)
                     return false
                 end

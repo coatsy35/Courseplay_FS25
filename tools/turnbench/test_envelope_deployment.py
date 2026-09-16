@@ -4,6 +4,7 @@ Recorded dimensions/offset change, with synthetic field and planar physics.
 These tests do not claim to reproduce GIANTS collisions or terrain motion.
 """
 import unittest
+import json
 from pathlib import Path
 import test_ingame_envelope
 
@@ -25,6 +26,23 @@ class DeploymentTests(unittest.TestCase):
                 start=source.index(f'function {class_name}:{name}(')
                 end=source.index('\nend',start)+len('\nend')
                 self.lua.execute(f'{class_name}={class_name} or {{}}\n'+source[start:end])
+
+    def test_v023_bent_arrival_replans_before_deployment_and_enters(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-first-pike-outer-headland.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute('''
+local p,f=deploymentFixture(1)
+configureV023Entry(p,f)
+f.vehicle.cpGetFieldPolygon=function() return savedField end
+attachFieldworkHandover(p,f)
+driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.object.sideCommands==1)
+local rejected=false
+for _,message in ipairs(f.logs) do
+    if message:find('insufficient deployment run%-in') then rejected=true end
+end
+assert(rejected,'did not reject the late stock approach before deployment')
+''')
 
     def test_recorded_initial_loop_deploys_and_enters_on_both_sides(self):
         self.lua.execute('''

@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.23'
+EnvelopeCourseTurn.TEST_VERSION = '0.24'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -220,7 +220,13 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
                 end
                 self:log('working-position approach needs local correction: %s, predicted edge error %s m',
                     tostring(result.reason),tostring(result.error))
-                self.planner=EnvelopeTurnPlanner.newApproachSearch(p)
+                if self.needsWorkingGeometry then
+                    -- A raised route that cannot reach its deployment point
+                    -- needs a complete centred manoeuvre, not a working-entry
+                    -- correction evaluated against folded soil markers.
+                    p.initialApproachRecovery=true
+                    self.planner=EnvelopeTurnPlanner.newSearch(p)
+                else self.planner=EnvelopeTurnPlanner.newApproachSearch(p) end
                 return nil
             end}
         else self.planner=EnvelopeTurnPlanner.newSearch(p) end

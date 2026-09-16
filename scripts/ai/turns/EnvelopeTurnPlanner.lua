@@ -327,8 +327,14 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
             frames[#frames+1]={x=s.x,z=s.z,t=s.t,phi=s.phi,distance=travelled,contact=contact,aligned=aligned,ix=ix}
         end
         if p.deploymentApproach and ix>=tailStart then
-            local lateral=E.localPoint(s,p.goal)
+            local lateral,longitudinal=E.localPoint(s,p.goal)
             if math.abs(E.wrap(s.t-p.goal.t))<=E.angleTolerance and math.abs(lateral)<=math.min(0.5,p.width*0.1) then
+                -- A stock approach can reach its straight too late to deploy
+                -- and correct the working-side offset. Reject it while still
+                -- raised, before spending that space or turning the plough.
+                if p.deploymentLead and -longitudinal<p.deploymentLead then
+                    return finish({ok=false,reason='insufficient deployment run-in'})
+                end
                 -- Only the raised route TO deployment is admitted here.
                 -- Execution must stop for turnover and remeasure/revalidate
                 -- the working shape before it may follow the remaining line.
@@ -476,7 +482,14 @@ function E.newSearch(p)
         and math.abs(hint.biasRatio)<=2 and hint.extensionRatio>=0 and hint.extensionRatio<=10
         and hint.workedSideRelative==(p.workedSide and p.workedSide*E.turnSide(p) or nil)
     if usingHint then bias=hint.biasRatio*p.width*E.turnSide(p) end
-    local compactSeed,compactPending=false,p.canCompactReturn
+    -- An already bent initial arrival must draw forwards before curling back.
+    -- Otherwise the shortest bulb immediately tightens the existing hitch
+    -- angle. Seed a compact return with a geometry-derived outgoing lead;
+    -- simulation still checks the complete footprint and joint limits.
+    local initialRecovery=p.deploymentTarget and p.initialApproachRecovery
+    local recoveryLead=initialRecovery and math.max(p.radius,
+        (p.length or 0)*math.abs(math.sin(E.wrap(p.start.t-p.start.phi)))) or 0
+    local compactSeed,compactPending=initialRecovery,p.canCompactReturn
     local compactUseful=false
     local compactIndex=1
     local candidateModel=p
@@ -511,9 +524,10 @@ function E.newSearch(p)
             end
         end
         if bi>#bends then return {ok=false,reason=lastReason or 'no aligned candidate',attempts=attempts,rejections=rejections} end
-        local bend=compactSeed and (compactIndex==1 and 12 or 8) or (usingHint and hint.bendRatio*p.width or bends[bi])
+        local bend=compactSeed and (initialRecovery and (compactIndex==1 and 8 or 12) or
+            (compactIndex==1 and 12 or 8)) or (usingHint and hint.bendRatio*p.width or bends[bi])
         local radius=p.radius*(compactSeed and 1.1 or (usingHint and hint.radiusRatio or factors[fi]))
-        local extension=compactSeed and 0 or (usingHint and hint.extensionRatio*p.width or extensions[ei])
+        local extension=compactSeed and recoveryLead or (usingHint and hint.extensionRatio*p.width or extensions[ei])
         local loopSide=not compactSeed and (usingHint and hint.preferWorked and p.workedSide or
             (not usingHint and preferWorked and p.workedSide or nil)) or nil
         local result

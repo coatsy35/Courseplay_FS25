@@ -3,8 +3,18 @@
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.23**, packaged mod version **8.1.0.123**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.23` records identify it.
+Current test: **v0.24**, packaged mod version **8.1.0.124**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.24` records identify it.
+
+Version 0.24 rejects a retained stock approach if it reaches the deployment
+straight with too little run-in. The raised recovery draws forwards before a
+compact return, reducing the existing hitch angle rather than immediately
+tightening it. Completed GIANTS transport folding is no longer followed by an
+extra CP centring command. **97 regression tests and 32 packaged execution
+cases pass**. See [v0.24 qualification](v024-qualification.md). In-game physical
+verification remains required.
+
+### Version 0.23
 
 Version 0.22 entered work successfully in the 16 September live run, then
 exceeded the stopped planning budget after the first short row. Version 0.23
@@ -15,7 +25,7 @@ Footprint transforms and clearance-grid lookups are faster without changing
 their sample points, reserves or working-entry tolerances. See
 [v0.23 qualification](v023-qualification.md) for the replay scope and limitations.
 Validation: **96 regression tests and all 30 packaged execution cases pass**.
-The physical v0.23 sequence still requires its first in-game test.
+The subsequent live v0.23 test exposed the late deployment fixed in v0.24.
 
 ### Version 0.22
 

@@ -111,6 +111,42 @@ function configureRecordedFirstExit(p,f,field,offsetChange)
     end
 end
 
+-- v0.23 09:39:50 measured approach pose and 09:40:24 working geometry.
+-- The remaining stock line and hydraulic heading change are reconstructed:
+-- unlike the old cases this arrives bent and changes target 2.131 m LEFT.
+function configureV023Entry(p,f)
+    p.start={x=-156.892,z=-141.964,t=math.rad(-5.521),phi=math.rad(35.833)}
+    p.goal={x=-154.860,z=-118.820,t=0}
+    p.hitchX=.049;p.hitchZ=-1.626;p.length=11.28;p.axleOffsetX=.01
+    p.work={{x=-.031,z=-2.732,towed=true},{x=.018,z=-1.705,towed=true},
+        {x=-.031,z=-15.312,towed=true,rear=true},{x=.018,z=-15.312,towed=true,rear=true}}
+    p.headland=70.6;f.turn.headlandSeed=70.6
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,0
+    end
+    f:setPose(p.start)
+    p.stateFixture=function(current,s)
+        if current.object.playing and g_currentMission.time>=current.object.animationEnd then
+            current.object.animation=current.object.targetAnimation;current.object.playing=false
+            p.work={{x=-3.267,z=-2.147,towed=true},{x=2.284,z=-2.463,towed=true},
+                {x=-3.267,z=-16.114,towed=true,rear=true},{x=2.284,z=-16.114,towed=true,rear=true}}
+            p.length=11.09;p.hitchX=.026;p.hitchZ=-1.645;p.axleOffsetX=.02
+            current.context.workStartNode.x=-156.991
+            s.phi=EnvelopeTurnPlanner.wrap(s.phi-math.rad(12.3))
+        end
+    end
+    p.planFixture=function()
+        local path={{x=p.start.x,z=p.start.z}}
+        for z=p.start.z+1,p.goal.z+12,.5 do path[#path+1]={x=p.goal.x,z=z} end
+        f.turn:startPlanning(path)
+        for i=1,1000 do
+            g_currentMission.time=g_currentMission.time+50;f.turn:updatePlanner()
+            if not f.turn.planner then return assert(f.turn.result,table.concat(f.logs,'\n')) end
+        end
+        error('v0.23 entry planning did not finish')
+    end
+end
+
 function attachFieldworkHandover(p,f)
     local s,t=f.strategy,f.turn
     s.vehicle=f.vehicle;s.settings=f.vehicle:getCpSettings();s.workWidth=p.width;s.ppc=t.ppc

@@ -112,6 +112,12 @@ assert(not prepare(s) and count==1)
 for i=1,180 do assert(not prepare(s) and count==1) end
 playing=false
 assert(prepare(s) and count==1,'repeated centring after animation')
+s.envelopeCentredPloughs=nil
+s.settings={foldImplementAtEnd={getValue=function() return true end}}
+s.vehicle.getIsAIReadyToDrive=function() return true end
+assert(prepare(s) and count==1,'overrode completed GIANTS transport preparation')
+s.envelopeCentredPloughs=nil;playing=true
+assert(not prepare(s),'bypassed a physical transport animation')
 ''')
 
     def test_all_cp_turnover_commands_obey_the_envelope_phase(self):
