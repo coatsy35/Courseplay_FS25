@@ -3,7 +3,11 @@
 Standalone FS25 development mod. Captures independent, reusable machine geometry and optional
 movement recordings. Works from loaded vehicles, including built-in machines. Courseplay is
 optional; when accessible, its effective radius and per-machine override are included as contextual
-observations. Version **0.5.0.0** removes the Drive / camera mode that left a visible
+observations. Version **0.6.0.0** adds **skid** to the optional steering selector.
+Pair it with **twin-track** for a skid-steered twin-track tractor; steering and
+running gear remain independent labels. Existing captured geometry is unchanged.
+
+Version **0.5.0.0** removes the Drive / camera mode that left a visible
 panel with unclickable buttons. Drive normally with the panel open; close **X** for
 free camera rotation and reopen with the capture shortcut or `vgcPanel`.
 The panel stays draggable and restores interaction after Tab. Each dimension save

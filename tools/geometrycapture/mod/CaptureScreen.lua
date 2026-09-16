@@ -153,7 +153,7 @@ function VGCCaptureScreen:draw()
     drawFilledRect(self.x,self.y+self.h-.04,self.w,.04,.1,.35,.23,1)
     setTextAlignment(RenderText.ALIGN_LEFT);setTextColor(1,1,1,1)
     setTextBold(true)
-    renderText(self.x+.012,self.y+self.h-.028,.015,'GEOMETRY CAPTURE v0.5 - drag')
+    renderText(self.x+.012,self.y+self.h-.028,.015,'GEOMETRY CAPTURE v0.6 - drag')
     setTextBold(false)
     for _,b in ipairs(self.buttons) do
         local hover=self.mouseX and inside(b,self.mouseX,self.mouseY)

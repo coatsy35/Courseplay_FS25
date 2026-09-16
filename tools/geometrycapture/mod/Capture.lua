@@ -5,7 +5,7 @@ local C,G = VehicleGeometryCapture,VGCGeometry
 C.categories={'unclassified','front-wheel-steer','four-wheel-steer','articulated','twin-track',
               'mounted','long-trailed','long-narrow-trailed','wide-short-trailed','multiple-pivots'}
 C.tagFields={'steering','runningGear','implement','pivots'}
-C.tagOptions={steering={'unspecified','front-wheel-steer','four-wheel-steer','articulated','not-applicable'},
+C.tagOptions={steering={'unspecified','front-wheel-steer','four-wheel-steer','articulated','not-applicable','skid'},
     runningGear={'unspecified','wheeled','twin-track','four-track','not-applicable'},
     implement={'unspecified','mounted','trailed','long-trailed','long-narrow-trailed','wide-short-trailed','cart','not-applicable'},
     pivots={'unspecified','single-pivot','multiple-pivots','not-applicable'}}
