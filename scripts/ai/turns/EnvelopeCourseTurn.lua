@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.30'
+EnvelopeCourseTurn.TEST_VERSION = '0.31'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -64,11 +64,15 @@ function EnvelopeCourseTurn:updatePreparation()
     local started=getTimeSec()
     local ok,reason=pcall(function()
         if not self.preparationPlanner then
-            -- Loaded courses can lack their field polygon. Do not start field
-            -- detection here or disrupt working; the ordinary stopped path owns
-            -- that fallback. No speculative work is required for correctness.
+            -- Loaded courses can lack the transient field polygon. Start the
+            -- normal asynchronous detector while still finishing the row, and
+            -- retry preparation when it completes instead of disabling it.
+            if self.vehicle.cpIsFieldBoundaryDetectionRunning and self.vehicle:cpIsFieldBoundaryDetectionRunning() then return end
             local polygon=self.vehicle.cpGetFieldPolygon and self.vehicle:cpGetFieldPolygon()
-            if not polygon or #polygon<3 then self.preparationDone=true;return end
+            if not polygon or #polygon<3 then
+                self:requestFieldBoundary()
+                return
+            end
             local p=EnvelopeTurnGeometry.capture(self)
             if not p then self.preparationDone=true;return end
             local exit=EnvelopeTurnGeometry.pose(self.turnContext.workEndNode)
@@ -161,10 +165,16 @@ function EnvelopeCourseTurn:ensureFieldBoundary()
         self:stopWithReason('field boundary detection failed; no valid polygon for this turn')
         return false
     end
+    self:requestFieldBoundary()
+    return false
+end
+
+function EnvelopeCourseTurn:requestFieldBoundary()
+    if self.boundaryStarted or not self.vehicle.cpDetectFieldBoundary then return end
+    local position=EnvelopeTurnGeometry.pose(self.vehicle:getAIDirectionNode())
     self.boundaryStarted=g_currentMission.time
     self:log('detecting field boundary for loaded course at %.2f/%.2f',position.x,position.z)
-    v:cpDetectFieldBoundary(position.x,position.z)
-    return false
+    self.vehicle:cpDetectFieldBoundary(position.x,position.z)
 end
 
 function EnvelopeCourseTurn:startPlanning(remainingPath)

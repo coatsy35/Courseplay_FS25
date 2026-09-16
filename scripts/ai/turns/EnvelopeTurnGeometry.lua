@@ -397,10 +397,11 @@ function G.capture(turn)
                 if not valid then break end
             end
         end
-        if valid then
-            valid=CpFieldUtil.isOnField(q.x,q.z) and true or false
-            if not valid then reason='field ground data' end
-        end
+        -- The detected boundary and islands define this manoeuvre's area.
+        -- Ground density describes soil state, not collision clearance: stock
+        -- CP treats off-field ground as a cost for analytic paths, not a veto.
+        -- Requiring every perimeter sample to have field ground here can reject
+        -- a contained route over a bare patch or a rasterised boundary edge.
         if reason and not p.boundaryFailures[reason] then p.boundaryFailures[reason]=q end
         column[iz]=valid
         return valid

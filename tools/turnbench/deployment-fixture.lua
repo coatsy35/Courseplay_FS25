@@ -193,6 +193,38 @@ function configureV027Exit(p,f,field)
     f:setPose(p.start)
 end
 
+-- v0.30 21:43:26 measured pose, folded footprint and detected field polygon.
+-- The logged footprint is already in the implement direction frame, so this
+-- replay scanner supplies that frame directly. Later deployment remains the
+-- existing measured working-state proxy; terrain dynamics are still synthetic.
+function configureV030Exit(p,f,field)
+    configureV027Exit(p,f,field)
+    p.start={x=-235.316,z=-26.241,t=math.rad(-.033),phi=math.rad(9.815)}
+    p.goal={x=-240.912,z=-40.060,t=-math.pi}
+    p.hitchX=.009;p.hitchZ=-1.633;p.length=11.259;p.axleOffsetX=.003
+    p.work={{x=-.006,z=-2.799,towed=true},{x=.008,z=-1.663,towed=true},
+        {x=-.006,z=-15.227,towed=true,rear=true},{x=.008,z=-15.227,towed=true,rear=true}}
+    p.slope=math.tan(math.rad(-41.7));p.headland=44.7
+    f.turn.entrySlope=p.slope;f.turn.headlandSeed=p.headland
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    addEnvelopeInternalPivotFixture(f,p,1.294)
+    f.object.componentJoints[1].rotLimit[2]=math.pi/2
+    f.vehicle.size={length=4.95,width=2.8,lengthOffset=1.419}
+    local originalScanner=VehicleSizeScanner
+    VehicleSizeScanner=function()
+        local scanner=originalScanner()
+        scanner._measureDimension=function(self,object,reference,distance,ending,axis)
+            self.scannedVehicleFound=true
+            if axis=='x' then return distance>0 and 3.830 or -3.977 end
+            return distance>0 and 11.166 or -5.311
+        end
+        return scanner
+    end
+    f:setPose(p.start)
+end
+
 function attachFieldworkHandover(p,f)
     local s,t=f.strategy,f.turn
     s.vehicle=f.vehicle;s.settings=f.vehicle:getCpSettings();s.workWidth=p.width;s.ppc=t.ppc

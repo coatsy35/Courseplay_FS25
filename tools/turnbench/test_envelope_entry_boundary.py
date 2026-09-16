@@ -50,16 +50,51 @@ assert(calls==1 and result and result.ok,
     'a ready short route must not wait for the broad catalogue to exhaust')
 """)
 
-    def test_boundary_diagnostics_distinguish_ground_data_from_polygon(self):
+    def test_ground_state_does_not_veto_contained_geometry(self):
         self.lua.execute("""
 local f=makeEnvelopeLiveFixture(envelopeFixture(6,11,2,4,16,0,1,55))
 CpFieldUtil.isOnField=function(x,z) return x<10 end
 local p=assert(EnvelopeTurnGeometry.capture(f.turn))
-assert(not p.contains(20,0) and not p.contains(201,0))
-assert(p.boundaryFailures['field ground data'].x==20)
+assert(p.contains(20,0) and not p.contains(201,0))
+assert(not p.boundaryFailures['field ground data'])
 assert(p.boundaryFailures['polygon clearance'].x==201)
 assert(#p.fieldPolygon==4 and #p.bounds==2)
 assert(not p.bounds[1].towed and p.bounds[2].towed)
+""")
+
+    def test_loaded_course_detects_boundary_before_raise_and_resumes_preparation(self):
+        self.lua.execute("""
+local p=envelopeFixture(6,11,2,4,16,0,1,55)
+local f=makeEnvelopeLiveFixture(p);local turn=f.turn
+local original=f.vehicle.cpGetFieldPolygon
+local polygon=nil;local running=false;local requests=0;local searches=0
+f.vehicle.cpGetFieldPolygon=function() return polygon end
+f.vehicle.cpIsFieldBoundaryDetectionRunning=function() return running end
+f.vehicle.cpDetectFieldBoundary=function() requests=requests+1;running=true end
+EnvelopeTurnPlanner.newSearch=function()
+    searches=searches+1
+    return {update=function() return {ok=false,attempts=1} end}
+end
+turn:updatePreparation()
+assert(requests==1 and not turn.preparationDone and searches==0)
+turn:updatePreparation()
+assert(requests==1 and not turn.preparationDone)
+polygon=original();running=false
+turn:updatePreparation()
+assert(searches==1 and turn.preparationDone)
+assert(f.strategy.raised==0 and f.object.lowerCount==0 and not f.vehicle.stopped)
+""")
+
+    def test_ground_state_never_bypasses_an_island(self):
+        self.lua.execute("""
+local f=makeEnvelopeLiveFixture(envelopeFixture(6,11,2,4,16,0,1,55))
+f.vehicle.cpGetIslandPolygons=function()
+ return {{{x=10,z=-5},{x=20,z=-5},{x=20,z=5},{x=10,z=5}}}
+end
+CpFieldUtil.isOnField=function() return true end
+local p=assert(EnvelopeTurnGeometry.capture(f.turn))
+assert(not p.contains(15,0) and p.contains(25,0))
+assert(p.boundaryFailures['island clearance'])
 """)
 
     def test_elapsed_time_does_not_reject_an_unfinished_search(self):

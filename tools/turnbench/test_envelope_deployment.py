@@ -132,6 +132,19 @@ attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
 assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
 """)
 
+    def test_v030_detected_field_and_measured_footprint_reach_fieldwork(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute("""
+local p,f=deploymentFixture(1);configureV030Exit(p,f,savedField)
+-- A soil-data hole must not veto a route within the detected field/islands.
+-- This is a synthetic ground classification, not a replay of the density map.
+CpFieldUtil.isOnField=function() return false end
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+assert(f.initialAttempts<100,'recorded geometry exhausted the broad catalogue')
+""")
+
     def test_long_narrow_angled_field_entries(self):
         self.lua.execute("""
 for _,angle in ipairs({-60,-25,25,60}) do

@@ -48,6 +48,8 @@ def audit(archive,output):
     cases += [('v027-later-exit',{'v027Exit':True}),
               ('v027-later-exit-lag',{'v027Exit':True,'steeringTimeConstant':.2}),
               ('v027-default-cp-speeds',{'v027Exit':True,'turnSpeed':8,'fieldSpeed':20})]
+    cases += [('v030-measured-exit',{'v030Exit':True}),
+              ('v030-measured-exit-lag',{'v030Exit':True,'steeringTimeConstant':.2})]
     cases += [(f'narrow-1km-angle-{angle}',{'narrowAngle':angle}) for angle in (-60,-25,25,60)]
     with ZipFile(archive) as z:
         runtime={n:z.read(n) for n in z.namelist() if n.endswith('.lua')}
@@ -67,6 +69,9 @@ def audit(archive,output):
             if 'firstExitOffset' in options or 'v023Arrival' in options or 'v024Arrival' in options or 'v025Exit' in options or 'v026Exit' in options or 'v027Exit' in options:
                 points=json.loads((ROOT/'tools/turnbench/fixtures/t7-first-pike-outer-headland.json').read_text())
                 test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
+            if 'v030Exit' in options:
+                points=json.loads((ROOT/'tools/turnbench/fixtures/t7-v030-detected-field.json').read_text())
+                test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
             start=time.perf_counter()
             error=None
             try:
@@ -75,6 +80,7 @@ p,f=deploymentFixture(options.side or 1)
 if options.v025Exit then configureV025SecondExit(p,f,savedField) end
 if options.v026Exit then configureV026Exit(p,f,savedField) end
 if options.v027Exit then configureV027Exit(p,f,savedField) end
+if options.v030Exit then configureV030Exit(p,f,savedField) end
 if options.narrowAngle then p,f=narrowAngledDeploymentFixture(options.narrowAngle) end
 if options.firstExitOffset~=nil then configureRecordedFirstExit(p,f,savedField,options.firstExitOffset) end
 if options.v023Arrival or options.v024Arrival then

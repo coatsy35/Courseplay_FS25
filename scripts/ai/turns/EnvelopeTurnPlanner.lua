@@ -165,8 +165,8 @@ end
 
 -- Body edges are sampled too: four corners alone can straddle a concave hedge
 -- or an island. The 0.5 m reserve covers the <=0.4 m spatial samples between
--- checks. Field polygons are complemented by GIANTS field-density queries in
--- the runtime adapter, so an interior non-field patch is not silently ignored.
+-- checks. The runtime adapter supplies the detected field polygon and island
+-- exclusions; ground density is not a substitute for those boundaries.
 function E.checkFootprint(p, state)
     -- Hundreds of sampled edge points share two rigid transforms. Calculate
     -- those once per pose, rather than repeating trigonometry and allocating
