@@ -24,6 +24,19 @@ uses current measured alignment before unfolding, turnover, lowering and work
 handover. The controller must distinguish those operations; a path being found
 is not permission to deploy or lower.
 
+The user observes that an ordinary stock turn almost straightens the trailed
+implement, but starts returning towards the row before travelling far enough
+across. Investigate the placement of that return curve first. Provide room to
+settle before the working edge reaches the row; extending the course further
+into unworked ground does not achieve that. On pikes, preserve stock CP's
+outward turn placement and consider travelling further out before returning.
+The shape is unrestricted: lateral travel of around 20 metres is acceptable
+where space permits, but is not a fixed offset to impose on every combination.
+Practical alignment tolerances are required, not centimetre-perfect tracking.
+
+See `stock-cp-turn-review.md` for the clean-main source review and the distinction
+between confirmed code behaviour and the proposed explanation of the observation.
+
 Represent the complete attachment structure explicitly: vehicle articulation,
 attachment pivots, internal implement pivots, mounted tools and declared wheel
 steering. Do not collapse a chain into one trailer or silently claim equivalent
