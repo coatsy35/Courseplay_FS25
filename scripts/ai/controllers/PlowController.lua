@@ -140,7 +140,11 @@ function PlowController:onTurnEndProgress(workStartNode, reversing, shouldLower,
         if CpMathUtil.isSameDirection(self.implement.rootNode, workStartNode, 30) or shouldLower then
             if self.towed then
                 -- let towed plows remain in the center position while reversing to the start of the row
-                if not reversing then
+                -- Keep pulling forward until the hitch is straighter. Rotating
+                -- while the plough is still angled can catch the tractor's tyre;
+                -- reaching the lowering point must not bypass this clearance.
+                if not reversing and CpMathUtil.isSameDirection(self.implement.rootNode,
+                        self.vehicle:getAIDirectionNode(), 15) then
                     self:debug('Rotating towed plow to working position.')
                     self.implement:setRotationMax(shouldBeOnTheLeft)
                 end

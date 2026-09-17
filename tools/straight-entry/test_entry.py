@@ -296,6 +296,43 @@ class EntryTests(unittest.TestCase):
             end
         ''')
 
+    def test_towed_turnover_waits_for_hitch_clearance_while_driving(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/preparation-fixture.lua').read_text())
+        self.lua.execute("""
+            for _,speed in ipairs({6,20,35}) do
+                for _,side in ipairs({-1,1}) do
+                    local f=preparationFixture(speed,side<0,true)
+                    f.vehicle:getAIDirectionNode().t=0
+                    f.tool.rootNode.t=side*math.rad(20)
+                    assert(f:drive()==speed and f.tool.rotateCount==0 and f.tool.lowerCount==0)
+                    f.tool.rootNode.t=side*math.rad(15.1)
+                    f:position(-.1) -- even a late lowering request cannot bypass clearance
+                    assert(f:drive()==speed and f.tool.rotateCount==0 and f.tool.lowerCount==0)
+                    f.tool.rootNode.t=side*math.rad(14.9)
+                    assert(f:drive()==0 and f.tool.rotateCount==1 and f.tool.lowerCount==0)
+                    f.tool.playing=false; f.tool.animation=1
+                    assert(f:drive()==speed and f.tool.lowerCount==1)
+                end
+            end
+            local mounted=preparationFixture(20,false,true)
+            mounted.controller.towed=false
+            mounted.tool.rootNode.t=math.rad(20)
+            mounted.vehicle:getAIDirectionNode().t=math.rad(-20)
+            assert(mounted:drive()==0 and mounted.tool.rotateCount==1)
+        """)
+
+    def test_bulb_gains_a_little_more_crossing_distance(self):
+        self.lua.execute("""
+            for _,side in ipairs({-1,1}) do
+                local a={x=0,z=17.8,t=0}; local b={x=side*5.6,z=42,t=math.pi}
+                local path,_,solution=PathfinderUtil.findAnalyticPath(PathfinderUtil.dubinsSolver,a,0,0,b,0,0,9)
+                local _,across=BulbTurnExtension.extend(path,solution,5.6,12.5,18)
+                assert(math.abs(across-2.8)<1e-7)
+                local _,tight=BulbTurnExtension.extend(path,solution,5.6,12.5,2)
+                assert(tight<across)
+            end
+        """)
+
     def test_bulb_extension_preserves_prefix_radius_and_row_join(self):
         self.lua.execute("""
             for _,side in ipairs({-1,1}) do

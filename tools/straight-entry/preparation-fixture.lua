@@ -23,7 +23,9 @@ function preparationFixture(speed, side, enabled)
         self.rotateCount=self.rotateCount+1; self.playing=true; self.wanted=wanted
     end
     function tool:aiImplementStartLine() self.lowerCount=self.lowerCount+1 end
+    local directionNode={x=0,z=-14,t=math.rad(20)}
     local vehicle={lastSpeed=speed/3600,getLastSpeed=function() return speed end,
+        getAIDirectionNode=function() return directionNode end,
         getCpSettings=function() return settings end,getChildVehicles=function() return {tool} end,
         raiseStateChange=function() end}
     local controller=setmetatable({vehicle=vehicle,implement=tool,towed=true,

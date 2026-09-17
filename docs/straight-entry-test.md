@@ -1,12 +1,29 @@
-# Straight Entry Test v0.08
+# Straight Entry Test v0.09
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry Test v0.08`.
-Manifest version: `8.1.0.208`. Keep this ZIP filename for subsequent builds.
+In-game title: `CoursePlay - Straight Entry Test v0.09`.
+Manifest version: `8.1.0.209`. Keep this ZIP filename for subsequent builds.
 Enable only this Courseplay version in the test save. Packaging does not write
 to the installed mods folder or overwrite either previous Courseplay ZIP.
 
 ## Change
+
+v0.09 increases the crossing extension from about 2.41 m to 2.80 m for the
+9 m radius, 5.6 m width PW100 combination when there is enough approach distance.
+The radius, field corridor checks and reserved straight approach are unchanged.
+
+Forward towed-plough turnover now also requires the plough and tractor directions
+to be within 15 degrees. The tractor continues at CP's configured speed while
+closing that angle; a lowering request cannot override this check. Once turnover
+starts, the existing animation pause still preserves the remaining approach.
+Mounted-plough and reverse-entry turnover handling remain as before. This is
+an articulation allowance, not a physical swept-volume collision guarantee.
+
+The saved v0.08 log under `out/v008-turnover/game.log` shows PW100 turnover
+starting at 22:03:01.584 and the animation pause holding the combination while
+still angled. The user reports the plough catching the tractor at this point.
+New tests cover both sides, three CP speeds, a late lowering request, continued
+movement before turnover, and mounted-tool compatibility.
 
 v0.08 removes all appended entry kicks, including startup kicks. The approach
 into work is straight again. For calculated Dubins bulbs, it preserves the
@@ -14,7 +31,7 @@ original sampled curve up to its final quarter-circle, extends the crossing
 tangent beyond the row, and returns with two tangent arcs of the original radius.
 The crossing extension is limited by work width, steering length and available
 run-in distance. It reserves 1.5 steering lengths plus hydraulic lead before work.
-For a 9 m radius and 5.6 m width, the maximum extension is about 2.41 m.
+For a 9 m radius and 5.6 m width, the v0.08 maximum extension was about 2.41 m (2.80 m in v0.09).
 
 This applies to calculated bulbs with at least a quarter-circle at their end.
 Mounted tools, short final arcs and entries without sufficient run-in retain
@@ -92,7 +109,7 @@ straight worked edge. The log is preserved locally under
 `out/entry-video-155015/game.log`.
 
 Run `tools/straight-entry/build_test.py` with Python and `lupa` installed.
-The release gate runs packaging tests, 28 regression tests, Lua compilation,
+The release gate runs packaging tests, 30 regression tests, Lua compilation,
 source-scope verification, ZIP byte comparison and the same regressions against
 the extracted ZIP before publishing it.
 

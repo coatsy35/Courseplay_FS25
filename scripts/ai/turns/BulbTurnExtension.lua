@@ -13,7 +13,7 @@ function BulbTurnExtension.extend(path, solution, width, steeringLength, maxAdva
     local radius = descriptor.rho
     -- Two equal-radius arcs bring the tractor back to the row. Their extra
     -- forward travel is 2R sin(a), and their lateral recovery is 2R(1-cos(a)).
-    local advance = math.min(maxAdvance, radius)
+    local advance = math.min(maxAdvance, 1.1 * radius)
     local clearance = 2 * radius * (1 - math.sqrt(1 - (advance / (2 * radius))^2))
     local across = math.min(width / 2, steeringLength / 4, clearance)
     if across < 0.001 then
