@@ -579,6 +579,7 @@ class EntryTests(unittest.TestCase):
                 assert(not t:fitCalculatedTurnToBoundary())
                 assert(c.straightEntryDistance==40 and c.disableBulbExtension==nil and t.turnCourse==original)
                 c.isHeadlandCorner=function() return true end
+                t.settings={loopTurnsOnHeadland={getValue=function() return false end}}
                 t.generateCalculatedTurn=function() error('must not change headland turn selection') end
                 assert(not t:fitCalculatedTurnToBoundary())
             end
@@ -612,6 +613,45 @@ class EntryTests(unittest.TestCase):
                 end
             end
             assert(recovered>=8, 'must exercise real rejected Dubins turns, not just fitting routes')
+        """)
+
+    def test_forward_headland_loop_can_move_inward_without_reversing(self):
+        self.lua.execute("""
+            for _,side in ipairs({-1,1}) do
+                local node={x=0,z=25,t=0}
+                local goal={x=side*10,z=0,t=side*math.pi/2}
+                local v={getAIDirectionNode=function() return node end}
+                local c=setmetatable({frontMarkerDistance=-8.2,backMarkerDistance=-11.1,
+                    turnEndForwardOffset=0,workStartNode=goal,vehicleAtTurnEndNode=goal},TurnContext)
+                c.isHeadlandCorner=function() return true end
+                c.isLeftTurn=function() return side<0 end
+                local t=setmetatable({vehicle=v,turnContext=c,workWidth=25.6,steeringLength=9.8,
+                    turningRadius=10,debug=function() end,
+                    settings={loopTurnsOnHeadland={getValue=function() return true end}}},CourseTurn)
+                -- Quadtrac/Seed Hawk scalar dimensions, synthetic field edge.
+                local top=50
+                v.cpGetFieldPolygon=function() return {{x=-100,z=-100},{x=100,z=-100},
+                    {x=100,z=top},{x=-100,z=top}} end
+                t:generateCalculatedTurn()
+                local b=FieldworkBoundary.forVehicle(v,25.6)
+                local original=t.turnCourse
+                assert(not FieldworkBoundary.containsCourse(b,original))
+                assert(t:fitCalculatedTurnToBoundary())
+                assert(t.turnCourse:isForwardOnly() and FieldworkBoundary.containsCourse(b,t.turnCourse))
+                assert(c.loopTurnPullForward==0 and t.turningRadius==10)
+                local x,_,z=original:getWaypointPosition(original:getNumberOfWaypoints())
+                local nx,_,nz=t.turnCourse:getWaypointPosition(t.turnCourse:getNumberOfWaypoints())
+                assert(math.abs(x-nx)<1e-6 and math.abs(z-nz)<1e-6, 'headland coverage target changed')
+                -- Already fitting paths stay byte-for-byte the same object.
+                local fitted=t.turnCourse
+                assert(t:fitCalculatedTurnToBoundary() and t.turnCourse==fitted)
+                -- No fitting forward loop: do not fall back to reversing or
+                -- retain trial settings from a rejected candidate.
+                top=42; c.loopTurnPullForward=nil;c.loopTurnEntryDistance=nil
+                t:generateCalculatedTurn(); original=t.turnCourse
+                assert(not t:fitCalculatedTurnToBoundary())
+                assert(t.turnCourse==original and c.loopTurnPullForward==nil and c.loopTurnEntryDistance==nil)
+            end
         """)
 
     def test_startup_pathfinder_and_analytic_targets_share_allowance(self):

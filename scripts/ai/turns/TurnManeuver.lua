@@ -492,11 +492,12 @@ function LoopTurnManeuver:init(vehicle, turnContext, vehicleDirectionNode, turni
     self:debug('r=%.1f, w=%.1f, steeringLength=%.1f, endZOffset=%.1f', turningRadius, workWidth, steeringLength, endZOffset)
     -- pull forward a bit to have the implement reach at least the middle of the outgoing edge, so the 270 is
     -- easier to turn into the target direction. May need to increase it depending on user feedback.
-    local pullForward = 0.5 * workWidth
+    local pullForward = turnContext.loopTurnPullForward or 0.5 * workWidth
     self.course = Course.createFromNode(self.vehicle, vehicleDirectionNode,
             0, 0, pullForward, 1, false)
     local path = PathfinderUtil.findAnalyticPath(PathfinderUtil.dubinsSolver,
-            vehicleDirectionNode, 0, pullForward + 0.5, turnEndNode, 0, -steeringLength, turningRadius)
+            vehicleDirectionNode, 0, pullForward + 0.5, turnEndNode, 0,
+            -(turnContext.loopTurnEntryDistance or steeringLength), turningRadius)
     self.course:append(Course.createFromAnalyticPath(self.vehicle, path, true))
     TurnManeuver.setLowerImplements(self.course, steeringLength, true)
     self:applyTightTurnOffsetToAnalyticPath(self.course)

@@ -677,7 +677,10 @@ function CourseTurn:fitCalculatedTurnToBoundary()
     if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then return true end
     local context = self.turnContext
     local requested = context.straightEntryDistance
-    if not requested or requested <= 0 or context:isHeadlandCorner() then return false end
+    if context:isHeadlandCorner() then
+        return self:fitForwardHeadlandLoop(boundary)
+    end
+    if not requested or requested <= 0 then return false end
     local previousBulb = context.disableBulbExtension
     local originalCourse = self.turnCourse
     context.disableBulbExtension = true
@@ -694,6 +697,30 @@ function CourseTurn:fitCalculatedTurnToBoundary()
     end
     context.straightEntryDistance = requested
     context.disableBulbExtension = previousBulb
+    self.turnCourse = originalCourse
+    return false
+end
+
+--- Keep the user's forward-loop choice, but try alternative placements before
+--- giving up. Radius, corner coverage and boundary clearance stay unchanged.
+function CourseTurn:fitForwardHeadlandLoop(boundary)
+    if not self.settings.loopTurnsOnHeadland:getValue() then return false end
+    local context = self.turnContext
+    local originalCourse = self.turnCourse
+    local oldPull, oldEntry = context.loopTurnPullForward, context.loopTurnEntryDistance
+    local entry = math.max(self.steeringLength, self.turningRadius)
+    for _, distance in ipairs({self.steeringLength, entry * 2, entry * 3}) do
+        for _, pull in ipairs({0, self.workWidth / 4, self.workWidth / 2, self.workWidth}) do
+            context.loopTurnPullForward = pull
+            context.loopTurnEntryDistance = distance
+            self:generateCalculatedTurn()
+            if self.turnCourse:isForwardOnly() and FieldworkBoundary.containsCourse(boundary, self.turnCourse) then
+                self:debug('Fitted forward headland loop: pull ahead %.1f m, entry %.1f m', pull, distance)
+                return true
+            end
+        end
+    end
+    context.loopTurnPullForward, context.loopTurnEntryDistance = oldPull, oldEntry
     self.turnCourse = originalCourse
     return false
 end

@@ -1,12 +1,37 @@
-# Straight Entry Test v0.11
+# Straight Entry Test v0.12
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry Test v0.11`.
-Manifest version: `8.1.0.211`. Keep this ZIP filename for subsequent builds.
+In-game title: `CoursePlay - Straight Entry Test v0.12`.
+Manifest version: `8.1.0.212`. Keep this ZIP filename for subsequent builds.
 Enable only this Courseplay version in the test save. Packaging does not write
 to the installed mods folder or overwrite either previous Courseplay ZIP.
 
 ## Change
+
+v0.12 tries alternative placements of an already-selected forward headland
+loop when its original placement fails the field corridor check. It varies the
+initial forward travel (zero, quarter, half and full working width) and approach
+length (stock steering length, then twice and three times the larger of steering
+length and radius). Each complete candidate must be forward-only and remain
+inside the same corridor. The first fitting candidate is retained; failed trials
+restore the original route and parameters. Already-fitting routes are unchanged.
+The user's loop-corner setting, turning radius and headland coverage target are
+preserved. This does not address drill-to-cart contact or establish a safe radius
+for a multi-trailer combination.
+
+Evidence is preserved in `out/latest-stops/game.log`. The Quadtrac's forward
+loop was rejected at 23:44:11; pathfinding exhausted 10,000 iterations and the
+same calculated fallback failed at 23:44:20. Previously the shortened-entry
+fallback explicitly excluded headland corners, leaving no alternative loop
+placement. Regression tests use the logged 25.6 m width, 9.8 m steering length
+and 10 m radius against a synthetic boundary, in both directions, checking
+forward-only routes, unchanged final coverage and failed-trial restoration.
+The actual field polygon and physical tracking still need in-game verification.
+
+The JD did not terminate its job in this snapshot: it reported an unidentified
+obstacle 1.4-1.5 m ahead from 23:46:52 and continued reporting WORKING while
+stationary at waypoint 296. Its collision stop has not been bypassed or changed;
+the blocking object needs identifying before diagnosing a false detection.
 
 v0.11 adds calculated-turn alternatives when the extended entry fails the field
 corridor check. It first removes the extra bulb crossing while keeping the full
@@ -162,7 +187,7 @@ straight worked edge. The log is preserved locally under
 `out/entry-video-155015/game.log`.
 
 Run `tools/straight-entry/build_test.py` with Python and `lupa` installed.
-The release gate runs packaging tests, 33 regression tests, Lua compilation,
+The release gate runs packaging tests, 34 regression tests, Lua compilation,
 source-scope verification, ZIP byte comparison and the same regressions against
 the extracted ZIP before publishing it.
 
