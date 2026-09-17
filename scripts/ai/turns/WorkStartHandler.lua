@@ -43,6 +43,7 @@ end
 --- same time, once all of them are beyond the work start node.
 ---@return number distance between the work start and the implement furthest to the work start in meters,
 ---<0 when driving forward, nil when driving backwards
+---@return boolean waitForPreparation true while deployment needs a stationary wait
 function WorkStartHandler:lowerImplementsAsNeeded(workStartNode, reversing)
     local function lowerThis(object)
         self.objectsAlreadyLowered[object] = true
@@ -52,13 +53,43 @@ function WorkStartHandler:lowerImplementsAsNeeded(workStartNode, reversing)
         object:aiImplementStartLine()
     end
 
-    local allShouldBeLowered, dz = true, 0
+    -- Deliver preparation events for every work object before lowering any of
+    -- them. An event for a later object can start a plough's turnover too.
+    local lowering = {}
     for object in pairs(self.objectsToLower) do
         local shouldLowerThis, thisDz = self:shouldLowerThisImplement(object, workStartNode, reversing)
+        lowering[object] = {shouldLower = shouldLowerThis, dz = thisDz}
         -- this must be called before the implement is lowered, for instance to rotate the plow before lowering it.
         -- ideally, this should all be in the PlowController since it is internal to the plow.
         self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onTurnEndProgressEvent,
                 workStartNode, reversing, shouldLowerThis, self.turnContext:shouldPlowBeOnTheLeft())
+    end
+    local readyToLower, waitForPreparation = true, false
+    if self.turnContext.mountedStraightEntry and not reversing then
+        -- Keep driving to align; a stationary heading wait cannot finish a turn.
+        readyToLower = CpMathUtil.isSameDirection(self.vehicle:getAIDirectionNode(), workStartNode, 5)
+    end
+    -- Stock reverse entry deliberately leaves a towed plough centred until
+    -- lowering; waiting for rotation there would prevent the direction change.
+    if self.turnContext.straightEntryDistance and not reversing then
+        for _, controller in pairs(self.driveStrategy.controllers) do
+            if controller.getTurnEntryPreparationState then
+                local ready, waiting = controller:getTurnEntryPreparationState()
+                readyToLower = readyToLower and ready
+                waitForPreparation = waitForPreparation or waiting
+            end
+        end
+    end
+    if waitForPreparation ~= (self.waitingForPreparation or false) then
+        self.logger:debug(self.vehicle, waitForPreparation and
+                'Straight entry: waiting for turnover before using the remaining approach' or
+                'Straight entry: turnover finished, continuing approach before lowering')
+        self.waitingForPreparation = waitForPreparation
+    end
+
+    local allShouldBeLowered, dz = true, 0
+    for object, request in pairs(lowering) do
+        local shouldLowerThis, thisDz = request.shouldLower and readyToLower, request.dz
         if reversing then
             dz = math.max(dz, thisDz)
             allShouldBeLowered = allShouldBeLowered and shouldLowerThis
@@ -83,7 +114,7 @@ function WorkStartHandler:lowerImplementsAsNeeded(workStartNode, reversing)
         self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onLoweringEvent)
         self.vehicle:raiseStateChange(VehicleStateChange.AI_START_LINE)
     end
-    return dz
+    return dz, waitForPreparation
 end
 
 ---@param object table is a vehicle or implement object with AI markers (marking the working area of the implement)

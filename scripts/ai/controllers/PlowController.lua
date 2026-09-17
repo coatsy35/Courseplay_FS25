@@ -159,3 +159,15 @@ function PlowController:canContinueWork()
         return true
     end
 end
+
+--- Keep deployment separate from working readiness: other controllers may need
+--- their implements lowered before canContinueWork() can ever become true.
+---@return boolean readyToLower
+---@return boolean waitForAnimation pause the straight approach while turnover runs
+function PlowController:getTurnEntryPreparationState()
+    if not self:isRotatablePlow() then
+        return true, false
+    end
+    local rotating = self:isRotationActive()
+    return self:isFullyRotated() and not rotating, rotating
+end

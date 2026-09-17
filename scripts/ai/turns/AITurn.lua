@@ -450,6 +450,9 @@ function CourseTurn:init(vehicle, driveStrategy, ppc, proximityController, turnC
     self.forceTightTurnOffset = false
     self.enableTightTurnOffset = false
     self.fieldWorkCourse = fieldWorkCourse
+    -- Reserve the run-in before generating the turn, not by extending it into unworked ground.
+    self.turnContext:setStraightEntryDistance(self.steeringLength,
+            self.driveStrategy:getLoweringDurationMs(), self.settings.turnSpeed:getValue())
 end
 
 function CourseTurn:getForwardSpeed()
@@ -536,6 +539,11 @@ function CourseTurn:startTurn()
         end
     end
     if self.state == self.states.TURNING then
+        if not FieldworkBoundary.containsCourse(FieldworkBoundary.forVehicle(self.vehicle, self.workWidth), self.turnCourse) then
+            self:debug('Calculated turn leaves the field corridor; using constrained pathfinding')
+            self:generatePathfinderTurn(false)
+            return
+        end
         self.ppc:setCourse(self.turnCourse)
         self.ppc:initialize(1)
     end
@@ -567,7 +575,12 @@ end
 ---@return boolean true if it is ok the continue driving, false when the vehicle should stop
 function CourseTurn:endTurn(dt)
     -- keep driving on the turn course until we need to lower our implements
-    local dz = self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(), self.ppc:isReversing())
+    local dz, waitForPreparation = self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(), self.ppc:isReversing())
+    if waitForPreparation then
+        -- Retain the straightening distance for the implement's working position.
+        -- A stationary wait here is for deployment, never for articulation to settle.
+        return false
+    end
 
     if self.workStartHandler:allLowered() then
         if self.ppc:isReversing() then
@@ -707,7 +720,8 @@ function CourseTurn:generatePathfinderTurn(useHeadland)
             self.turningRadius, self.driveStrategy:getAllowReversePathfinding(),
             useHeadland and self.fieldWorkCourse or nil,
             self.driveStrategy:getWorkWidth(), backMarkerDistance,
-            self.driveStrategy:isTurnOnFieldActive(), self.turnContext:getBoundaryId())
+            self.driveStrategy:isTurnOnFieldActive(), self.turnContext:getBoundaryId(),
+            FieldworkBoundary.forVehicle(self.vehicle, self.workWidth))
     if result.done then
         return self:onPathfindingDone(result.path)
     else
@@ -731,6 +745,11 @@ function CourseTurn:onPathfindingDone(path)
     else
         self:debug('No path found in %d ms, falling back to normal turn course generator', g_currentMission.time - (self.pathfindingStartedAt or 0))
         self:generateCalculatedTurn()
+    end
+    if not FieldworkBoundary.containsCourse(FieldworkBoundary.forVehicle(self.vehicle, self.workWidth), self.turnCourse) then
+        self:debug('No turn route fits the field corridor; stopping instead of using an unchecked fallback')
+        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        return
     end
     self.ppc:setCourse(self.turnCourse)
     self.ppc:initialize(1)
@@ -978,6 +997,8 @@ function StartRowOnly:init(vehicle, driveStrategy, ppc, turnContext, startRowCou
 
     self.forceTightTurnOffset = false
     local _, steeringLength = AIUtil.getSteeringParameters(self.vehicle)
+    self.turnContext:setStraightEntryDistance(steeringLength,
+            self.driveStrategy:getLoweringDurationMs(), self.settings.turnSpeed:getValue())
     self.enableTightTurnOffset = steeringLength > 0
     -- TODO: do we need tight turn offset here?
     self.turnCourse:setUseTightTurnOffsetForLastWaypoints(15)
@@ -986,6 +1007,8 @@ function StartRowOnly:init(vehicle, driveStrategy, ppc, turnContext, startRowCou
     self.turnCourse:setUseTightTurnOffsetForLastWaypoints(endingTurnLength)
     TurnManeuver.setLowerImplements(self.turnCourse, endingTurnLength, true)
     self.turnCourse:adjustForReversing(2)
+    self.entryOutsideBoundary = not FieldworkBoundary.containsCourse(
+            FieldworkBoundary.forVehicle(vehicle, turnContext.workWidth), self.turnCourse)
     self.state = self.states.DRIVING_TO_ROW
 end
 
@@ -995,6 +1018,10 @@ end
 
 --- Implements the usual getDriveData() interface, only ever sets the maximum speed though
 function StartRowOnly:getDriveData()
+    if self.entryOutsideBoundary then
+        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        return nil, nil, nil, 0
+    end
     if self.state == self.states.DRIVING_TO_ROW then
         if TurnManeuver.hasTurnControl(self.turnCourse, self.turnCourse:getCurrentWaypointIx(),
                 TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then
@@ -1002,7 +1029,10 @@ function StartRowOnly:getDriveData()
             self:debug('Approaching row')
         end
     elseif self.state == self.states.APPROACHING_ROW then
-        self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(), self.ppc:isReversing())
+        local _, waitForPreparation = self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(), self.ppc:isReversing())
+        if waitForPreparation then
+            return nil, nil, nil, 0
+        end
         if self.workStartHandler:allLowered() then
             -- have not started lowering implements yet
             self:debug('All implements lowering')

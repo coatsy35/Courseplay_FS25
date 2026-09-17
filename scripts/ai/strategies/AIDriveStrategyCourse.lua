@@ -631,8 +631,24 @@ end
 function AIDriveStrategyCourse:createAlignmentCourse(course, ix)
     self:debug('Generate alignment course to waypoint %d', ix)
     local alignmentCourse = AlignmentCourse(self.vehicle, self.vehicle:getAIDirectionNode(), self.turningRadius,
-            course, ix, math.min(-self.frontMarkerDistance, -1)):getCourse()
+            course, ix, self:getWorkStartApproachOffset(math.min(-self.frontMarkerDistance, -1), course, ix)):getCourse()
     return alignmentCourse
+end
+
+--- Reserve the same straight approach as row turns, before the selected waypoint.
+--- Mounted equipment only needs steering settlement and hydraulic lead.
+function AIDriveStrategyCourse:getWorkStartApproachOffset(stockOffset, course, ix)
+    local _, steeringLength = AIUtil.getSteeringParameters(self.vehicle)
+    local settling, lowering = TurnContext.getStraightEntryAllowance(steeringLength,
+            AIUtil.findLoweringDurationMs(self.vehicle), self.settings.turnSpeed:getValue(),
+            steeringLength <= 0 and self.turningRadius or nil)
+    local offset = math.min(stockOffset, -self.frontMarkerDistance - settling - lowering)
+    if course then
+        local x, _, z = course:getWaypointPosition(ix)
+        offset = FieldworkBoundary.fitOffset(FieldworkBoundary.forVehicle(self.vehicle, self.workWidth),
+                x, z, math.rad(course:getWaypointAngleDeg(ix)), offset)
+    end
+    return offset
 end
 
 -- remember a course to start

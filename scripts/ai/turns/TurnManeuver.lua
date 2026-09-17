@@ -404,6 +404,15 @@ function AnalyticTurnManeuver:init(vehicle, turnContext, vehicleDirectionNode, t
     local endingTurnLength
     local dBack = self:getDistanceToMoveBack(self.course, workWidth, distanceToFieldEdge)
     local canReverse = AIUtil.canReverse(vehicle)
+    if dBack > 0 and not canReverse and self.turnContext.straightEntryDistance then
+        -- Do not spend field space the combination cannot recover by reversing.
+        -- Preserve the original manoeuvre when the longer approach cannot fit.
+        turnEndNode, endZOffset = self.turnContext:getTurnEndNodeAndOffsets(self.steeringLength, false)
+        endZOffset = math.min(dz, endZOffset)
+        self:debug('Straight entry allowance does not fit and reversing is unavailable; retaining stock approach')
+        self.course = self:findAnalyticPath(vehicleDirectionNode, 0, 0, turnEndNode, self.turnEndXOffset, endZOffset, self.turningRadius)
+        dBack = self:getDistanceToMoveBack(self.course, workWidth, distanceToFieldEdge)
+    end
     if dBack > 0 and canReverse then
         dBack = dBack < 2 and 2 or dBack
         self:debug('Not enough space on field, regenerating course back %.1f meters', dBack)
@@ -454,8 +463,18 @@ end
 
 function DubinsTurnManeuver:findAnalyticPath(startNode, startXOffset, startZOffset, endNode,
                                              endXOffset, endZOffset, turningRadius)
-    local path = PathfinderUtil.findAnalyticPath(PathfinderUtil.dubinsSolver,
+    local path, _, solution = PathfinderUtil.findAnalyticPath(PathfinderUtil.dubinsSolver,
             startNode, startXOffset, startZOffset, endNode, endXOffset, endZOffset, self.turningRadius)
+    if self.turnContext.straightEntryDistance and self.steeringLength > 0 then
+        local _, _, goalZ = localToLocal(endNode, self.turnContext.vehicleAtTurnEndNode,
+                endXOffset, 0, endZOffset)
+        local available = -goalZ - 1.5 * self.steeringLength - self.turnContext.entryLoweringDistance
+        local across
+        path, across = BulbTurnExtension.extend(path, solution, self.workWidth, self.steeringLength, available)
+        if across > 0 then
+            self:debug('Straight entry: bulb crossing extended %.2f m at unchanged radius %.1f', across, self.turningRadius)
+        end
+    end
     return Course.createFromAnalyticPath(self.vehicle, path, true)
 end
 

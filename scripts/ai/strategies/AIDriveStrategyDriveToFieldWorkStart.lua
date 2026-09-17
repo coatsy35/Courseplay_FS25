@@ -160,6 +160,8 @@ function AIDriveStrategyDriveToFieldWorkStart:startCourseWithPathfinding(course,
     self:setFrontAndBackMarkers()
 
     local context = PathfinderContext(self.vehicle)
+    self.entryBoundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
+    context._fieldworkBoundary = self.entryBoundary
     context:maxFruitPercent(self.settings.avoidFruit:getValue() and 10 or math.huge)
     -- if there is fruit at the target, create an area around it where the pathfinder ignores the fruit
     -- so there's no penalty driving there. This is to speed up pathfinding when start harvesting for instance
@@ -172,9 +174,8 @@ function AIDriveStrategyDriveToFieldWorkStart:startCourseWithPathfinding(course,
     local _, steeringLength = AIUtil.getSteeringParameters(self.vehicle)
     -- always drive a behind the target waypoint so there's room to straighten out towed implements
     -- a bit before start working
-    self.zOffset = math.min(-self.frontMarkerDistance, -steeringLength)
-    self:debug('Pathfinding to waypoint %d, with zOffset %.1f = min(%.1f, %.1f)', ix, self.zOffset,
-            -self.frontMarkerDistance, -steeringLength)
+    self.zOffset = self:getWorkStartApproachOffset(math.min(-self.frontMarkerDistance, -steeringLength), course, ix)
+    self:debug('Pathfinding to waypoint %d, with approach zOffset %.1f', ix, self.zOffset)
 
     self.pathfinderController:findPathToWaypoint(context, course, ix, 0, self.zOffset, 1)
 end
@@ -191,6 +192,11 @@ function AIDriveStrategyDriveToFieldWorkStart:onPathfindingFinished(controller, 
         self:debug('Pathfinding to start fieldwork failed, using alignment course instead')
         local fieldWorkCourse, ix = self:getRememberedCourseAndIx()
         course = self:createAlignmentCourse(fieldWorkCourse, ix)
+    end
+    if not FieldworkBoundary.containsCourse(self.entryBoundary, course) then
+        self:debug('Work-start route leaves the field corridor; stopping instead of using an unchecked fallback')
+        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        return
     end
     self.state = self.states.PREPARE_TO_DRIVE
     self:startCourse(course, 1)
