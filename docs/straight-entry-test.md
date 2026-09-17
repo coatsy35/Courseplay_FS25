@@ -1,12 +1,35 @@
-# Straight Entry Test v0.09
+# Straight Entry Test v0.10
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry Test v0.09`.
-Manifest version: `8.1.0.209`. Keep this ZIP filename for subsequent builds.
+In-game title: `CoursePlay - Straight Entry Test v0.10`.
+Manifest version: `8.1.0.210`. Keep this ZIP filename for subsequent builds.
 Enable only this Courseplay version in the test save. Packaging does not write
 to the installed mods folder or overwrite either previous Courseplay ZIP.
 
 ## Change
+
+v0.10 replaces the additional tractor-to-plough 15-degree gate with a
+five-degree tractor-to-row check. The plough can remain angled relative to the
+tractor while centred; requiring matching headings could consume the approach.
+CP's existing plough-to-row check (30 degrees, or a lowering request) remains.
+Turnover starts once the tractor is pointing into the row, then the animation
+pause preserves the remaining approach. This is a turn-phase condition, not a
+measurement or guarantee of tyre/plough collision clearance. Bulb geometry,
+configured speeds, mounted turnover and reverse entry are unchanged.
+
+The v0.09 log is saved under `out/v009-turnover/game.log`. The waypoint 544
+turn began turnover at 22:20:43.454, with roughly 28 m of approach remaining.
+The waypoint 580 turn waited until 22:23:00.685, almost at work start. The log
+has no hitch-angle samples, so it does not prove a particular frame offset.
+The captured PW100 has several component directions; the previous test fixture
+incorrectly treated its root and tractor headings as matching on entry.
+A regression with unequal headings fails on v0.09 and passes on v0.10.
+Tests cover both turn sides, three speeds, five plough headings, continued
+movement before alignment, one animation request, no premature lowering, and
+six world headings including wrapping through 180 degrees.
+
+Historical changes below describe the earlier builds; v0.10 supersedes the
+v0.09 extra 15-degree gate.
 
 v0.09 increases the crossing extension from about 2.41 m to 2.80 m for the
 9 m radius, 5.6 m width PW100 combination when there is enough approach distance.
@@ -109,7 +132,7 @@ straight worked edge. The log is preserved locally under
 `out/entry-video-155015/game.log`.
 
 Run `tools/straight-entry/build_test.py` with Python and `lupa` installed.
-The release gate runs packaging tests, 30 regression tests, Lua compilation,
+The release gate runs packaging tests, 31 regression tests, Lua compilation,
 source-scope verification, ZIP byte comparison and the same regressions against
 the extracted ZIP before publishing it.
 

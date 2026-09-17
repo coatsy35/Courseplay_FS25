@@ -296,29 +296,67 @@ class EntryTests(unittest.TestCase):
             end
         ''')
 
-    def test_towed_turnover_waits_for_hitch_clearance_while_driving(self):
+    def test_towed_turnover_starts_on_straight_with_unequal_headings(self):
         self.lua.execute((SOURCE / 'tools/straight-entry/preparation-fixture.lua').read_text())
         self.lua.execute("""
             for _,speed in ipairs({6,20,35}) do
                 for _,side in ipairs({-1,1}) do
-                    local f=preparationFixture(speed,side<0,true)
-                    f.vehicle:getAIDirectionNode().t=0
-                    f.tool.rootNode.t=side*math.rad(20)
-                    assert(f:drive()==speed and f.tool.rotateCount==0 and f.tool.lowerCount==0)
-                    f.tool.rootNode.t=side*math.rad(15.1)
-                    f:position(-.1) -- even a late lowering request cannot bypass clearance
-                    assert(f:drive()==speed and f.tool.rotateCount==0 and f.tool.lowerCount==0)
-                    f.tool.rootNode.t=side*math.rad(14.9)
-                    assert(f:drive()==0 and f.tool.rotateCount==1 and f.tool.lowerCount==0)
-                    f.tool.playing=false; f.tool.animation=1
-                    assert(f:drive()==speed and f.tool.lowerCount==1)
+                    for _,toolHeading in ipairs({-29,-20,0,20,29}) do
+                        local f=preparationFixture(speed,side<0,true)
+                        f.tool.rootNode.t=math.rad(toolHeading)
+                        f.vehicle:getAIDirectionNode().t=side*math.rad(5.1)
+                        assert(f:drive()==speed and f.tool.rotateCount==0 and f.tool.lowerCount==0)
+                        f.vehicle:getAIDirectionNode().t=side*math.rad(4.9)
+                        -- Still 28 m before work: deployment must not require
+                        -- the plough root to match the tractor within 15 degrees.
+                        assert(f:drive()==0 and f.tool.rotateCount==1 and f.tool.lowerCount==0)
+                        assert(f.tool.wanted==(side<0))
+                        assert(f:drive()==0 and f.tool.rotateCount==1)
+                        f.tool.playing=false; f.tool.animation=1
+                        assert(f:drive()==speed and f.tool.lowerCount==0)
+                        f:position(-.1)
+                        assert(f:drive()==speed and f.tool.lowerCount==1)
+                    end
                 end
             end
+            -- Keep the stock implement-to-row condition and reverse behaviour.
+            local f=preparationFixture(20,false,true)
+            f.tool.rootNode.t=math.rad(31)
+            assert(f:drive()==20 and f.tool.rotateCount==0)
+            f.tool.rootNode.t=math.rad(29)
+            f.controller:onTurnEndProgress({x=0,z=0,t=0},true,false,false)
+            assert(f.tool.rotateCount==0)
+            assert(f:drive()==0 and f.tool.rotateCount==1)
             local mounted=preparationFixture(20,false,true)
             mounted.controller.towed=false
-            mounted.tool.rootNode.t=math.rad(20)
             mounted.vehicle:getAIDirectionNode().t=math.rad(-20)
             assert(mounted:drive()==0 and mounted.tool.rotateCount==1)
+        """)
+
+    def test_turnover_trigger_is_independent_of_world_heading(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/preparation-fixture.lua').read_text())
+        self.lua.execute("""
+            for _,heading in ipairs({-179,-95,-45,45,95,179}) do
+                for _,side in ipairs({-1,1}) do
+                    local f=preparationFixture(20,side<0,true)
+                    local target=f.turn:getLowerImplementNode()
+                    local angle=math.rad(heading)
+                    for _,node in ipairs({target,f.vehicle:getAIDirectionNode(),f.tool.rootNode,
+                            f.tool.left,f.tool.right,f.tool.back}) do
+                        local x,z=node.x,node.z
+                        node.x=x*math.cos(angle)+z*math.sin(angle)
+                        node.z=-x*math.sin(angle)+z*math.cos(angle)
+                        node.t=node.t+angle
+                    end
+                    f.tool.rootNode.t=angle+side*math.rad(25)
+                    f.vehicle:getAIDirectionNode().t=angle+side*math.rad(6)
+                    assert(f:drive()==20 and f.tool.rotateCount==0)
+                    f.vehicle:getAIDirectionNode().t=angle
+                    assert(f:drive()==0 and f.tool.rotateCount==1 and f.tool.lowerCount==0)
+                    f.tool.animation=1; f.tool.playing=false
+                    assert(f:drive()==20 and f.tool.lowerCount==0)
+                end
+            end
         """)
 
     def test_bulb_gains_a_little_more_crossing_distance(self):
