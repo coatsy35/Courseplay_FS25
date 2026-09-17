@@ -43,6 +43,8 @@ function deploymentFixture(side)
             t:updatePlanner()
             if not t.planner then
                 f.initialAttempts=t.result and t.result.attempts
+                f.initialPlanningDuration=g_currentMission.time-t.planningStarted
+                f.initialDeploymentOffset=t.geometry.deploymentOffset or 0
                 return assert(t.result,table.concat(log,'\n'))
             end
         end
@@ -209,7 +211,10 @@ function configureV030Exit(p,f,field)
     for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
         node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
     end
-    addEnvelopeInternalPivotFixture(f,p,1.294)
+    if not f.internalPivotFixture then
+        addEnvelopeInternalPivotFixture(f,p,1.294)
+        f.internalPivotFixture=true
+    end
     f.object.componentJoints[1].rotLimit[2]=math.pi/2
     f.vehicle.size={length=4.95,width=2.8,lengthOffset=1.419}
     local originalScanner=VehicleSizeScanner
@@ -279,6 +284,194 @@ function configureV032Exit(p,f,field)
     f.strategy.envelopeWorkingModels={[f.context:shouldPlowBeOnTheLeft() and 'left' or 'right']=model}
     for k,v in pairs(saved) do p[k]=v end
     folded=true;f.object.animation=.5
+    f:setPose(p.start)
+end
+
+-- v0.33 second exit, 17 September 00:07:59. No working cache is supplied.
+-- Dimensions and field are recorded; the hydraulic yaw change is reconstructed
+-- from the last centred TRACK and subsequent working snapshot, not GIANTS physics.
+function configureV033Exit(p,f,field)
+    configureV030Exit(p,f,field)
+    p.start={x=-240.913,z=-164.749,t=math.rad(179.893),phi=math.rad(170.635)}
+    p.goal={x=-246.515,z=-147.870,t=0}
+    p.hitchX=-.032;p.hitchZ=-1.674;p.length=11.306;p.axleOffsetX=-.086
+    p.work={{x=.203,z=-2.588,towed=true},{x=-.082,z=-1.793,towed=true},
+        {x=.203,z=-15.469,towed=true,rear=true},{x=-.082,z=-15.469,towed=true,rear=true}}
+    p.slope=math.tan(math.rad(17.4));p.headland=46.4
+    p.turnSpeed=20;p.fieldSpeed=27;p.steeringTimeConstant=.159405
+    f.context.shouldPlowBeOnTheLeft=function() return false end
+    f.turn.entrySlope=p.slope;f.turn.headlandSeed=p.headland
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    VehicleSizeScanner=function()
+        return {scan=function(_,object)
+            if object==f.object then return 12.897,-5.407,5.213,-7.152 end
+            return 3.894,-1.057,1.399,-1.399
+        end,_measureDimension=function(self,object,reference,distance,ending,axis)
+            self.scannedVehicleFound=true
+            if axis=='x' then return distance>0 and 3.953 or -3.948 end
+            return distance>0 and 11.491 or -5.353
+        end}
+    end
+    p.stateFixture=function(current,state)
+        if current.object.playing and g_currentMission.time>=current.object.animationEnd then
+            current.object.animation=current.object.targetAnimation;current.object.playing=false
+            p.work={{x=-3.260,z=-2.150,towed=true},{x=2.288,z=-2.468,towed=true},
+                {x=-3.260,z=-16.128,towed=true,rear=true},{x=2.288,z=-16.128,towed=true,rear=true}}
+            p.length=11.100;p.hitchX=.031;p.hitchZ=-1.651;p.axleOffsetX=.020
+            state.phi=EnvelopeTurnPlanner.wrap(state.phi-math.rad(9.5))
+        end
+    end
+    f:setPose(p.start)
+end
+
+-- v0.34 row 292 -> 293, 17 September 08:48:58. Recorded centred geometry
+-- and the last measured right-side geometry; animation/tyre dynamics synthetic.
+function configureV034Exit(p,f,field)
+    configureV030Exit(p,f,field)
+    p.start={x=-280.146,z=12.083,t=math.rad(.040),phi=math.rad(9.228)}
+    p.goal={x=-285.728,z=-2.890,t=-math.pi}
+    p.hitchX=.048;p.hitchZ=-1.634;p.length=11.255;p.axleOffsetX=.094
+    p.work={{x=-.220,z=-2.809,towed=true},{x=.100,z=-1.657,towed=true},
+        {x=-.220,z=-15.213,towed=true,rear=true},{x=.100,z=-15.213,towed=true,rear=true}}
+    p.slope=math.tan(math.rad(-34.8));p.headland=43.4
+    p.turnSpeed=20;p.fieldSpeed=27
+    f.context.shouldPlowBeOnTheLeft=function() return false end
+    f.turn.entrySlope=p.slope;f.turn.headlandSeed=p.headland
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    VehicleSizeScanner=function()
+        return {scan=function(_,object)
+            if object==f.object then return 12.268,-5.620,5.917,-3.536 end
+            return 3.894,-1.056,1.397,-1.397
+        end,_measureDimension=function(self,object,reference,distance,ending,axis)
+            self.scannedVehicleFound=true
+            if axis=='x' then return distance>0 and 3.792 or -4.015 end
+            return distance>0 and 11.150 or -5.302
+        end}
+    end
+    p.stateFixture=function(current,state)
+        if current.object.playing and g_currentMission.time>=current.object.animationEnd then
+            current.object.animation=current.object.targetAnimation;current.object.playing=false
+            p.work={{x=3.264,z=-2.174,towed=true},{x=-2.282,z=-2.472,towed=true},
+                {x=3.264,z=-16.154,towed=true,rear=true},{x=-2.282,z=-16.154,towed=true,rear=true}}
+            p.length=11.117;p.hitchX=-.039;p.hitchZ=-1.690;p.axleOffsetX=-.013
+            state.phi=EnvelopeTurnPlanner.wrap(state.phi+math.rad(9.49))
+        end
+    end
+    local saved={};for k,v in pairs(p) do saved[k]=v end
+    local state={};for k,v in pairs(p.start) do state[k]=v end
+    f.object.targetAnimation=0;f.object.playing=true;f.object.animationEnd=0;p.stateFixture(f,state)
+    f:setPose(state)
+    local model=EnvelopeTurnGeometry.turnModel(assert(EnvelopeTurnGeometry.capture(f.turn)))
+    model.deploymentAngle=math.rad(9.49)
+    f.strategy.envelopeWorkingModels={right=model}
+    for k,v in pairs(saved) do p[k]=v end
+    f.object.animation=.5
+    f:setPose(p.start)
+end
+
+-- v0.35, 17 September 09:53:38: actual stopped pose AFTER stock turnover.
+-- Replay this independently of the synthetic animation/arrival approximation.
+function configureV035WorkingArrival(p,f,field)
+    configureV034Exit(p,f,field)
+    p.start={x=-286.501,z=5.772,t=math.rad(179.324),phi=math.rad(-168.941)}
+    p.goal={x=-285.727,z=-2.890,t=-math.pi}
+    p.hitchX=-.056;p.hitchZ=-1.690;p.length=11.116;p.axleOffsetX=-.005
+    p.work={{x=3.252,z=-2.182,towed=true},{x=-2.285,z=-2.471,towed=true},
+        {x=3.252,z=-16.152,towed=true,rear=true},{x=-2.285,z=-16.152,towed=true,rear=true}}
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    VehicleSizeScanner=function() return {scan=function(_,object)
+        if object==f.object then return 12.271,-5.611,5.923,-3.506 end
+        return 3.890,-1.062,1.396,-1.396
+    end} end
+    p.stateFixture=nil;f.object.animation=0
+    f.turn.needsWorkingGeometry=false
+    f.turn.measuredSteeringResponse=.7039764115324976
+    f:setPose(p.start)
+    p.planFixture=function()
+        local remaining={{x=p.start.x,z=p.start.z}}
+        for d=-8,20,.5 do remaining[#remaining+1]=EnvelopeTurnPlanner.point(p.goal.x,p.goal.z,p.goal.t,0,d) end
+        f.turn:startPlanning(remaining)
+        for i=1,10000 do
+            g_currentMission.time=g_currentMission.time+50;f.turn:updatePlanner()
+            if not f.turn.planner then return assert(f.turn.result,table.concat(f.logs,'\n')) end
+        end
+        error('recorded working arrival did not finish planning')
+    end
+end
+
+-- v0.36 stopped run: required working side has not been measured yet.
+function configureV036Exit(p,f,field)
+    configureV034Exit(p,f,field)
+    f.strategy.envelopeWorkingModels=nil
+    p.start={x=-280.206,z=12.038,t=math.rad(.105),phi=math.rad(8.546)}
+    p.goal={x=-285.780,z=-2.890,t=-math.pi}
+    p.hitchX=.048;p.hitchZ=-1.634;p.length=11.256;p.axleOffsetX=.095
+    p.work={{x=-.223,z=-2.806,towed=true},{x=.101,z=-1.658,towed=true},
+        {x=-.223,z=-15.216,towed=true,rear=true},{x=.101,z=-15.216,towed=true,rear=true}}
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    f:setPose(p.start)
+end
+
+-- Independent snapshot replay. Earlier staging translates this measured
+-- arrival upstream; it does not pretend the synthetic turn reproduces tyres
+-- or hydraulic motion. The full turn must pass its own execution test too.
+function configureV036WorkingArrival(p,f,field,leadDelta)
+    configureV035WorkingArrival(p,f,field)
+    p.start={x=-285.789,z=6.176+(leadDelta or 0),t=math.rad(179.283),phi=math.rad(-168.912)}
+    p.goal={x=-285.780,z=-2.890,t=-math.pi}
+    p.hitchZ=-1.689;p.length=11.115;p.axleOffsetX=-.006
+    p.work[1].x=3.253;p.work[3].x=3.253
+    f.turn.measuredSteeringResponse=.6083763711210152
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    f:setPose(p.start)
+end
+
+-- v0.37 opposite-end exit. The geometry is recorded; the pre-centring
+-- calibration is varied independently because its final live pose was not logged.
+function configureV037Exit(p,f,field,angle)
+    configureV032Exit(p,f,field)
+    p.start={x=-285.719,z=-176.227,t=math.rad(179.905),phi=math.rad(170.806)}
+    p.goal={x=-291.319,z=-158.600,t=0};p.slope=math.tan(math.rad(10.8));p.headland=46.8
+    p.length=11.304;p.axleOffsetX=-.109
+    p.work={{x=.257,z=-2.600,towed=true},{x=-.106,z=-1.786,towed=true},
+        {x=.257,z=-15.457,towed=true,rear=true},{x=-.106,z=-15.457,towed=true,rear=true}}
+    local model=f.strategy.envelopeWorkingModels.left or f.strategy.envelopeWorkingModels.right
+    f.strategy.envelopeWorkingModels={left=model};model.deploymentAngle=math.rad(angle)
+    f.context.shouldPlowBeOnTheLeft=function() return true end
+    f.turn.entrySlope=p.slope;f.turn.headlandSeed=p.headland
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
+    f:setPose(p.start)
+end
+
+function configureV037WorkingArrival(p,f,field,offset)
+    configureV035WorkingArrival(p,f,field)
+    f.object.animation=1;f.context.shouldPlowBeOnTheLeft=function() return true end
+    p.start={x=-291.354+(offset or 0),z=-167.027,t=math.rad(.738),phi=math.rad(-11.372)}
+    p.goal={x=-291.319,z=-158.600,t=0};p.slope=math.tan(math.rad(10.8));p.headland=46.8
+    p.length=11.103;p.hitchX=.039;p.hitchZ=-1.652;p.axleOffsetX=.017
+    p.work={{x=-3.256,z=-2.151,towed=true},{x=2.290,z=-2.469,towed=true},
+        {x=-3.256,z=-16.132,towed=true,rear=true},{x=2.290,z=-16.132,towed=true,rear=true}}
+    VehicleSizeScanner=function() return {scan=function(_,object)
+        if object==f.object then return 12.902,-5.405,5.203,-7.158 end
+        return 3.895,-1.058,1.398,-1.398
+    end} end
+    f.turn.entrySlope=p.slope;f.turn.headlandSeed=p.headland
+    f.turn.measuredSteeringResponse=.19582105012941153
+    for _,node in ipairs({f.context.workStartNode,f.context.turnEndWpNode.node}) do
+        node.x,node.z,node.t=p.goal.x,p.goal.z,p.goal.t
+    end
     f:setPose(p.start)
 end
 

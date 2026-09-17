@@ -3,7 +3,7 @@
 -- Only vehicles opting into envelopeAlignedTurns instantiate this strategy.
 EnvelopeCourseTurn = CpObject(CourseTurn)
 -- Temporary test-build label; the packager uses the same value for its title.
-EnvelopeCourseTurn.TEST_VERSION = '0.33'
+EnvelopeCourseTurn.TEST_VERSION = '0.38'
 
 function EnvelopeCourseTurn:init(vehicle,strategy,ppc,proximityController,context,course,width)
     CourseTurn.init(self,vehicle,strategy,ppc,proximityController,context,course,width)
@@ -60,6 +60,33 @@ function EnvelopeCourseTurn:finishRow(dt)
     CourseTurn.finishRow(self,dt)
 end
 
+-- Observe the last outgoing pose immediately before CP centres the plough.
+-- The implement can still settle while FINISHING_ROW drives towards the raise
+-- point; its first pose is not the pose from which centring starts.
+function EnvelopeCourseTurn:onRowFinished()
+    self:rememberWorkingGeometry()
+end
+
+-- Stock CP also unfolds at job start. Observe that working side before the
+-- normal row-finish event centres it, including on the first turn of a job.
+function EnvelopeCourseTurn:rememberWorkingGeometry()
+    if self.outgoingWorkingModel then return end
+    for _,controller in pairs(self.driveStrategy.controllers) do
+        if controller.isRotatablePlow and controller:isRotatablePlow() then
+            if controller:isRotationActive() or not controller:isFullyRotated() then return end
+            local side=controller:isRotatedToSide(true) and 'left' or 'right'
+            local p=EnvelopeTurnGeometry.capture(self,true)
+            if p then
+                self.outgoingWorkingModel=EnvelopeTurnGeometry.turnModel(p)
+                self.outgoingWorkingSide=side
+                self:log('outgoing working side %s at row finish: tractor %.2f, tool %.2f degrees',
+                    side,math.deg(p.start.t),math.deg(p.start.phi))
+            end
+            return
+        end
+    end
+end
+
 function EnvelopeCourseTurn:updatePreparation()
     if self.preparationDone then return end
     local started=getTimeSec()
@@ -88,6 +115,7 @@ function EnvelopeCourseTurn:updatePreparation()
             -- dimensionless shape parameters, never this predicted path.
             local predicted=EnvelopeTurnPlanner.point(exit.x,exit.z,exit.t,0,offset)
             p.start={x=predicted.x,z=predicted.z,t=exit.t,phi=exit.t}
+            p.initialCurvature=0
             local measured=EnvelopeTurnGeometry.applyTurnModel(p,self.driveStrategy.envelopeTurnModel)
             p.turnHint=self.driveStrategy.envelopeTurnHint
             if measured then
@@ -189,6 +217,21 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         if not p then return {ok=false,reason=reason} end
         self.headlandSeed=self.headlandSeed or p.headland
         self.geometry=p
+        if self.needsWorkingGeometry and self.outgoingWorkingModel then
+            local model=self.outgoingWorkingModel
+            -- Compare relative headings: the tractor can move while CP raises
+            -- and centres the implement. This is a preview estimate only;
+            -- deployment still rescans and validates the actual working pose.
+            model.deploymentAngle=EnvelopeTurnPlanner.wrap(model.angle-(p.start.phi-p.start.t))
+            model.steeringResponseTime=self.measuredSteeringResponse
+            self.driveStrategy.envelopeWorkingModels=self.driveStrategy.envelopeWorkingModels or {}
+            if not EnvelopeTurnGeometry.deploymentModel(p,self.driveStrategy.envelopeWorkingModels[self.outgoingWorkingSide]) then
+                self.driveStrategy.envelopeWorkingModels[self.outgoingWorkingSide]=model
+                self:log('learnt outgoing working side %s before centring: estimated deployment heading change %.2f degrees',
+                    self.outgoingWorkingSide,math.deg(model.deploymentAngle))
+            end
+            self.outgoingWorkingModel=nil
+        end
         if self.needsWorkingGeometry then
             if self.initialRowGoal then p.goal=self.initialRowGoal end
             p.deploymentLead=EnvelopeTurnPlanner.deploymentLead(p,self.initialRowGoal~=nil)
@@ -209,7 +252,7 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
         local side=self.turnContext:shouldPlowBeOnTheLeft() and 'left' or 'right'
         if not self.needsWorkingGeometry and self.deploymentPose and not self.workingModelRecorded then
             local model=EnvelopeTurnGeometry.turnModel(p)
-            model.deploymentAngle=EnvelopeTurnPlanner.wrap(p.start.phi-self.deploymentPose.phi)
+            model.deploymentAngle=EnvelopeTurnPlanner.wrap(model.angle-(self.deploymentPose.phi-self.deploymentPose.t))
             model.steeringResponseTime=self.measuredSteeringResponse
             self.driveStrategy.envelopeWorkingModels=self.driveStrategy.envelopeWorkingModels or {}
             self.driveStrategy.envelopeWorkingModels[side]=model
@@ -225,9 +268,10 @@ function EnvelopeCourseTurn:startPlanning(remainingPath)
             local tailStart=EnvelopeTurnPlanner.approachTailStart(p,remainingPath)
             local approachModel={}
             for k,v in pairs(p) do approachModel[k]=v end
-            -- An already driven path is revalidated against the live admission
-            -- limit. New paths still require their additional planning margin.
-            approachModel.validationOnly=true
+            -- Ordinary retained paths use the live admission limit. Once
+            -- response drift invalidates the prediction, reserve the same
+            -- planning margin as a new path before admitting it again.
+            approachModel.validationOnly=not self.approachCorrected
             if self.needsWorkingGeometry then
                 approachModel.deploymentApproach=true
                 tailStart=EnvelopeTurnPlanner.straightTailStart(p,remainingPath)
@@ -275,8 +319,8 @@ function EnvelopeCourseTurn:logGeometry(p)
         p.radius,p.width,p.hitchX,p.hitchZ,p.length or 0,p.axleOffsetX or 0,p.front,math.deg(math.atan(p.slope)),p.headland)
     self:log('snapshot: start %.3f/%.3f heading %.3f tool %.3f, goal %.3f/%.3f heading %.3f, lookahead %.3f, tractor radius %.3f',
         p.start.x,p.start.z,math.deg(p.start.t),math.deg(p.start.phi),p.goal.x,p.goal.z,math.deg(p.goal.t),p.lookahead,p.trackingRadius or p.radius)
-    self:log('planning inputs: CP turn speed %.2f km/h, field speed %.2f km/h, deployment lead %s m, response length %s, steering response %s',
-        p.approachSpeed,self.settings.fieldSpeed:getValue(),tostring(p.deploymentLead),tostring(p.responseLength),tostring(p.steeringResponseTime))
+    self:log('planning inputs: CP turn speed %.2f km/h, field speed %.2f km/h, deployment lead %s m, response length %s, steering response %s, initial curvature %.5f',
+        p.approachSpeed,self.settings.fieldSpeed:getValue(),tostring(p.deploymentLead),tostring(p.responseLength),tostring(p.steeringResponseTime),p.initialCurvature or 0)
     self:log('joint yaw limit: %.3f degrees',math.deg(p.maxArticulation))
     for i,b in ipairs(p.bounds or {}) do
         self:log('footprint %d: towed %s, x %.3f/%.3f z %.3f/%.3f, hitch %.3f/%.3f, centred %s, complete scan %s',
@@ -462,6 +506,10 @@ function EnvelopeCourseTurn:updatePlanner()
             self.geometry.workedSide and (self.geometry.workedSide<0 and 'left' or 'right') or 'unknown',
             tostring(result.preferWorked or false))
     end
+    if result.steeringClearanceChecked then
+        self:log('steering-response sweeps verified at CP field/turn speeds %.2f/%.2f km/h',
+            self.settings.fieldSpeed:getValue(),self.settings.turnSpeed:getValue())
+    end
     if result.usedTurnHint then self:log('turn shape reused and checked against actual raised geometry') end
     if result.hintMarginError then
         self:log('cached entry margin refined: cached worst %.3f m, selected worst %.3f m, %d trials',
@@ -489,7 +537,15 @@ end
 function EnvelopeCourseTurn:getDriveData(dt)
     if self.states.ENVELOPE_ROTATING and self.state==self.states.ENVELOPE_ROTATING then self:updateRotation(); return nil,nil,true,0 end
     if self.state==self.states.ENVELOPE_PREPARING then self:prepare(); return nil,nil,true,0 end
-    if self.state==self.states.ENVELOPE_PLANNING then self:updatePlanner(); return nil,nil,true,0 end
+    if self.state==self.states.ENVELOPE_PLANNING then
+        self:updatePlanner()
+        -- Preserve the measured steering state during the stopped search.
+        if self.geometry then
+            local gx,gz=EnvelopeTurnGeometry.curvatureGoal(self.geometry,self.vehicle,self.geometry.initialCurvature or 0)
+            return gx,gz,true,0
+        end
+        return nil,nil,true,0
+    end
     if self.state==self.states.ENVELOPE_STOPPED then return nil,nil,true,0 end
     local gx,gz,forward,speed=CourseTurn.getDriveData(self,dt)
     -- Brake towards the predicted deployment pose, allowing the live tractor
@@ -522,8 +578,11 @@ function EnvelopeCourseTurn:getDriveData(dt)
         if math.abs(EnvelopeTurnPlanner.wrap(state.t-state.phi))>self.geometry.maxArticulation then
             self:stopWithReason('live articulation exceeds the allowed angle'); return nil,nil,true,0
         end
-        if not EnvelopeTurnPlanner.checkFootprint(self.geometry,state) then
-            self:stopWithReason('live footprint reached the reserved field edge'); return nil,nil,true,0
+        local contained,boundaryX,boundaryZ=EnvelopeTurnPlanner.checkFootprint(self.geometry,state)
+        if not contained then
+            self:stopWithReason(string.format('live footprint reached the reserved field edge at %.3f/%.3f; tractor %.3f/%.3f heading %.2f, tool %.2f',
+                boundaryX,boundaryZ,state.x,state.z,math.deg(state.t),math.deg(state.phi)))
+            return nil,nil,true,0
         end
         if self.entryReleased and not aligned then
             self:stopWithReason(string.format('alignment lost after lowering (edge %.3f m, angle %.2f degrees)',error,math.deg(angle)))
@@ -668,9 +727,14 @@ function EnvelopeCourseTurn:checkApproachTracking(contact,live)
         end
         -- Intervene at the width-relative planning margin while steering
         -- space remains. Smaller drift stays within the live allowance.
-        if deviation<=EnvelopeTurnPlanner.entryTolerance(self.geometry)*0.6 then return true end
+        -- A changed actuator response invalidates the future trajectory even
+        -- before its marker drift is visible. Express the delay difference as
+        -- travel at the current speed, using the same spatial tracking margin.
+        local responseDrift=math.abs((self.measuredSteeringResponse or 0)-(p.steeringResponseTime or 0))*
+            self.vehicle:getLastSpeed()/3.6
+        if math.max(deviation,responseDrift)<=EnvelopeTurnPlanner.entryTolerance(self.geometry)*0.6 then return true end
         self.approachCorrectionPending=true
-        self:log('approach differs from prediction by %.3f m at contact %.2f; stopping for one local correction',deviation,contact)
+        self:log('approach differs from prediction: marker %.3f m, response travel %.3f m at contact %.2f; stopping for one local correction',deviation,responseDrift,contact)
         if self.measuredResponseLength then
             self:log('observed trailer response %.3f m from %d samples; physical lever remains %.3f m',
                 self.measuredResponseLength,#self.responseSamples,p.length)

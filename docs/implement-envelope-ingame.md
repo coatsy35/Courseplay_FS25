@@ -1,10 +1,51 @@
 # In-game envelope turn test
 
+**Experiment retired after another v0.38 in-game failure.** Bench qualification
+did not establish reliability. See [handover](envelope-experiment-handover.md).
+
 Branch: `codex/implement-envelope-ingame`, based on `codex/implement-envelope-turns`.
 The implement-directory changes are maintained separately and are not included.
 
-Current test: **v0.33**, packaged mod version **8.1.0.133**. The ZIP filename
-remains stable; the in-game title and `[CP envelope] v0.33` records identify it.
+Current test: **v0.38**, packaged mod version **8.1.0.138**. The ZIP filename
+remains stable; the in-game title and `[CP envelope] v0.38` records identify it.
+
+Version 0.38 observes outgoing working geometry at the actual row-finish event.
+Stopped replanning preserves the measured steering state, and steering-response
+prediction integrates acceleration from rest in time. Revalidation after a
+response change reserves planning margin before reuse. CP speed settings and
+the live entry tolerance are unchanged. See [v0.38 qualification](v038-qualification.md)
+and the [base turn strategy review](base-turn-strategy-review.md).
+
+### Version 0.37
+
+Version 0.37 searches intermediate deployment distances instead of skipping
+straight to the compact limit. It refreshes an approach when measured steering
+response changes while correction room remains. Broader arrival and consecutive
+turn checks are included in release qualification. See
+[v0.37 qualification](v037-qualification.md).
+
+### Version 0.36
+
+Version 0.36 corrects the steering-delay prediction to include the engine's
+steering-speed adjustment. Entry tolerances and CP speed requests are unchanged.
+The actual stopped, deployed v0.35 arrival is replayed separately from the
+synthetic turnover sequence. See [v0.36 qualification](v036-qualification.md).
+
+### Version 0.35
+
+Version 0.35 validates candidate footprint clearance with steering response at
+both configured CP speed phases before accepting a turn. It rejects the v0.34
+return arc that reached the field reserve, while retaining the existing live
+entry checks. See [v0.35 qualification](v035-qualification.md).
+
+### Version 0.34
+
+Version 0.34 learns the initial working side before stock CP centres the plough.
+It adds cold-start consecutive-turn checks and corrects the bench's missing
+GIANTS steering-speed adjustment. All 112 regression tests and 57 packaged
+driving cases passed. See [v0.34 qualification](v034-qualification.md).
+
+### Version 0.33
 
 Version 0.33 previews the measured working-side correction before selecting
 the raised arrival line. A remembered deployment transform can select a lateral

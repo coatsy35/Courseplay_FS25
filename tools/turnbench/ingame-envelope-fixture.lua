@@ -147,12 +147,14 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
     end
     local s={x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi}
     local speed,elapsed,actualCurvature=0,g_currentMission.time/1000,0
+    f.vehicle.getSteeringRotTimeByCurvature=function(_,curvature) return curvature end
     for tick=1,16000 do
         local dt=p.stepSequence and p.stepSequence[(tick-1)%#p.stepSequence+1] or p.timeStep or 0.05
         elapsed=elapsed+dt
         g_currentMission.time=elapsed*1000
         if p.tickFixture then p.tickFixture(f) end
         if p.stateFixture then p.stateFixture(f,s) end
+        f.vehicle.rotatedTime=actualCurvature
         f.vehicle.speed=speed*3.6
         f.vehicle.lastSpeed=speed/1000
         f:setPose(s)
@@ -161,6 +163,7 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         local gx,gz,forward,limit
         if p.driveDataFixture then gx,gz,forward,limit=p.driveDataFixture(f,dt*1000)
         else gx,gz,forward,limit=t:getDriveData(dt*1000) end
+        f.peakRequestedSpeed=math.max(f.peakRequestedSpeed or 0,limit or 0)
         if f.vehicle.stopped then error('runtime stopped at contact '..tostring(t.lastContact)..'\n'..table.concat(f.logs or {},'\n')) end
         if f.strategy.resumed>0 and (not p.afterHandoverFixture or p.afterHandoverFixture(f,s)) then
             assert(f.object.lowerCount==1)
@@ -169,8 +172,7 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         end
         if not gx then gx,_,gz=t.ppc:getGoalPointPosition() end
         local target=(limit or 0)/3.6
-        speed=math.max(0,speed+math.max(-(p.braking or 2)*dt,math.min((p.acceleration or 1)*dt,target-speed)))
-        local distance=speed*dt
+        local acceleration=p.acceleration or 1
         local dx,dz=gx-s.x,gz-s.z
         -- Physical steering lock belongs to the tractor, not the combination's
         -- planned radius. The production driveGoal must enforce the latter.
@@ -178,12 +180,16 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         local k=math.max(-1/physicalRadius,math.min(1/physicalRadius,
             2*(dx*math.cos(s.t)-dz*math.sin(s.t))/math.max(0.01,dx*dx+dz*dz)))
         -- Optional independent actuator model for robustness checks. The
-        -- planner still assumes instantaneous steering; the executing vehicle
-        -- can now lag its command, including while braking or stationary.
+        -- executing vehicle uses its own response time, which may differ from
+        -- the planner estimate, including while braking or stationary.
         if p.steeringTimeConstant then
+            local requested=k
             actualCurvature=actualCurvature+(k-actualCurvature)*(1-math.exp(-dt/p.steeringTimeConstant))
             k=actualCurvature
+            target,acceleration=envelopeFixtureSteeringSpeed(target,acceleration,requested,k,1/physicalRadius)
         end
+        speed=math.max(0,speed+math.max(-(p.braking or 2)*dt,math.min(acceleration*dt,target-speed)))
+        local distance=speed*dt
         local old=E.point(s.x,s.z,s.t,p.hitchX,p.hitchZ)
         s.x,s.z=s.x+distance*math.sin(s.t+k*distance/2),s.z+distance*math.cos(s.t+k*distance/2)
         s.t=E.wrap(s.t+k*distance)
@@ -196,4 +202,18 @@ function driveEnvelopeLiveFixture(p,preparedFixture)
         elseif not p.length then s.phi=s.t end
     end
     error('runtime did not finish; contact '..tostring(t.lastContact))
+end
+
+-- GIANTS AIVehicleUtil.driveToPoint reduces the requested speed according to
+-- normalised steering error, after advancing the steering actuator. The bench
+-- uses curvature as its steering coordinate; wheel geometry remains synthetic.
+-- FS25 Script v1.20.0.0, AIVehicleUtil lines 67-78:
+-- https://gdn.giants-software.com/documentation_scripting_fs25.php?category=91&class=881&version=script
+-- This models existing engine behaviour, not a new speed cap in the mod.
+function envelopeFixtureSteeringSpeed(speed,acceleration,requested,actual,lock)
+    if speed<=0 then return 0,0 end
+    local error=math.abs(requested-actual)/lock
+    local limited=speed*(1-error^0.25)
+    if limited<1/3.6 then return 1/3.6,0 end
+    return limited,acceleration
 end

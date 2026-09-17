@@ -26,8 +26,8 @@ E.reserve = 0.5
 E.loweringGateContact = -0.65
 
 -- Use the same raised deployment allowance for speculative and live plans.
--- Try the full preparation allowance first, then a compact measured-lever
--- allowance. Every candidate still needs alignment and footprint validation.
+-- Start with the full preparation allowance, then search progressively towards
+-- the compact limit. Every candidate needs alignment and footprint validation.
 function E.deploymentLead(p, initial)
     local front,back=-math.huge,math.huge
     for _,m in ipairs(p.work) do front=math.max(front,m.z);back=math.min(back,m.z) end
@@ -201,7 +201,7 @@ function E.checkFootprint(p, state)
         local x,z
         if marker.towed then x,z=hx+marker.x*cp+marker.z*sp,hz-marker.x*sp+marker.z*cp
         else x,z=state.x+marker.x*ct+marker.z*st,state.z-marker.x*st+marker.z*ct end
-        if not p.contains(x,z) then return false end
+        if not p.contains(x,z) then return false,x,z end
     end
     return true
 end
@@ -308,7 +308,7 @@ end
 -- filter, not GIANTS physics: execution checks live markers again before work.
 -- Explicit resumable state: FS25 removes Lua's coroutine library. Each update
 -- advances a bounded number of samples and retains the tracker between frames.
-function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEntry)
+local function newSimulation(p, path, tailStart, step, boundary, collect, optimiseEntry)
     local tracker=p.newTracker and p.newTracker(path,not collect)
     local function finish(result)
         if tracker then tracker:delete() end
@@ -316,7 +316,8 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
     end
     local s = {x=p.start.x,z=p.start.z,t=p.start.t,phi=p.start.phi or p.start.t}
     local ix, travelled, entered, alignmentLead = 1, 0, false, 0
-    local actualCurvature,speed=0,0
+    local actualCurvature,speed=p.initialCurvature or 0,0
+    local distanceStep=0
     local loweringGatePassed=false
     -- Local steering correction needs an objective over the SAME interval for
     -- every candidate. Stopping at its first failed sample changes the measured
@@ -356,6 +357,9 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
             E.entryTolerance(p)*(p.validationOnly and 1 or (optimiseEntry and 0.8 or 0.6))
         aligned=angle<=E.angleTolerance and error<=tolerance
         if p.deploymentTarget then aligned=aligned and E.canDeploy(p,s) end
+        -- The additional sweep checks collision/joint clearance only. The
+        -- nominal trajectory must still pass every working-entry check.
+        if p.clearanceOnly then aligned=true end
         local articulation=math.abs(E.wrap(s.t-s.phi))
         maxArticulation=math.max(maxArticulation,articulation)
         if p.length and articulation > p.maxArticulation then return finish({ok=false,reason='joint angle'}) end
@@ -380,7 +384,7 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
             end
         end
         if ix >= tailStart then
-            alignmentLead = aligned and (alignmentLead+step) or 0
+            alignmentLead = aligned and (alignmentLead+distanceStep) or 0
             if optimiseEntry and contact>=E.loweringGateContact then
                 entryMin,entryMax=math.min(entryMin,minError),math.max(entryMax,maxError)
             end
@@ -419,20 +423,28 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
         end
         if ix >= #path then break end
         local k=E.pursuitCurvature(p,s,gx,gz)
-        -- Integrate the observed steering delay at the configured approach
-        -- speed, including acceleration from rest and the entry braking curve.
+        -- Integrate steering and acceleration in time at low speed. A whole
+        -- spatial step from rest overstates the time available to steer.
+        distanceStep=step
         if p.steeringResponseTime then
-            local target=(p.approachSpeed or 0)/3.6
-            if not p.deploymentTarget then target=math.min(target,math.sqrt(math.max(0.01,2*(-contact-0.5)))) end
-            local nextSpeed=math.min(target,math.sqrt(speed*speed+2*step))
-            local dt=2*step/math.max(0.1,speed+nextSpeed)
+            local dt=math.min(.05,step/math.max(.1,speed))
             actualCurvature=actualCurvature+(k-actualCurvature)*(1-math.exp(-dt/p.steeringResponseTime))
-            k=actualCurvature;speed=nextSpeed
+            local target=(p.approachSpeed or 0)/3.6
+            if not p.deploymentTarget then target=math.min(target,math.sqrt(math.max(.01,2*(-contact-.5)))) end
+            local acceleration=1
+            if not p.clearanceOnly then
+                local steeringError=math.abs(k-actualCurvature)*(p.trackingRadius or p.radius)
+                target=target*(1-steeringError^.25)
+                if target<1/3.6 then target=1/3.6;acceleration=0 end
+            end
+            speed=math.max(0,speed+math.max(-2*dt,math.min(acceleration*dt,target-speed)))
+            distanceStep=speed*dt
+            k=actualCurvature
         end
         local oldHitch=E.point(s.x,s.z,s.t,p.hitchX,p.hitchZ)
-        s.x=s.x+step*math.sin(s.t+k*step/2)
-        s.z=s.z+step*math.cos(s.t+k*step/2)
-        s.t=E.wrap(s.t+k*step)
+        s.x=s.x+distanceStep*math.sin(s.t+k*distanceStep/2)
+        s.z=s.z+distanceStep*math.cos(s.t+k*distanceStep/2)
+        s.t=E.wrap(s.t+k*distanceStep)
         if p.length then
             local hitch=E.point(s.x,s.z,s.t,p.hitchX,p.hitchZ)
             local hx,hz=hitch.x-oldHitch.x,hitch.z-oldHitch.z
@@ -441,9 +453,53 @@ function E.newSimulation(p, path, tailStart, step, boundary, collect, optimiseEn
             local delta=E.wrap(s.phi-direction)
             s.phi=E.wrap(direction+2*math.atan(math.tan(delta/2)*math.exp(-math.sqrt(hx*hx+hz*hz)/(p.responseLength or p.length))))
         else s.phi=s.t end
-        travelled=travelled+step
+        travelled=travelled+distanceStep
     end
     return finish({ok=false,reason='tracking did not finish',rearError=rearError})
+    end}
+end
+
+-- Validate a promising turn against steering response as well as ideal pursuit.
+-- A uniform buffer around every pose incorrectly rules out usable tight turns:
+-- trace the delayed tractor AND implement instead, with the same field limits.
+-- The extra sweep runs only after nominal fine validation succeeds, and yields
+-- within the same sample budget. Local entry optimisation keeps its measured
+-- response model and live admission checks.
+function E.newSimulation(p,path,tailStart,step,boundary,collect,optimiseEntry)
+    local nominal=newSimulation(p,path,tailStart,step,boundary,collect,optimiseEntry)
+    if not boundary or not collect or p.validationOnly or optimiseEntry then return nominal end
+    local speeds={}
+    for _,speed in ipairs({p.fieldSpeed or 0,p.approachSpeed or 0}) do
+        if speed>0 and speed~=speeds[1] then speeds[#speeds+1]=speed end
+    end
+    if #speeds==0 then return nominal end
+    local result,sweep,index=nil,nil,1
+    return {update=function(_,budget)
+        if not result then
+            local candidate=nominal:update(budget)
+            if not candidate or not candidate.ok then return candidate end
+            result=candidate
+        end
+        if not sweep then
+            local model={};for key,value in pairs(p) do model[key]=value end
+            -- Test both CP speed phases: steering transients are not monotonic
+            -- in speed, so a clear fast sweep does not prove the slower one.
+            -- One pursuit horizon supplies the unlearnt response allowance.
+            model.steeringResponseTime=math.max(p.lookahead/(speeds[index]/3.6),p.steeringResponseTime or 0)
+            model.approachSpeed=speeds[index]
+            model.clearanceOnly=true
+            sweep=newSimulation(model,path,tailStart,step,true,false)
+            return nil
+        end
+        local checked=sweep:update(budget)
+        if not checked then return nil end
+        if not checked.ok then
+            checked.steeringClearanceFailure=true
+            return checked
+        end
+        if index<#speeds then index=index+1;sweep=nil;return nil end
+        result.steeringClearanceChecked=true
+        return result
     end}
 end
 
@@ -535,6 +591,7 @@ end
 -- mind. Centring the folded tool on the row can leave an offset working tool
 -- with no feasible pull-in. Preview the working correction before driving.
 function E.newDeploymentSearch(p,working)
+    working.initialCurvature=0 -- predicted stop on the final straight, not the current wheel angle
     local originalGoal=p.goal
     local _,compact=E.deploymentLead(p,false)
     local pose={x=originalGoal.x,z=originalGoal.z,t=originalGoal.t,
@@ -643,11 +700,15 @@ function E.newSearch(p)
         return {getProgress=function() return previousAttempts+search:getProgress() end,update=function(_,budget)
             local result=search:update(budget)
             if result and not result.ok and compact<lead then
-                previousAttempts=result.attempts or 0
-                lead=compact
+                previousAttempts=previousAttempts+(result.attempts or 0)
+                -- Preserve as much deployment/correction room as the field
+                -- permits. Jumping straight from the full span to half-span
+                -- skipped feasible staging positions on angled headlands.
+                -- Search at the tracking resolution before the compact limit.
+                lead=math.max(compact,lead-p.lookahead)
                 staged.goal=E.point(p.goal.x,p.goal.z,p.goal.t,0,-lead)
                 staged.goal.t=p.goal.t
-                staged.maxCandidates=nil
+                staged.maxCandidates=compact<lead and 32 or nil
                 search=E.newSearch(staged)
                 return nil
             end

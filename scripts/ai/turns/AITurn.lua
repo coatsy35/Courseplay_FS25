@@ -304,6 +304,7 @@ function AITurn:finishRow(dt)
     -- keep driving straight until we need to raise our implements
     self.workEndHandler:raiseImplementsAsNeeded(self:getRaiseImplementNode())
     if self.workEndHandler:allRaised() then
+        if self.onRowFinished then self:onRowFinished() end
         self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onFinishRowEvent, self.turnContext:isHeadlandCorner())
         self:debug('Row finished, starting turn.')
         self:startTurn()

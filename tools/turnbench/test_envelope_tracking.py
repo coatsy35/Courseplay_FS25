@@ -7,6 +7,87 @@ class TrackingTests(unittest.TestCase):
     def setUp(self):
         test_ingame_envelope.InGameEnvelopeTests.setUp(self)
 
+    def test_stopped_replan_preserves_vehicle_steering_mapping(self):
+        self.lua.execute("""
+for _,sign in ipairs({-1,1}) do
+    local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,14.3,1,62)
+    local f=makeEnvelopeLiveFixture(p);local v,t=f.vehicle,f.turn
+    v.maxTurningRadius=5
+    v.getReverserDirection=function() return sign end
+    -- Non-linear mapping exercises sign, magnitude and the vehicle's own API.
+    v.getSteeringRotTimeByCurvature=function(_,k) return math.atan(k*4) end
+    for _,k in ipairs({-.18,-.04,0,.04,.18}) do
+        v.rotatedTime=math.atan(k*4)*sign
+        assert(math.abs(EnvelopeTurnGeometry.steeringCurvature(v)-k)<.00001)
+    end
+    v.rotatedTime=math.atan(-.08*4)*sign
+    t.geometry=assert(EnvelopeTurnGeometry.capture(t))
+    t.states.ENVELOPE_PLANNING={};t.state=t.states.ENVELOPE_PLANNING
+    t.updatePlanner=function() end
+    local gx,gz,forward,speed=t:getDriveData(50)
+    local x,_,z=worldToLocal(v:getAISteeringNode(),gx,0,gz)
+    assert(speed==0 and forward and math.abs(2*x/(x*x+z*z)+.08)<.00001)
+end
+""")
+
+    def test_tight_steering_lock_is_preserved_when_holding(self):
+        self.lua.execute("""
+local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,0,1,62)
+local f=makeEnvelopeLiveFixture(p)
+for _,k in ipairs({-2,2}) do
+    local gx,gz=EnvelopeTurnGeometry.curvatureGoal(p,f.vehicle,k)
+    local x,_,z=worldToLocal(f.vehicle:getAISteeringNode(),gx,0,gz)
+    assert(z>0 and math.abs(2*x/(x*x+z*z)-k)<1e-9)
+end
+""")
+
+    def test_future_deployment_preview_does_not_inherit_current_steering(self):
+        self.lua.execute("""
+local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,14.3,1,62)
+local f=makeEnvelopeLiveFixture(p)
+local q=assert(EnvelopeTurnGeometry.capture(f.turn));q.initialCurvature=.1
+local model=EnvelopeTurnGeometry.turnModel(q);model.deploymentAngle=math.rad(10)
+local working=assert(EnvelopeTurnGeometry.deploymentModel(q,model))
+assert(working.initialCurvature==.1)
+EnvelopeTurnPlanner.newDeploymentSearch(q,working)
+assert(working.initialCurvature==0 and q.initialCurvature==.1)
+""")
+
+    def test_stock_k_turn_permissions_and_towed_exclusion(self):
+        self.lua.execute("""
+local p=envelopeFixture(5.6,11.1,1.6,3.8,17.7,0,1,62)
+local f=makeEnvelopeLiveFixture(p)
+local context={dx=5.6,isHeadlandCorner=function() return false end,
+    getDistanceToFieldEdge=function() return 30 end}
+local reversing,articulated,towed=false,false,false
+AIVehicleUtil={};SpecializationUtil={}
+AIVehicleUtil.getAttachedImplementsAllowTurnBackward=function() return not reversing end
+SpecializationUtil.hasSpecialization=function() return articulated end
+AIUtil.getSteeringParameters=function() return towed and f.object or nil end
+assert(AITurn.canMakeKTurn(f.vehicle,context,5.6,true))
+for _,reason in ipairs({'permission','articulated','towed','separation','space'}) do
+    reversing=reason=='permission';articulated=reason=='articulated';towed=reason=='towed'
+    context.dx=reason=='separation' and 100 or 5.6
+    context.getDistanceToFieldEdge=function() return reason=='space' and 1 or 30 end
+    assert(not AITurn.canMakeKTurn(f.vehicle,context,5.6,true),reason)
+end
+""")
+
+    def test_bench_includes_engine_speed_reduction_while_steering_catches_up(self):
+        self.lua.execute('''
+-- A normalised steering error of 1/16 gives the engine's half-speed factor.
+for _,side in ipairs({-1,1}) do
+    local speed,acceleration=envelopeFixtureSteeringSpeed(8,1,side*.1,side*.0875,.2)
+    assert(math.abs(speed-4)<1e-9 and acceleration==1)
+    speed,acceleration=envelopeFixtureSteeringSpeed(8,1,side*.1,side*.1,.2)
+    assert(speed==8 and acceleration==1,'settled steering must restore the CP request')
+end
+local speed,acceleration=envelopeFixtureSteeringSpeed(8,1,.2,0,.2)
+assert(math.abs(speed-1/3.6)<1e-9 and acceleration==0,'large steering error must stop acceleration')
+speed,acceleration=envelopeFixtureSteeringSpeed(0,1,.2,0,.2)
+assert(speed==0 and acceleration==0,'engine crawl behaviour must never override a stop')
+''')
+
     def test_early_response_estimate_requires_three_consistent_samples(self):
         self.lua.execute('''
 for _,consistent in ipairs({true,false}) do

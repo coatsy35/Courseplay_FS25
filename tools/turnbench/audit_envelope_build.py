@@ -55,7 +55,34 @@ def audit(archive,output):
               ('v031-saved-cp-speeds-slower-steering',{'v031Exit':True,'steeringTimeConstant':.5})]
     cases += [('v032-working-preview',{'v032Exit':True}),
               ('v032-working-preview-slower-steering',{'v032Exit':True,'steeringTimeConstant':.5})]
+    cases += [('v034-return-arc',{'v034Exit':True,'steeringTimeConstant':.365861}),
+              ('v034-return-arc-slow-steering',{'v034Exit':True,'steeringTimeConstant':1}),
+              ('v034-return-arc-default-speeds',{'v034Exit':True,'steeringTimeConstant':.365861,'turnSpeed':8,'fieldSpeed':20}),
+              ('v034-return-arc-higher-speeds',{'v034Exit':True,'steeringTimeConstant':1,'turnSpeed':25,'fieldSpeed':30}),
+              ('v034-return-arc-lower-field-speed',{'v034Exit':True,'steeringTimeConstant':.5,'turnSpeed':25,'fieldSpeed':20}),
+              ('v034-return-arc-irregular-frames',{'v034Exit':True,'steeringTimeConstant':.5,'steps':[1/60,1/30,.1,.05]})]
+    cases += [(f'v035-working-arrival-speed-{speed}-lag-{lag}',
+               {'v035Arrival':True,'turnSpeed':speed,'steeringTimeConstant':lag})
+              for speed in (8,20,25) for lag in (.2,.5,.7039764115324976,1)]
+    cases += [('cold-start-saved-speeds',{'coldSequence':{}}),
+              ('cold-start-default-speeds',{'coldSequence':{'turn_speed':8,'field_speed':20}}),
+              ('cold-start-higher-speeds',{'coldSequence':{'turn_speed':25,'field_speed':30}}),
+              ('cold-start-slower-steering',{'coldSequence':{'steering':.5}}),
+              ('cold-start-one-second-steering',{'coldSequence':{'steering':1}}),
+              ('cold-start-calibration-positive',{'coldSequence':{'initial_angle':1,'deployment_angle':10.5}}),
+              ('cold-start-calibration-negative',{'coldSequence':{'initial_angle':-1,'deployment_angle':8.5}})]
     cases += [(f'narrow-1km-angle-{angle}',{'narrowAngle':angle}) for angle in (-60,-25,25,60)]
+    cases += [(f'cold-matrix-speed-{speed}-lag-{lag}-angle-{angle}',{'coldSequence':{
+        'turn_speed':speed,'field_speed':max(20,speed+5),'steering':lag,
+        'initial_angle':angle,'deployment_angle':9.5+angle}})
+        for speed in (8,20,25) for lag in (.2,.5,1) for angle in (-1,0,1)]
+    cases += [(f'v036-unmeasured-side-speed-{speed}-lag-{lag}',
+               {'v036Exit':True,'turnSpeed':speed,'steeringTimeConstant':lag})
+              for speed in (8,20,25) for lag in (.2,1)]
+    cases += [('v036-staging-and-36-arrival-perturbations',{'v036Stress':True})]
+    cases += [('saved-work-resumption-final-pose',{'coldSequence':{'early_angle':8.3}}),
+              ('v037-calibration-and-81-arrival-variants',{'v037Stress':True}),
+              ('v037-original-late-arrival-rejected',{'v037Negative':True})]
     with ZipFile(archive) as z:
         runtime={n:z.read(n) for n in z.namelist() if n.endswith('.lua')}
         mismatches=[n for n,data in runtime.items() if (ROOT/n).read_bytes()!=data]
@@ -74,13 +101,24 @@ def audit(archive,output):
             if 'firstExitOffset' in options or 'v023Arrival' in options or 'v024Arrival' in options or 'v025Exit' in options or 'v026Exit' in options or 'v027Exit' in options:
                 points=json.loads((ROOT/'tools/turnbench/fixtures/t7-first-pike-outer-headland.json').read_text())
                 test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
-            if 'v030Exit' in options or 'v031Exit' in options or 'v032Exit' in options:
+            if 'v030Exit' in options or 'v031Exit' in options or 'v032Exit' in options or 'v034Exit' in options or 'v035Arrival' in options or 'v036Exit' in options:
                 points=json.loads((ROOT/'tools/turnbench/fixtures/t7-v030-detected-field.json').read_text())
+                if 'v036Exit' in options:
+                    points[0]={'x':-498.75,'z':-235.75};points[16]={'x':-265.25,'z':38.25}
                 test.lua.globals().savedField=test.lua.table_from([test.lua.table_from(p) for p in points])
             start=time.perf_counter()
             error=None
             try:
-                test.lua.execute('''
+                if 'coldSequence' in options:
+                    test.run_cold_start_sequence(**options['coldSequence'])
+                elif 'v037Stress' in options:
+                    test.run_v037_calibration_stress()
+                elif 'v037Negative' in options:
+                    test.test_v037_original_unshifted_arrival_remains_rejected()
+                elif 'v036Stress' in options:
+                    test.run_v036_staging_stress()
+                else:
+                    test.lua.execute('''
 p,f=deploymentFixture(options.side or 1)
 if options.v025Exit then configureV025SecondExit(p,f,savedField) end
 if options.v026Exit then configureV026Exit(p,f,savedField) end
@@ -88,6 +126,9 @@ if options.v027Exit then configureV027Exit(p,f,savedField) end
 if options.v030Exit then configureV030Exit(p,f,savedField) end
 if options.v031Exit then configureV031Exit(p,f,savedField) end
 if options.v032Exit then configureV032Exit(p,f,savedField) end
+if options.v034Exit then configureV034Exit(p,f,savedField) end
+if options.v035Arrival then configureV035WorkingArrival(p,f,savedField) end
+if options.v036Exit then configureV036Exit(p,f,savedField) end
 if options.narrowAngle then p,f=narrowAngledDeploymentFixture(options.narrowAngle) end
 if options.firstExitOffset~=nil then configureRecordedFirstExit(p,f,savedField,options.firstExitOffset) end
 if options.v023Arrival or options.v024Arrival then
@@ -102,7 +143,7 @@ end
 if options.angle then p.slope=math.tan(math.rad(options.angle));f.turn.entrySlope=p.slope end
 local original=p.stateFixture;local shifted=false
 p.stateFixture=function(current,state)
-    original(current,state)
+    if original then original(current,state) end
     if current.turn.lowerRequested and not shifted then
         shifted=true
         for _,marker in ipairs(p.work) do
@@ -118,17 +159,23 @@ p.tickFixture=function(current)
 end
 attachFieldworkHandover(p,f)
 driveEnvelopeLiveFixture(p,f)
-if options.fieldSpeed then assert(f.peakSpeed>8,'CP configured field speed was capped') end
-if options.v031Exit or options.v032Exit then assert(f.peakSpeed>20,'saved CP field speed was capped') end
+-- Check the strategy's CP speed request, before the engine's steering-speed
+-- adjustment. A slow actuator legitimately prevents reaching that road speed;
+-- it must not hide a hard-coded limit in the strategy itself.
+if options.fieldSpeed then assert(math.abs(f.peakRequestedSpeed-math.max(options.fieldSpeed,f.turn.settings.turnSpeed:getValue()))<.001,'CP configured speed was capped') end
+if options.v031Exit or options.v032Exit then assert(math.abs(f.peakRequestedSpeed-27)<.001,'saved CP field speed was capped') end
 ''')
             except Exception as exc: error=str(exc)
-            f=test.lua.globals().f
+            f=test.lua.globals().coldSequenceFixture if 'coldSequence' in options else test.lua.globals().f
+            if 'v036Stress' in options: f=test.lua.globals().v036StressFixture
+            if 'v037Stress' in options: f=test.lua.globals().v037StressFixture
             logs=[v for _,v in f.logs.items()] if f else []
             entry={'name':name,'parameters':options,'passed':error is None,
                    'cpuWallSeconds':round(time.perf_counter()-start,3),
                    'handoverCount':f.strategy.resumed if f else None,
                    'workedDistance':f.workedDistance if f else None,
                    'peakSpeedKmh':f.peakSpeed if f else None,
+                   'peakRequestedSpeedKmh':f.peakRequestedSpeed if f else None,
                    'initialCandidates':f.initialAttempts if f else None,
                    'transitions':[s for s in logs if not s.startswith('TRACK:')],
                    'failure':error}

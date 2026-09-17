@@ -63,7 +63,11 @@ end
 function G.driveGoal(p,vehicle,gx,gz)
     local state=G.pose(vehicle:getAIDirectionNode())
     local k=E.pursuitCurvature(p,state,gx,gz)
-    local distance=math.min(4,p.lookahead,p.radius)
+    return G.curvatureGoal(p,vehicle,k)
+end
+
+function G.curvatureGoal(p,vehicle,k)
+    local distance=math.min(4,p.lookahead,p.radius,k==0 and math.huge or 1/math.abs(k))
     local x=0.5*k*distance*distance
     local z=math.sqrt(math.max(0,distance*distance-x*x))
     local node=vehicle:getAISteeringNode()
@@ -222,14 +226,32 @@ function G.analyticPath(start,goal,radius,loopSide)
     return points
 end
 
-function G.capture(turn)
+-- Invert the vehicle's steering mapping; a stopped tractor need not have
+-- centred wheels. This reads state without changing the steering or speed.
+function G.steeringCurvature(vehicle)
+    if not vehicle.getSteeringRotTimeByCurvature or not finite(vehicle.rotatedTime) or
+            not finite(vehicle.maxTurningRadius) or vehicle.maxTurningRadius<=0 then return 0 end
+    local direction=vehicle.getReverserDirection and vehicle:getReverserDirection() or 1
+    local target=vehicle.rotatedTime*direction
+    local lo,hi=-1/vehicle.maxTurningRadius,1/vehicle.maxTurningRadius
+    local increasing=vehicle:getSteeringRotTimeByCurvature(hi)>vehicle:getSteeringRotTimeByCurvature(lo)
+    for _=1,16 do
+        local mid=(lo+hi)/2
+        if (vehicle:getSteeringRotTimeByCurvature(mid)<target)==increasing then lo=mid else hi=mid end
+    end
+    return (lo+hi)/2
+end
+
+function G.capture(turn,geometryOnly)
     local vehicle,context=turn.vehicle,turn.turnContext
     local supported,trailer=G.supported(vehicle)
     if not supported then return nil,trailer end
     local node=vehicle:getAIDirectionNode()
     local p={start=G.pose(node),goal=G.pose(context.workStartNode),radius=AIUtil.getTurningRadius(vehicle),
         trackingRadius=vehicle.maxTurningRadius,
+        initialCurvature=G.steeringCurvature(vehicle),
         approachSpeed=vehicle:getCpSettings().turnSpeed:getValue(),
+        fieldSpeed=vehicle:getCpSettings().fieldSpeed:getValue(),
         width=turn.workWidth,lookahead=turn.ppc.shortLookaheadDistance or 3,
         hitchX=0,hitchZ=0,work={},footprint={},objects={},loweringLead=0.5,
         -- This is a conservative numerical ceiling, NOT a drawbar collision
@@ -356,6 +378,9 @@ function G.capture(turn)
     if #p.work==0 then return nil,'no working envelope' end
     p.front=front
     p.workCentreX=p.workCentreX/#p.objects
+    -- Learning the outgoing working shape must not wait for asynchronous field
+    -- detection. Geometry-only captures cannot be passed to a route planner.
+    if geometryOnly then return p end
     local exit=G.pose(context.workEndNode)
     local dx,dz=E.localPoint(exit,p.goal)
     p.slope=math.abs(dx)>0.5 and dz/dx or 0

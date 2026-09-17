@@ -44,6 +44,152 @@ end
 assert(rejected,'did not reject the late stock approach before deployment')
 ''')
 
+    def test_v035_recorded_working_arrival_enters_at_varied_speeds_and_response(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        for lag in (.2,.5,.7039764115324976,1):
+            for speed in (8,20,25):
+                with self.subTest(lag=lag,speed=speed):
+                    self.setUp()
+                    self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+                    self.lua.execute(f'''
+local p,f=deploymentFixture(1);configureV035WorkingArrival(p,f,savedField)
+p.steeringTimeConstant={lag};p.turnSpeed={speed}
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.lowerCount==1)
+assert(f.object.sideCommands==0,'already deployed arrival rotated again')
+assert(EnvelopeTurnPlanner.entryTolerance(p)==.25)
+''')
+
+    def run_v036_staging_stress(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        points[16]={'x':-265.25,'z':38.25}
+        points[0]={'x':-498.75,'z':-235.75}
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute('''
+local p,f=deploymentFixture(1);configureV036Exit(p,f,savedField)
+p.steeringTimeConstant=.6083763711210152
+attachFieldworkHandover(p,f)
+local result=driveEnvelopeLiveFixture(p,f)
+v036Lead=result.deploymentLead
+assert(f.workedDistance>=8 and f.object.sideCommands==1)
+assert(v036Lead>16.96,'skipped the available intermediate staging positions')
+''')
+        lead_delta=self.lua.globals().v036Lead-12.96
+        for dx,dz,heading,tool in ((0,0,0,0),(-.15,0,0,0),(.15,0,0,0),(0,-.5,0,0),
+                                   (0,.5,0,0),(0,0,-1,0),(0,0,1,0),(0,0,0,-2),(0,0,0,2)):
+            for lag in (.2,.5,.704,1):
+                with self.subTest(dx=dx,dz=dz,heading=heading,tool=tool,lag=lag):
+                    # Keep the loaded modules: the ZIP audit supplies packaged Lua.
+                    self.lua.globals().arrivalOptions=self.lua.table_from(dict(
+                        delta=lead_delta,dx=dx,dz=dz,heading=heading,tool=tool,lag=lag))
+                    self.lua.execute('''
+local o=arrivalOptions
+local p,f=deploymentFixture(1);configureV036WorkingArrival(p,f,savedField,o.delta)
+v036StressFixture=f
+p.start.x=p.start.x+o.dx;p.start.z=p.start.z+o.dz
+p.start.t=p.start.t+math.rad(o.heading);p.start.phi=p.start.phi+math.rad(o.tool)
+p.steeringTimeConstant=o.lag;f:setPose(p.start)
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.lowerCount==1)
+assert(f.object.sideCommands==0)
+''')
+
+    def test_v036_missing_side_retains_room_for_measured_arrival_variations(self):
+        self.run_v036_staging_stress()
+
+    def test_v036_late_recorded_pose_is_rejected_without_extra_staging_room(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        points[16]={'x':-265.25,'z':38.25}
+        points[0]={'x':-498.75,'z':-235.75}
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute('''
+local p,f=deploymentFixture(1);configureV036WorkingArrival(p,f,savedField,0)
+local ok=pcall(p.planFixture)
+assert(not ok and f.vehicle.stopped and f.object.lowerCount==0)
+''')
+
+    def run_v037_calibration_stress(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        points[0]={'x':-498.75,'z':-235.75};points[16]={'x':-265.25,'z':38.25}
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        for angle in (-7.5,-8.427,-9.5):
+            self.lua.globals().calibrationAngle=angle
+            self.lua.execute('''
+local p,f=deploymentFixture(1);configureV037Exit(p,f,savedField,calibrationAngle)
+p.steeringTimeConstant=.196
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8)
+v037Offset=f.initialDeploymentOffset
+assert(v037Offset<-.5,'failed to account for working-side deployment')
+''')
+            for speed in (8,20,25):
+                for lag in (.2,.5,1):
+                    for step in (1/60,1/30,.1):
+                        with self.subTest(calibration=angle,speed=speed,lag=lag,step=step):
+                            self.lua.globals().arrivalOptions=self.lua.table_from(dict(speed=speed,lag=lag,step=step))
+                            self.lua.execute("""
+local o=arrivalOptions
+local p,f=deploymentFixture(1);configureV037WorkingArrival(p,f,savedField,v037Offset)
+v037StressFixture=f;p.steeringTimeConstant=o.lag;p.turnSpeed=o.speed;p.timeStep=o.step
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.lowerCount==1)
+""")
+
+    def test_v037_calibrated_arrival_and_recorded_geometry_variations(self):
+        self.run_v037_calibration_stress()
+
+    def test_v037_original_unshifted_arrival_remains_rejected(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute('''
+local p,f=deploymentFixture(1);configureV037WorkingArrival(p,f,savedField,0)
+local ok=pcall(p.planFixture)
+assert(not ok and f.vehicle.stopped and f.object.lowerCount==0)
+''')
+
+    def test_v034_return_arc_keeps_tracking_room_at_varied_cp_speeds(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        for turn_speed,field_speed,lag in ((8,20,.365861),(20,27,.365861),(20,27,1),(25,30,1),(25,20,.5)):
+            with self.subTest(turn_speed=turn_speed,field_speed=field_speed,lag=lag):
+                self.setUp()
+                self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+                self.lua.execute(f'''
+local p,f=deploymentFixture(1);configureV034Exit(p,f,savedField)
+p.turnSpeed={turn_speed};p.fieldSpeed={field_speed};p.steeringTimeConstant={lag}
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
+assert(math.abs(f.peakRequestedSpeed-math.max(p.fieldSpeed,p.turnSpeed))<.001)
+''')
+
+    def test_v034_previous_route_fails_delayed_steering_clearance(self):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.execute('''
+local E=EnvelopeTurnPlanner
+local p,f=deploymentFixture(1);configureV034Exit(p,f,savedField)
+local capture=EnvelopeTurnGeometry.capture
+-- With no speed input the numerical model is the old ideal pursuit check.
+-- Real runtime capture always supplies both CP speeds.
+EnvelopeTurnGeometry.capture=function(...)
+    local model,reason=capture(...)
+    if model then model.fieldSpeed=0;model.approachSpeed=0 end
+    return model,reason
+end
+local old=p.planFixture()
+EnvelopeTurnGeometry.capture=capture
+assert(old.directConnection and math.abs(old.routeLength-128.5)<.1)
+local model=f.turn.geometry
+model.fieldSpeed=27;model.approachSpeed=20
+model.goal=E.point(model.goal.x,model.goal.z,model.goal.t,0,-old.deploymentLead)
+model.goal.t=p.goal.t;model.deploymentLead=nil;model.deploymentTarget=true
+local replay=E.newSimulation(model,old.path,old.tailStart,.075,true,true)
+local result
+for i=1,10000 do result=replay:update(10);if result then break end end
+assert(result and not result.ok and result.reason=='field boundary' and result.steeringClearanceFailure,
+    'old return arc was not rejected by the delayed steering sweep')
+f.turn:release()
+''')
+
     def test_width_tolerance_does_not_admit_curved_or_displaced_work(self):
         self.lua.execute("""
 local E=EnvelopeTurnPlanner
@@ -97,7 +243,9 @@ assert(f.object.sideCommands==0 and f.object.lowerCount==0)
 local p,f=deploymentFixture(1);configureV025SecondExit(p,f,savedField)
 attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
 assert(f.workedDistance>=8 and f.strategy.resumed==1 and f.object.sideCommands==1)
-assert(f.initialAttempts<=64)
+-- More staging distances are screened now; elapsed stopped time measures
+-- responsiveness without tying the test to the old two-distance catalogue.
+assert(f.initialPlanningDuration<=10000,'recorded exit spent too long planning')
 """)
 
     def test_turn_and_field_speed_follow_cp_settings(self):
@@ -197,6 +345,113 @@ f.turn.planner=search;f.turn:release();assert(deleted,'preview tracker leaked on
 model.objects[1]={}
 assert(not EnvelopeTurnGeometry.deploymentModel(geometry,model))
 """)
+
+    def run_cold_start_sequence(self, turn_speed=20, field_speed=27, steering=.159405, initial_angle=0, deployment_angle=9.5, early_angle=None):
+        points=json.loads(Path(__file__).with_name('fixtures').joinpath('t7-v030-detected-field.json').read_text())
+        self.lua.globals().savedField=self.lua.table_from([self.lua.table_from(p) for p in points])
+        self.lua.globals().sequenceOptions=self.lua.table_from(dict(turnSpeed=turn_speed,fieldSpeed=field_speed,
+            steering=steering,initialAngle=initial_angle,deploymentAngle=deployment_angle,earlyAngle=early_angle))
+        self.lua.execute("""
+local p,f=deploymentFixture(1)
+local t=f.turn;local fresh={};for k,v in pairs(t) do fresh[k]=v end
+coldSequenceFixture=f
+-- Initially working on the right after stock startup. No pre-populated cache.
+configureV031Exit(p,f,savedField)
+local initial={x=-235.316,z=-45,t=0,phi=math.rad(sequenceOptions.initialAngle)}
+p.work={{x=-3.260,z=-2.150,towed=true},{x=2.288,z=-2.468,towed=true},
+    {x=-3.260,z=-16.128,towed=true,rear=true},{x=2.288,z=-16.128,towed=true,rear=true}}
+p.length=11.100;p.hitchX=.031;p.hitchZ=-1.651;p.axleOffsetX=.020
+f.object.animation=0;f:setPose(initial)
+assert(not f.strategy.envelopeWorkingModels)
+-- Run production finishRow, with only the GIANTS raise completion mocked.
+local polygon=f.vehicle.cpGetFieldPolygon
+f.vehicle.cpGetFieldPolygon=function() return nil end
+t.preparationDone=true
+t.workEndHandler={raiseImplementsAsNeeded=function() end,allRaised=function() return true end}
+t.getRaiseImplementNode=function() return f.context.workEndNode end
+t.debug=function() end
+local event=f.strategy.raiseControllerEvent
+AIDriveStrategyCourse.onFinishRowEvent=3
+f.strategy.raiseControllerEvent=function(s,kind,...)
+    if kind==3 then f.controller:onFinishRow(...) else event(s,kind,...) end
+end
+if sequenceOptions.earlyAngle then
+    t.workEndHandler.allRaised=function() return false end
+    f:setPose({x=initial.x,z=initial.z-15,t=0,phi=math.rad(sequenceOptions.earlyAngle)})
+    t:finishRow(50)
+    assert(not t.outgoingWorkingModel,'cached the unsettled early finish-row pose')
+    assert(f.object.animation==0,'centred before row finish')
+    t.workEndHandler.allRaised=function() return true end
+    f:setPose(initial)
+end
+t:finishRow(50)
+assert(t.outgoingWorkingModel and t.outgoingWorkingSide=='right')
+assert(math.abs(t.outgoingWorkingModel.angle-math.rad(sequenceOptions.initialAngle))<1e-6)
+assert(f.object.animation==.5,'stock finish-row event did not centre')
+f.vehicle.cpGetFieldPolygon=polygon
+-- First full turn deploys left. Preserve the model observed before centring.
+configureV031Exit(p,f,savedField)
+p.turnSpeed=sequenceOptions.turnSpeed;p.fieldSpeed=sequenceOptions.fieldSpeed;p.steeringTimeConstant=sequenceOptions.steering
+f.object.playing=false;f.object.animation=.5
+local first=p.stateFixture
+p.stateFixture=function(current,state)
+    local completes=current.object.playing and g_currentMission.time>=current.object.animationEnd
+    local before=state.phi
+    first(current,state)
+    if completes then state.phi=EnvelopeTurnPlanner.wrap(before+math.rad(10)) end
+end
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.object.sideCommands==1)
+assert(f.strategy.envelopeWorkingModels.right and f.strategy.envelopeWorkingModels.left)
+local learnt=f.strategy.envelopeWorkingModels.right
+assert(learnt.deploymentAngle<0)
+-- A new turn object on the same vehicle/equipment retains only strategy cache.
+for k in pairs(t) do t[k]=nil end;for k,v in pairs(fresh) do t[k]=v end
+t.ppc=PurePursuitController(f.vehicle);t.ppc.shortLookaheadDistance=2.695
+t.workStartHandler=WorkStartHandler(f.vehicle,f.strategy,f.context)
+t.workStartHandler.shouldLowerThisImplement=function() return t.lowerRequested or false,t.lastContact or -100 end
+f.strategy.resumed=0;f.object.lowerCount=0;f.object.sideCommands=0
+f.object.animation=.5;f.object.playing=false;f.vehicle.speed=0;f.vehicle.lastSpeed=0
+configureV033Exit(p,f,savedField)
+p.turnSpeed=sequenceOptions.turnSpeed;p.fieldSpeed=sequenceOptions.fieldSpeed;p.steeringTimeConstant=sequenceOptions.steering
+local second=p.stateFixture
+p.stateFixture=function(current,state)
+    local completes=current.object.playing and g_currentMission.time>=current.object.animationEnd
+    local before=state.phi
+    second(current,state)
+    if completes then state.phi=EnvelopeTurnPlanner.wrap(before-math.rad(sequenceOptions.deploymentAngle)) end
+end
+assert(f.strategy.envelopeWorkingModels.right==learnt)
+attachFieldworkHandover(p,f);driveEnvelopeLiveFixture(p,f)
+assert(f.workedDistance>=8 and f.object.sideCommands==1)
+local preview=false
+for _,line in ipairs(f.logs) do if line:find('previewing measured working side right') then preview=true end end
+assert(preview,'second turn did not use the side learnt on the initial row')
+""")
+
+    def test_saved_work_resumption_observes_geometry_at_centring_not_early_finish_row(self):
+        self.run_cold_start_sequence(early_angle=8.3)
+
+    def test_cold_start_learns_both_sides_and_replays_v033_exit(self):
+        self.run_cold_start_sequence()
+
+    def test_cold_start_sequence_at_default_cp_speeds(self):
+        self.run_cold_start_sequence(turn_speed=8,field_speed=20)
+
+    def test_cold_start_sequence_with_slower_steering(self):
+        self.run_cold_start_sequence(steering=.5)
+
+    def test_cold_start_sequence_with_calibration_and_deployment_variation(self):
+        self.run_cold_start_sequence(initial_angle=1,deployment_angle=10.5)
+
+    def test_cold_start_sequence_at_higher_cp_speeds(self):
+        self.run_cold_start_sequence(turn_speed=25,field_speed=30)
+
+    def test_cold_start_sequence_with_opposite_calibration_error(self):
+        self.run_cold_start_sequence(initial_angle=-1,deployment_angle=8.5)
+
+    def test_cold_start_sequence_with_one_second_steering_response(self):
+        self.run_cold_start_sequence(steering=1)
 
     def test_braking_distance_follows_curve_and_waypoint_lead(self):
         self.lua.execute("""
