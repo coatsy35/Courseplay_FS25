@@ -539,7 +539,7 @@ function CourseTurn:startTurn()
         end
     end
     if self.state == self.states.TURNING then
-        if not FieldworkBoundary.containsCourse(FieldworkBoundary.forVehicle(self.vehicle, self.workWidth), self.turnCourse) then
+        if not self:fitCalculatedTurnToBoundary() then
             self:debug('Calculated turn leaves the field corridor; using constrained pathfinding')
             self:generatePathfinderTurn(false)
             return
@@ -669,6 +669,35 @@ function CourseTurn:changeToFwdWhenWaypointReached()
     end
 end
 
+--- Entry extensions are optional. Try less extension before sending a towed
+--- combination to CP's forward-only pathfinder. Every candidate must fit the
+--- same field corridor, including reverse and appended approach sections.
+function CourseTurn:fitCalculatedTurnToBoundary()
+    local boundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
+    if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then return true end
+    local context = self.turnContext
+    local requested = context.straightEntryDistance
+    if not requested or requested <= 0 or context:isHeadlandCorner() then return false end
+    local previousBulb = context.disableBulbExtension
+    local originalCourse = self.turnCourse
+    context.disableBulbExtension = true
+    -- Keep the full straight without extra crossing first, then reduce the
+    -- optional allowance down to CP's original marker-based approach.
+    for _, fraction in ipairs({1, 0.75, 0.5, 0.25, 0}) do
+        context.straightEntryDistance = requested * fraction
+        self:generateCalculatedTurn()
+        if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then
+            self:debug('Straight entry: fitted turn with allowance %.1f of %.1f m, no bulb extension',
+                    context.straightEntryDistance, requested)
+            return true
+        end
+    end
+    context.straightEntryDistance = requested
+    context.disableBulbExtension = previousBulb
+    self.turnCourse = originalCourse
+    return false
+end
+
 function CourseTurn:generateCalculatedTurn()
     local turnManeuver
     if self.turnContext:isHeadlandCorner() then
@@ -746,7 +775,7 @@ function CourseTurn:onPathfindingDone(path)
         self:debug('No path found in %d ms, falling back to normal turn course generator', g_currentMission.time - (self.pathfindingStartedAt or 0))
         self:generateCalculatedTurn()
     end
-    if not FieldworkBoundary.containsCourse(FieldworkBoundary.forVehicle(self.vehicle, self.workWidth), self.turnCourse) then
+    if not self:fitCalculatedTurnToBoundary() then
         self:debug('No turn route fits the field corridor; stopping instead of using an unchecked fallback')
         self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
         return

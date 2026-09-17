@@ -547,6 +547,73 @@ class EntryTests(unittest.TestCase):
             assert(searched and t.state==t.states.WAITING_FOR_PATHFINDER)
         ''')
 
+    def test_boundary_fit_reduces_optional_entry_and_restores_failed_attempts(self):
+        self.lua.execute("""
+            for _,side in ipairs({-1,1}) do
+                local polygon={{x=-20,z=-20},{x=20,z=-20},{x=20,z=40},{x=-20,z=40}}
+                local c={straightEntryDistance=40,isHeadlandCorner=function() return false end}
+                local t=setmetatable({vehicle={cpGetFieldPolygon=function() return polygon end},
+                    turnContext=c,workWidth=4,debug=function() end},CourseTurn)
+                local tries=0
+                t.generateCalculatedTurn=function(self)
+                    tries=tries+1
+                    self.turnCourse=Course({},{{x=0,z=0},{x=side*c.straightEntryDistance,z=15}},true)
+                end
+                t:generateCalculatedTurn()
+                assert(t:fitCalculatedTurnToBoundary())
+                assert(c.straightEntryDistance==10 and c.disableBulbExtension and tries==5)
+                assert(FieldworkBoundary.containsCourse(FieldworkBoundary.forVehicle(t.vehicle,4),t.turnCourse))
+                -- Last fallback is the stock target, not a disabled preparation
+                -- flag (zero remains truthy in Lua).
+                polygon[1].x=-4; polygon[2].x=4; polygon[3].x=4; polygon[4].x=-4
+                c.straightEntryDistance=40; c.disableBulbExtension=nil
+                t:generateCalculatedTurn()
+                assert(t:fitCalculatedTurnToBoundary() and c.straightEntryDistance==0)
+                -- An impossible corridor must still fail, without leaking reduced
+                -- targets into a subsequent pathfinder request.
+                c.straightEntryDistance=40; c.disableBulbExtension=nil
+                t.generateCalculatedTurn=function(self)
+                    self.turnCourse=Course({},{{x=0,z=0},{x=30,z=0}},true)
+                end
+                t:generateCalculatedTurn(); local original=t.turnCourse
+                assert(not t:fitCalculatedTurnToBoundary())
+                assert(c.straightEntryDistance==40 and c.disableBulbExtension==nil and t.turnCourse==original)
+                c.isHeadlandCorner=function() return true end
+                t.generateCalculatedTurn=function() error('must not change headland turn selection') end
+                assert(not t:fitCalculatedTurnToBoundary())
+            end
+        """)
+
+    def test_jd_scalar_geometry_fits_after_reducing_extension(self):
+        self.lua.execute("""
+            local recovered=0
+            for _,speed in ipairs({6,20,35}) do
+                for _,side in ipairs({-1,1}) do
+                    for _,slope in ipairs({-.75,0,.75}) do
+                        -- Logged JD/drill dimensions and room; this angled
+                        -- polygon is synthetic, not the game's field scan.
+                        local _,c,course=entryCourse{side=side,pike=-2.5,length=6.9,duration=1000,
+                            speed=speed,room=21,enabled=true,width=4,radius=4.8,front=-5,back=-9.7,
+                            workOffset=5,startZ=0,headlandAngle=math.rad(126.8)}
+                        local polygon={{x=-40,z=-80},{x=40,z=-80},
+                            {x=40,z=21+40*slope},{x=-40,z=21-40*slope}}
+                        c.vehicle.cpGetFieldPolygon=function() return polygon end
+                        c.getDistanceToFieldEdge=function() return 21 end
+                        local t=setmetatable({vehicle=c.vehicle,turnContext=c,turnCourse=course,workWidth=4,
+                            steeringLength=6.9,turningRadius=4.8,debug=function() end,
+                            driveStrategy={isTurnOnFieldActive=function() return true end}},CourseTurn)
+                        local before=FieldworkBoundary.containsCourse(FieldworkBoundary.forVehicle(c.vehicle,4),course)
+                        local requested=c.straightEntryDistance
+                        assert(t:fitCalculatedTurnToBoundary())
+                        assert(FieldworkBoundary.containsCourse(FieldworkBoundary.forVehicle(c.vehicle,4),t.turnCourse))
+                        assert(c.straightEntryDistance<=requested)
+                        if before then assert(t.turnCourse==course) else recovered=recovered+1 end
+                    end
+                end
+            end
+            assert(recovered>=8, 'must exercise real rejected Dubins turns, not just fitting routes')
+        """)
+
     def test_startup_pathfinder_and_analytic_targets_share_allowance(self):
         self.lua.execute((SOURCE / 'tools/straight-entry/startup-fixture.lua').read_text())
         self.lua.execute('''

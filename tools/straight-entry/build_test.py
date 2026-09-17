@@ -54,8 +54,8 @@ def build(output):
         extracted = temp / 'extracted'
         with ZipFile(candidate) as archive:
             manifest = ET.fromstring(archive.read('modDesc.xml'))
-            assert manifest.findtext('version') == '8.1.0.210'
-            assert all(t.text == 'CoursePlay - Straight Entry Test v0.10' for t in manifest.find('title'))
+            assert manifest.findtext('version') == '8.1.0.211'
+            assert all(t.text == 'CoursePlay - Straight Entry Test v0.11' for t in manifest.find('title'))
             for name in archive.namelist():
                 assert 'EnvelopeTurn' not in name
                 assert archive.read(name) == (ROOT / name).read_bytes(), name

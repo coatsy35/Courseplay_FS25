@@ -89,20 +89,21 @@ AIUtil.getTurningRadius = function() return 9 end
 AIUtil.getReverserNode = function(v) return v.reverser, 'fixture axle' end
 function entryCourse(p)
     local node={x=0,z=p.startZ or 17.8,t=0}
-    local goal={x=p.side*5.6,z=p.pike,t=math.pi}
-    local gx,_,gz=localToWorld(goal,0,0,4)
-    local c=setmetatable({frontMarkerDistance=-4,backMarkerDistance=-17.7,
-        turnEndForwardOffset=4,workStartNode=goal,
+    local width,radius=p.width or 5.6,p.radius or 9
+    local goal={x=p.side*width,z=p.pike,t=math.pi}
+    local gx,_,gz=localToWorld(goal,0,0,p.workOffset or 4)
+    local c=setmetatable({frontMarkerDistance=p.front or -4,backMarkerDistance=p.back or -17.7,
+        turnEndForwardOffset=p.workOffset or 4,workStartNode=goal,
         vehicleAtTurnEndNode={x=gx,z=gz,t=math.pi}},TurnContext)
     c.isHeadlandCorner=function() return false end
     c.isLeftTurn=function() return p.side<0 end
-    c.getHeadlandAngle=function() return math.pi/2 end
+    c.getHeadlandAngle=function() return p.headlandAngle or math.pi/2 end
     c.getTurnEndForwardOffset=function() return p.pike end
     local v={allowReverse=p.allowReverse~=false,getAIDirectionNode=function() return node end,
         reverser={x=0,z=node.z-p.length,t=0}}
-    c.vehicle=v; c.workWidth=5.6; c.turnStartWpIx=1; c.turnEndWpIx=2
+    c.vehicle=v; c.workWidth=width; c.turnStartWpIx=1; c.turnEndWpIx=2
     if p.enabled then c:setStraightEntryDistance(p.length,p.duration,p.speed) end
-    local m=DubinsTurnManeuver(v,c,node,9,5.6,p.length,p.room)
+    local m=DubinsTurnManeuver(v,c,node,radius,width,p.length,p.room)
     local points={}
     for i,w in ipairs(m.course.waypoints) do
         points[i]={x=w.x,z=w.z,heading=w.yRot,reverse=w.rev}

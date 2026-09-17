@@ -1,12 +1,42 @@
-# Straight Entry Test v0.10
+# Straight Entry Test v0.11
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry Test v0.10`.
-Manifest version: `8.1.0.210`. Keep this ZIP filename for subsequent builds.
+In-game title: `CoursePlay - Straight Entry Test v0.11`.
+Manifest version: `8.1.0.211`. Keep this ZIP filename for subsequent builds.
 Enable only this Courseplay version in the test save. Packaging does not write
 to the installed mods folder or overwrite either previous Courseplay ZIP.
 
 ## Change
+
+v0.11 adds calculated-turn alternatives when the extended entry fails the field
+corridor check. It first removes the extra bulb crossing while keeping the full
+approach, then tries 75%, 50%, 25% and zero optional allowance. Zero retains CP's
+original marker-based target. The first complete route passing the same corridor
+check is used. Successful original routes are untouched. If all candidates fail,
+the original target is restored before the existing constrained pathfinder and
+failure handling. This also applies when its final route/fallback is rejected.
+The turnover preparation flag remains active even at zero extra allowance.
+
+The JD 8RT 410/AQUILA DRIVE 400 log is saved in
+`out/jd8rt-path-failure/game.log`. At 22:56:03 the extended turn was rejected,
+then the forward-only pathfinder exhausted 10,000 iterations; at 22:56:11 the
+same calculated fallback was rejected. Previously there was no attempt to reduce
+the optional entry extension for a combination capable of calculated reversing.
+The new tests exercise actual Dubins generation with the logged 4.8 m radius,
+4 m width, 6.9 m steering length, marker distances and 21 m room, on synthetic
+angled boundaries in both directions at three speeds. These are not a replay
+of the unavailable live field polygon or a claim of verified game driving.
+
+The Quadtrac/Seed Hawk failure is separately saved in
+`out/jd8rt-path-failure/quadtrac-game.log`. It completed the headland join and
+then drifted off track while reversing through a headland corner. The user will
+select CP's loop-corner setting. No automatic headland selection, reversing
+permission, reverse steering, iteration-limit or speed changes are included.
+
+Shorter approaches necessarily offer less settling distance. This fallback
+prefers a checked route using stock geometry over stopping solely because the
+optional extension does not fit; it cannot guarantee a straight working edge
+when space is insufficient.
 
 v0.10 replaces the additional tractor-to-plough 15-degree gate with a
 five-degree tractor-to-row check. The plough can remain angled relative to the
@@ -132,7 +162,7 @@ straight worked edge. The log is preserved locally under
 `out/entry-video-155015/game.log`.
 
 Run `tools/straight-entry/build_test.py` with Python and `lupa` installed.
-The release gate runs packaging tests, 31 regression tests, Lua compilation,
+The release gate runs packaging tests, 33 regression tests, Lua compilation,
 source-scope verification, ZIP byte comparison and the same regressions against
 the extracted ZIP before publishing it.
 

@@ -465,7 +465,7 @@ function DubinsTurnManeuver:findAnalyticPath(startNode, startXOffset, startZOffs
                                              endXOffset, endZOffset, turningRadius)
     local path, _, solution = PathfinderUtil.findAnalyticPath(PathfinderUtil.dubinsSolver,
             startNode, startXOffset, startZOffset, endNode, endXOffset, endZOffset, self.turningRadius)
-    if self.turnContext.straightEntryDistance and self.steeringLength > 0 then
+    if self.turnContext.straightEntryDistance and not self.turnContext.disableBulbExtension and self.steeringLength > 0 then
         local _, _, goalZ = localToLocal(endNode, self.turnContext.vehicleAtTurnEndNode,
                 endXOffset, 0, endZOffset)
         local available = -goalZ - 1.5 * self.steeringLength - self.turnContext.entryLoweringDistance
