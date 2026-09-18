@@ -35,6 +35,7 @@ def build(output):
                  'scripts/ai/turns/TurnContext.lua', 'scripts/ai/turns/TurnManeuver.lua',
                  'scripts/ai/turns/WorkStartHandler.lua', 'scripts/ai/controllers/PlowController.lua'}
     permitted.update({'scripts/ai/strategies/AIDriveStrategyCourse.lua',
+                      'scripts/ai/strategies/AIDriveStrategyFieldWorkCourse.lua',
                       'scripts/ai/turns/BulbTurnExtension.lua',
                       'scripts/ai/strategies/AIDriveStrategyDriveToFieldWorkStart.lua',
                       'scripts/ai/util/FieldworkBoundary.lua',
@@ -54,8 +55,8 @@ def build(output):
         extracted = temp / 'extracted'
         with ZipFile(candidate) as archive:
             manifest = ET.fromstring(archive.read('modDesc.xml'))
-            assert manifest.findtext('version') == '8.1.0.212'
-            assert all(t.text == 'CoursePlay - Straight Entry Test v0.12' for t in manifest.find('title'))
+            assert manifest.findtext('version') == '8.1.0.213'
+            assert all(t.text == 'CoursePlay - Straight Entry Test v0.13' for t in manifest.find('title'))
             for name in archive.namelist():
                 assert 'EnvelopeTurn' not in name
                 assert archive.read(name) == (ROOT / name).read_bytes(), name

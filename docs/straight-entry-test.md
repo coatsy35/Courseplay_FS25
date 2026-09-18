@@ -1,12 +1,40 @@
-# Straight Entry Test v0.12
+# Straight Entry Test v0.13
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry Test v0.12`.
-Manifest version: `8.1.0.212`. Keep this ZIP filename for subsequent builds.
+In-game title: `CoursePlay - Straight Entry Test v0.13`.
+Manifest version: `8.1.0.213`. Keep this ZIP filename for subsequent builds.
 Enable only this Courseplay version in the test save. Packaging does not write
 to the installed mods folder or overwrite either previous Courseplay ZIP.
 
-## Change
+## v0.13: preserve corners at work-start handover
+
+The JD 8RT's saved course begins its headland with a 4.36 m section, followed
+immediately by a headland-corner marker. Its rear marker is 10.3 m behind the
+tractor. On 18 September at 10:06:49, after the join and lowering, the forward
+waypoint search failed; the stock fallback selected the next waypoint anyway.
+The tractor remained in WORKING and approached the tree, stopping at 10:06:55.
+
+The handover now limits the forward search to the first pending turn. If the
+next usable point is that turn, or the incoming section has already been passed,
+it starts the normal CP turn on the fieldwork course. It does not skip the
+corner or initialise PPC recursively before the turn owns its callbacks. If
+there is neither a suitable forward point nor a pending turn within the normal
+search window, it raises the implements and stops with no-path instead of
+blindly resuming. Ordinary aligned handovers retain their existing behaviour.
+
+The stock restriction on reverse pathfinding with wheeled trailed implements
+is unchanged. It is separate from vehicle-configuration noReverse and from
+calculated corner turns. The user's loop-corner choice and CP speeds remain in
+control. This build does not promise that every short corner fits the available
+field space, and does not bypass obstacle detection.
+
+Regression coverage executes the production handover, Course search and corner
+markers against the saved JD coordinates, mirrored at three marker distances,
+and synthetic short legs in both directions at five world headings. It covers
+pending-corner retention, normal continuation and safe failure without a valid
+continuation. These are logic/geometry checks, not an FS25 physics replay.
+
+## Previous change
 
 v0.12 tries alternative placements of an already-selected forward headland
 loop when its original placement fails the field corridor check. It varies the

@@ -16,6 +16,46 @@ class EntryTests(unittest.TestCase):
         self.lua.globals().ROOT = ROOT.as_posix()
         self.lua.execute((SOURCE / 'tools/straight-entry/engine-boundary.lua').read_text())
 
+    def test_short_headland_handover_respects_corner_and_missing_continuation(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/handover-fixture.lua').read_text())
+        # A short incoming leg followed by a lateral corner/return, like the JD
+        # screenshot. Rotate and mirror to ensure this is not direction-specific.
+        for side in [-1, 1]:
+            for degrees in [0, 37, 90, 192, 270]:
+                angle = math.radians(degrees)
+                def world(x, z):
+                    return (100+x*math.cos(angle)+z*math.sin(angle),
+                            200-x*math.sin(angle)+z*math.cos(angle))
+                points = []
+                for x, z in [(0, 0), (0, 2), (side*4, 2), (side*4, -4), (0, 15)]:
+                    x, z = world(x, z)
+                    points.append(self.lua.table_from(dict(x=x, z=z)))
+                pts = self.lua.table_from(points)
+                def run(z, corner=2):
+                    x, z = world(0, z)
+                    return self.lua.globals().handoverFixture(pts, corner, x, z, angle)
+                self.assertEqual(run(5), 'turn:2')  # forward point beyond corner must not skip it
+                self.assertEqual(run(1), 'turn:2')  # corner itself is the next point
+                self.assertEqual(run(-3), 'lookahead,wait,lower,work:1')
+                self.assertEqual(run(30, 0), 'raise,stop:noPath')
+                self.assertEqual(run(5, 0), 'lookahead,wait,lower,work:5')
+
+    def test_saved_jd_headland_leg_is_shorter_than_rear_marker(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/handover-fixture.lua').read_text())
+        # savegame18/CpAssignedCourses.xml, 8RT 410, first headland points.
+        original = [(-61.40, -207.51), (-65.71, -206.82), (-64.69, -213.18),
+                    (-63.65, -219.54), (-63.21, -222.26)]
+        for side in [-1, 1]:
+            coords = [(side*x, z) for x, z in original]
+            dx, dz = coords[1][0]-coords[0][0], coords[1][1]-coords[0][1]
+            length = math.hypot(dx, dz)
+            self.assertLess(length, 10.3)
+            points = self.lua.table_from([self.lua.table_from(dict(x=x,z=z)) for x,z in coords])
+            for overrun in [5.5, 10.3, 12.0]:
+                x, z = coords[0][0]+dx/length*overrun, coords[0][1]+dz/length*overrun
+                result = self.lua.globals().handoverFixture(points, 1, x, z, math.atan2(dx,dz))
+                self.assertEqual(result, 'turn:1')
+
     def course(self, **overrides):
         p = dict(side=1, pike=.8, length=12.5, duration=1000,
                  speed=20, room=24, enabled=True)
