@@ -71,7 +71,7 @@ function WorkStartHandler:lowerImplementsAsNeeded(workStartNode, reversing)
     end
     -- Stock reverse entry deliberately leaves a towed plough centred until
     -- lowering; waiting for rotation there would prevent the direction change.
-    if self.turnContext.straightEntryDistance and not reversing then
+    if (self.turnContext.straightEntryDistance or self.recoveryTurn) and not reversing then
         for _, controller in pairs(self.driveStrategy.controllers) do
             if controller.getTurnEntryPreparationState then
                 local ready, waiting = controller:getTurnEntryPreparationState()

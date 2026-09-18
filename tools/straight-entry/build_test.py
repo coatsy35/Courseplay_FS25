@@ -11,8 +11,8 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 NAME = 'FS25_Courseplay_StraightEntryTest.zip'
-VERSION = '8.1.0.305'
-TITLE = 'CoursePlay - Straight Entry + Loop Test v0.17'
+VERSION = '8.1.0.306'
+TITLE = 'CoursePlay - Straight Entry + Loop Test v0.18'
 sys.dont_write_bytecode = True
 
 

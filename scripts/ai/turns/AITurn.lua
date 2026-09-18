@@ -901,12 +901,35 @@ function RecoveryTurn:init(vehicle, driveStrategy, ppc, proximityController, tur
     -- we could also just unregister, but this way we'll have a log entry in case the recovery is
     -- blocked too, indicating that we give up.
     self.proximityController:registerBlockingObjectListener(self, RecoveryTurn.onBlocked)
+    self.workStartHandler.recoveryTurn = true
     self.retryCount = retryCount or 0
+    self.reverseDistance = reverseDistance or 10
+    self:addState('PREPARING_RECOVERY')
+    self.state = self.states.PREPARING_RECOVERY
+    self.driveStrategy:raiseImplements()
+    self.driveStrategy:raiseControllerEvent('onRecoveryStart')
+    self:debug('Waiting for raised implements to prepare for recovery')
+end
+
+function RecoveryTurn:getDriveData(dt)
+    if self.state == self.states.PREPARING_RECOVERY then
+        local ready = true
+        self.driveStrategy:raiseControllerEventWithLambda('getRecoveryPreparationState', function(prepared)
+            ready = ready and prepared ~= false
+        end)
+        if ready then self:startPreparedRecovery() end
+        return nil, nil, nil, 0
+    end
+    return AITurn.getDriveData(self, dt)
+end
+
+function RecoveryTurn:startPreparedRecovery()
+    self:debug('Recovery preparation complete; starting manoeuvre')
     if self.driveStrategy:getAllowReversePathfinding() then
         self:debug('Starting a pathfinder turn to recover after being blocked without reversing first')
         self:generatePathfinderTurn(false)
     else
-        reverseDistance = reverseDistance or 10
+        local reverseDistance = self.reverseDistance
         self:debug('reverse pathfinding not allowed, reversing before pathfinding, retry count %d, reverse distance %.1f',
                 self.retryCount, reverseDistance)
         self.state = self.states.REVERSING_AFTER_BLOCKED
@@ -935,6 +958,9 @@ function RecoveryTurn:onWaypointPassed(ix, course)
 end
 
 function RecoveryTurn:onBlocked()
+    -- The original obstacle remains present while we deliberately wait to lift
+    -- and centre. Do not spend recovery attempts during that preparation.
+    if self.state == self.states.PREPARING_RECOVERY then return end
     if self.retryCount < 1 then
         self:debug('Recovering from blocked turn unsuccessful after %d tries, trying again.', self.retryCount + 1)
         -- back up a bit more and see if that works

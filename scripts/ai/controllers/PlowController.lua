@@ -111,6 +111,27 @@ function PlowController:onFinishRow(isHeadlandTurn)
 end
 
 
+--- Recovery can interrupt FINISHING_ROW before the normal lift/centre events.
+function PlowController:onRecoveryStart()
+    self.recoveryCenterRequested = false
+end
+
+--- Wait for lifting permission and the actual centre animation, not a timer.
+function PlowController:getRecoveryPreparationState()
+    if not self:isRotatablePlow() then return true end
+    if self.implement.getIsLowered and self.implement:getIsLowered() then return false end
+    local centre = self.plowSpec.ai and self.plowSpec.ai.centerPosition or 0.5
+    local position = self.implement:getAnimationTime(self.plowSpec.rotationPart.turnAnimation)
+    if not self:isRotationActive() and math.abs(position - centre) < 0.001 then return true end
+    if not self:getIsPlowRotationAllowed() then return false end
+    if not self.recoveryCenterRequested then
+        self:debug('Recovery: centring raised plough before manoeuvring')
+        PlowCenterTurnEvent.sendEvent(self.implement)
+        self.recoveryCenterRequested = true
+    end
+    return false
+end
+
 --- making sure the plow is in the working position when lowering
 -- TODO: this whole magic hack would not be necessary if we moved the actual lowering into onTurnEndProgress()
 function PlowController:onLowering()

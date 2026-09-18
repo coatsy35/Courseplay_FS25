@@ -1,8 +1,8 @@
-# Straight Entry + Loop Test v0.17
+# Straight Entry + Loop Test v0.18
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry + Loop Test v0.17`.
-Manifest version: `8.1.0.305`.
+In-game title: `CoursePlay - Straight Entry + Loop Test v0.18`.
+Manifest version: `8.1.0.306`.
 
 This local test merges straight-entry v0.13 at `7aad509b` with the main-based
 double-pivot headland-loop work. It lives on
@@ -25,7 +25,7 @@ CP's configured driving speeds are retained. This is a planar planning test,
 not proof of physical drill/cart clearance. Keep collision detection enabled and
 inspect the actual hitch motion during the first turn.
 
-The release gate runs 44 straight-entry regressions, 17 loop regressions, six
+The release gate runs 47 straight-entry regressions, 17 loop regressions, six
 packaging tests, runtime Lua compilation, deterministic source packaging and
 both suites again against the extracted ZIP. The numbered archive and stable
 copy are written only under `dist/straight-entry-double-pivot`; existing test
@@ -85,3 +85,34 @@ Tests cover the saved JD row/edge coordinates, mirrored and rotated shapes,
 exact vertices, concavities, no-hit and island fallbacks, circuit length and
 closure, and complete centre-first generation with 1, 3 and 6 headlands in both
 directions. The v0.13 archive and its handover safeguards remain preserved.
+
+## Prepare the plough before obstacle recovery (v0.18)
+
+The T7.300/PW100 run on v0.16 stopped at 15:42:45 on 18 September. At 15:40:57,
+its lifting marker was still 2 m short of the work end when recovery began.
+Recovery bypassed the finishing-row preparation, and headland turns normally
+skip plough centring. The driver then exhausted two recovery attempts and the
+unaligned handover guard stopped the job. Drawbar contact was reported by the
+user; the log cannot independently identify that physical contact.
+
+Recovery now raises the implements before moving. Rotatable ploughs wait for
+lifting/rotation permission, request CP's existing synchronised centre event,
+and confirm that animation has stopped at the implement's configured centre.
+Already-centred and non-rotatable tools require no centring animation. There is
+no fixed animation timer or substituted driving speed. Obstacle callbacks do
+not consume retries during the deliberate preparation wait. Reverse course
+creation and pathfinding happen after readiness, using the resulting pose.
+Forward recovery entry also checks rotation readiness before lowering; stock
+reverse-entry behaviour remains unchanged.
+
+Tests exercise the real recovery constructors and controller methods with both
+working sides, centre positions 0.35/0.5/0.7, delayed lifting permission, running
+and stopped-off-centre animations, repeated polling, retries, both pathfinding
+permissions and working-side restoration. Existing ordinary-turn tests remain.
+This fixes the missing preparation; actual drawbar clearance still needs FS25
+confirmation. The change also applies to existing saved courses.
+
+API reference: GIANTS' documented [Plow centring implementation](https://gdn.giants-software.com/documentation_scripting_fs22.php?category=48&class=531&version=script)
+uses `spec_plow.ai.centerPosition`; CP already uses its `setRotationCenter()` API
+through `PlowCenterTurnEvent`. The published reference is FS22, not an FS25
+physics validation.

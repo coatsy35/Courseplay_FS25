@@ -291,6 +291,95 @@ class EntryTests(unittest.TestCase):
         assert(p.x < -61.4 and p.x > -65.71)
         """)
 
+    def test_recovery_plough_lifts_then_centres_once_on_both_sides(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/preparation-fixture.lua').read_text())
+        self.lua.execute("""
+        PlowCenterTurnEvent={sendEvent=function(tool) tool.centres=(tool.centres or 0)+1; tool.playing=true end}
+        for _, side in ipairs({0,1}) do
+            for _, centre in ipairs({0.35,0.5,0.7}) do
+                local f=preparationFixture(20,false,false)
+                local c,t=f.controller,f.tool
+                c.plowSpec.ai={centerPosition=centre}
+                t.animation=side; t.lowered=true; t.allowed=false
+                t.getIsLowered=function(self) return self.lowered end
+                t.getIsPlowRotationAllowed=function(self) return self.allowed end
+                c:onRecoveryStart()
+                assert(not c:getRecoveryPreparationState() and t.centres==nil)
+                t.lowered=false
+                assert(not c:getRecoveryPreparationState() and t.centres==nil)
+                t.allowed=true
+                assert(not c:getRecoveryPreparationState() and t.centres==1)
+                for i=1,100 do assert(not c:getRecoveryPreparationState()) end
+                assert(t.centres==1)
+                t.playing=false; t.animation=centre+0.05
+                assert(not c:getRecoveryPreparationState()) -- stopped off-centre is not ready
+                t.animation=centre
+                assert(c:getRecoveryPreparationState())
+                c:onRecoveryStart(); t.allowed=false
+                assert(c:getRecoveryPreparationState() and t.centres==1) -- already centred needs no rotation
+                t.animation=side; t.allowed=true
+                assert(not c:getRecoveryPreparationState() and t.centres==2)
+                c.plowSpec.rotationPart.turnAnimation=nil
+                assert(c:getRecoveryPreparationState())
+            end
+        end
+        """)
+
+    def test_recovery_preparation_precedes_reverse_or_pathfinding(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/preparation-fixture.lua').read_text())
+        self.lua.execute("""
+        -- Only vehicle geometry/event boundaries are replaced; real recovery and
+        -- base constructors, preparation dispatch and reverse Course run below.
+        AIUtil.getSteeringParameters=function() return nil,12.5 end
+        AIUtil.getLastAttachedImplement=function(v) return v end
+        for _, allowReverse in ipairs({false,true}) do
+            local f=preparationFixture(20,false,false)
+            local events={}; local ready=false
+            f.vehicle.rootNode=f.vehicle:getAIDirectionNode()
+            f.strategy.raiseImplements=function() events[#events+1]='raise' end
+            f.controller.onRecoveryStart=function() events[#events+1]='prepare' end
+            f.controller.getRecoveryPreparationState=function() return ready end
+            f.strategy.raiseControllerEventWithLambda=function(self,event,callback)
+                for _, c in ipairs(self.controllers) do if c[event] then callback(c[event](c)) end end
+            end
+            f.strategy.getAllowReversePathfinding=function() return allowReverse end
+            local ppc={registerListeners=function() end,setCourse=function() events[#events+1]='course' end,
+                initialize=function() events[#events+1]='initialise' end}
+            local proximity={registerBlockingObjectListener=function() end}
+            local context={setStraightEntryDistance=function() end}
+            local recovery=RecoveryTurn(f.vehicle,f.strategy,ppc,proximity,context,{},5.6,9,1)
+            recovery.generatePathfinderTurn=function(self)
+                self.state=self.states.WAITING_FOR_PATHFINDER; events[#events+1]='pathfinder'
+            end
+            assert(table.concat(events,',')=='raise,prepare')
+            for i=1,20 do
+                local _,_,_,speed=recovery:getDriveData(16)
+                assert(speed==0)
+                recovery:onBlocked() -- intentional animation wait cannot consume retries
+            end
+            assert(table.concat(events,',')=='raise,prepare' and recovery.retryCount==1)
+            ready=true
+            local _,_,_,speed=recovery:getDriveData(16)
+            assert(speed==0)
+            assert(table.concat(events,',')==(allowReverse and 'raise,prepare,pathfinder' or 'raise,prepare,course,initialise'))
+            assert(recovery.workStartHandler.recoveryTurn)
+        end
+        """)
+
+    def test_headland_recovery_waits_for_working_rotation_before_lowering(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/preparation-fixture.lua').read_text())
+        self.lua.execute("""
+        for _, side in ipairs({false,true}) do
+            local f=preparationFixture(20,side,false)
+            f.handler.recoveryTurn=true
+            f.tool.rootNode.t=0
+            f:position(-1)
+            assert(f:drive()==0 and f.tool.rotateCount==1 and f.tool.lowerCount==0)
+            f.tool.playing=false; f.tool.animation=side and 1 or 0
+            assert(f:drive()==20 and f.tool.lowerCount==1)
+        end
+        """)
+
     def course(self, **overrides):
         p = dict(side=1, pike=.8, length=12.5, duration=1000,
                  speed=20, room=24, enabled=True)
