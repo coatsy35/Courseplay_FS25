@@ -636,25 +636,45 @@ function Course:isNextTurnLeft(ix)
 end
 
 --- Should the plow be rotated to the left at the waypoint ix?
---- On the headland just check which side was worked last, on the center, check the direction of the next turn
---- as at the first pass both sides are unworked and need some other indication on which side the plow should be
+--- Headlands follow their winding direction; centre rows use boundary, worked-side or next-turn data.
 function Course:shouldPlowBeOnTheLeft(ix)
-    local plowShouldBeOnTheLeft
+    -- Headland winding determines which side faces the worked area, independently of row turns.
     if self:isOnHeadland(ix) then
         local clockwise = self:isOnClockwiseHeadland(ix)
-        plowShouldBeOnTheLeft = not clockwise
+        local plowShouldBeOnTheLeft = not clockwise
         CpUtil.debugVehicle(CpDebug.DBG_TURN, self.vehicle, 'On a headland (clockwise %s), plow should be on the left %s', tostring(clockwise), tostring(plowShouldBeOnTheLeft))
-    else
-        local isNextTurnLeft = self:isNextTurnLeft(ix)
-        if isNextTurnLeft == nil then
-            -- don't know if left or right, so just use the last worked side
-            plowShouldBeOnTheLeft = self:isLeftSideWorked(ix)
-            CpUtil.debugVehicle(CpDebug.DBG_TURN, self.vehicle, 'On the center, next turn direction unknown, plow should be on the left %s', tostring(plowShouldBeOnTheLeft))
-        else
-            plowShouldBeOnTheLeft = not isNextTurnLeft
-            CpUtil.debugVehicle(CpDebug.DBG_TURN, self.vehicle, 'On the center, plow should be on the left %s', tostring(plowShouldBeOnTheLeft))
-        end
+        return plowShouldBeOnTheLeft
     end
+
+    -- Neither side of the first centre row may be worked yet, so prefer its block boundary.
+    local waypoint = self.waypoints[ix]
+    local leftSideBlockBoundary = waypoint.attributes.leftSideBlockBoundary == true
+    local rightSideBlockBoundary = waypoint.attributes.rightSideBlockBoundary == true
+    if waypoint:getRowNumber() == 1 and (leftSideBlockBoundary or rightSideBlockBoundary) then
+        CpUtil.debugVehicle(CpDebug.DBG_TURN, self.vehicle, 'On the first center row, headland left/right %s/%s, plow should be on the left %s',
+                tostring(leftSideBlockBoundary), tostring(rightSideBlockBoundary), tostring(leftSideBlockBoundary))
+        return leftSideBlockBoundary
+    end
+
+    -- A turn into the headland does not describe the last centre row's worked side.
+    local nextRowStartIx = self:getNextRowStartIx(ix)
+    if nextRowStartIx ~= nil and self:isOnHeadland(nextRowStartIx) then
+        local plowShouldBeOnTheLeft = self:isLeftSideWorked(ix) == true
+        CpUtil.debugVehicle(CpDebug.DBG_TURN, self.vehicle, 'On the last center row before headland, plow should be on the left %s', tostring(plowShouldBeOnTheLeft))
+        return plowShouldBeOnTheLeft
+    end
+
+    -- Old or incomplete courses may lack a next turn; preserve the worked-side fallback.
+    local isNextTurnLeft = self:isNextTurnLeft(ix)
+    if isNextTurnLeft == nil then
+        local plowShouldBeOnTheLeft = self:isLeftSideWorked(ix) == true
+        CpUtil.debugVehicle(CpDebug.DBG_TURN, self.vehicle, 'On the center, next turn direction unknown, plow should be on the left %s', tostring(plowShouldBeOnTheLeft))
+        return plowShouldBeOnTheLeft
+    end
+
+    -- For ordinary centre rows, the next turn identifies the side that has already been worked.
+    local plowShouldBeOnTheLeft = not isNextTurnLeft
+    CpUtil.debugVehicle(CpDebug.DBG_TURN, self.vehicle, 'On the center, plow should be on the left %s', tostring(plowShouldBeOnTheLeft))
     return plowShouldBeOnTheLeft
 end
 
@@ -1570,6 +1590,10 @@ local function createWaypointsFromXml(xmlFile, key)
                 -- there is now intermediate waypoints between the row start and row end and they are further
                 -- apart than the row waypoint distance, add intermediate waypoints
                 addIntermediateWaypoints(d, waypoints, waypoints[#waypoints], wp)
+            end
+            if rowStart then
+                -- XML stores row metadata at the start; restore it at the end before clearing the row.
+                wp:copyRowData(rowStart)
             end
             rowStart = nil
         elseif rowStart then

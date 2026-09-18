@@ -147,11 +147,14 @@ function AIDriveStrategyPlowCourse:isPlowRotationAllowed()
     return allowed
 end
 
---- Initial plow rotation based on the ridge marker side selection by the course generator.
-function AIDriveStrategyPlowCourse:rotatePlows()
+--- Rotate ploughs to the working side selected from the course's row or headland metadata.
+---@param ix number|nil fieldwork waypoint, or the current waypoint when starting normally
+---@param course Course|nil explicit fieldwork course when returning from a temporary approach
+function AIDriveStrategyPlowCourse:rotatePlows(ix, course)
     self:debug('Starting work: check if plow needs to be turned.')
-    local ix = self.ppc:getCurrentWaypointIx()
-    local plowShouldBeOnTheLeft = self.course:shouldPlowBeOnTheLeft(ix)
+    ix = ix or self.ppc:getCurrentWaypointIx()
+    course = course or self.course
+    local plowShouldBeOnTheLeft = course:shouldPlowBeOnTheLeft(ix)
     for _, controller in pairs(self.controllers) do
         if controller.rotate then
             controller:rotate(plowShouldBeOnTheLeft)
@@ -198,5 +201,16 @@ end
 --- for the first waypoint to pass as it is on the wrong side right after the turn
 function AIDriveStrategyPlowCourse:resumeFieldworkAfterTurn(ix)
     self.plowOffsetUnknown:reset()
+
+    -- During alignment or a connecting path, self.course is still the temporary approach course.
+    local course = self.fieldWorkCourse
+    -- The resume waypoint can precede the headland; inspect its neighbour without passing the course end.
+    local nextIx = math.min(ix + 1, course:getNumberOfWaypoints())
+    if self:haveRotatablePlow() and (course:isOnHeadland(ix) or course:isOnHeadland(nextIx)) then
+        local plowIx = course:isOnHeadland(ix) and ix or nextIx
+        self:debug('Entering headland, forcing plow side reinitialisation at ix %d.', plowIx)
+        self:rotatePlows(plowIx, course)
+    end
+    -- Request the correct side before the base strategy resumes fieldwork and updates the course.
     AIDriveStrategyFieldWorkCourse.resumeFieldworkAfterTurn(self, ix)
 end
