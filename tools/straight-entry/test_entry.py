@@ -14,6 +14,7 @@ class EntryTests(unittest.TestCase):
     def setUp(self):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
         self.lua.globals().ROOT = ROOT.as_posix()
+        self.lua.globals().SOURCE = SOURCE.as_posix()
         self.lua.execute((SOURCE / 'tools/straight-entry/engine-boundary.lua').read_text())
 
     def test_short_headland_handover_respects_corner_and_missing_continuation(self):
@@ -175,11 +176,11 @@ class EntryTests(unittest.TestCase):
     def test_full_center_first_generator_connects_final_row_forward(self):
         self.lua.execute("""
         package.path=ROOT..'/scripts/courseGenerator/geometry/?.lua;'..
-            ROOT..'/scripts/courseGenerator/genetic/?.lua;'..ROOT..'/scripts/test/?.lua;'..package.path
+            ROOT..'/scripts/courseGenerator/genetic/?.lua;'..SOURCE..'/scripts/test/?.lua;'..package.path
         local attributes=CourseGenerator.WaypointAttributes
         require('CourseGenerator')
         CourseGenerator.WaypointAttributes=attributes
-        dofile(ROOT..'/scripts/courseGenerator/test/require.lua')
+        dofile(SOURCE..'/scripts/courseGenerator/test/require.lua')
         Logger.debug=function() end; Logger.info=function() end; Logger.warning=function() end
         for _, clockwise in ipairs({false,true}) do
         for _, count in ipairs({1,3,6}) do
