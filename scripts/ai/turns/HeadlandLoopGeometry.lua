@@ -34,6 +34,7 @@ function G.getBody(object, node)
             size.width <= 0 or size.length <= 0 or not object.rootNode then return nil end
     local body = {left = -math.huge, right = math.huge, front = -math.huge, back = math.huge}
     local declared = {left = -math.huge, right = math.huge, front = -math.huge, back = math.huge}
+    local workArea = {left = -math.huge, right = math.huge, front = -math.huge, back = math.huge}
     local function include(target, x, z)
         target.left, target.right = math.max(target.left, x), math.min(target.right, x)
         target.front, target.back = math.max(target.front, z), math.min(target.back, z)
@@ -50,8 +51,10 @@ function G.getBody(object, node)
         local left, right, back = object:getAIMarkers()
         for _, marker in pairs({left, right, back}) do
             if marker and marker ~= 0 then
+                body.working = true
                 local x, _, z = localToLocal(marker, node, 0, 0, 0)
                 include(body, x, z)
+                include(workArea, x, z)
             end
         end
     end
@@ -61,6 +64,7 @@ function G.getBody(object, node)
     -- Working markers protect the field boundary, while declared dimensions
     -- provide the less misleading solid-body rectangle for implement clearance.
     body.collision = declared
+    body.workArea = body.working and workArea or nil
     return body
 end
 
@@ -239,6 +243,12 @@ end
 
 function G.bodyFits(body, pose, boundary)
     if not boundary then return true end
+    -- The narrow chassis and wide working bar occupy different longitudinal
+    -- ranges. Check their union, not a full-width rectangle the chassis length.
+    if body.collision then
+        return G.bodyFits(body.collision, pose, boundary) and
+            (not body.workArea or G.bodyFits(body.workArea, pose, boundary))
+    end
     local minX, minZ, maxX, maxZ = math.huge, math.huge, -math.huge, -math.huge
     for _, bx in ipairs({body.left, body.right}) do
         for _, bz in ipairs({body.front, body.back}) do
@@ -355,7 +365,7 @@ function G.advance(model, previous, root)
     return result
 end
 
-function G.validate(model, course, boundary, entryIx, alignmentNode, loweringDistance)
+function G.createValidator(model, course, boundary, entryIx, alignmentNode, loweringDistance, rootOnly)
     local poses = {{x = model.root.x, z = model.root.z, t = model.root.t}}
     for i, link in ipairs(model.links) do
         local x, z = position(poses[i], 0, link.hitch)
@@ -366,10 +376,10 @@ function G.validate(model, course, boundary, entryIx, alignmentNode, loweringDis
     local peak = 0
     local function check(ix)
         for i, pose in ipairs(poses) do
-            local boundaryBody = model.bodies[i].collision or model.bodies[i]
+            local boundaryBody = model.bodies[i]
             if not G.bodyFits(boundaryBody, pose, boundary) then
-                return false, string.format('field boundary (%s, body %d, waypoint %d)',
-                    boundary and boundary.source or 'unavailable', i, ix)
+                return false, string.format('field boundary (%s, body %d, waypoint %d, x %.1f z %.1f)',
+                    boundary and boundary.source or 'unavailable', i, ix, pose.x, pose.z)
             end
             if i > 1 then
                 local angle = math.abs(delta(poses[i - 1].t, pose.t))
@@ -387,35 +397,63 @@ function G.validate(model, course, boundary, entryIx, alignmentNode, loweringDis
                 end
             end
         end
-        if ix > entryIx and not alignedAtWork then
+        if not rootOnly and ix > entryIx and not alignedAtWork then
             local _, _, z = worldToLocal(alignmentNode, poses[1].x, 0, poses[1].z)
             if z >= -loweringDistance then
                 for _, pose in ipairs(poses) do
-                    if math.abs(delta(pose.t, targetHeading)) > G.alignmentTolerance then return false, 'settling' end
+                    if math.abs(delta(pose.t, targetHeading)) > G.alignmentTolerance then
+                        return false, 'settling'
+                    end
                 end
                 alignedAtWork = true
             end
         end
         return true
     end
+    if rootOnly then poses = {poses[1]} end
     local ok, reason = check(1)
-    if not ok then return false, reason end
     local px, _, pz = course:getWaypointPosition(1)
     local angle = model.root.t
-    for i = 2, course:getNumberOfWaypoints() do
-        local x, _, z = course:getWaypointPosition(i)
-        local nextAngle = course:getWaypointYRotation(i)
-        local distance = math.sqrt((x - px)^2 + (z - pz)^2)
-        local count = math.max(1, math.ceil(distance / G.step), math.ceil(math.abs(delta(nextAngle, angle)) / math.rad(2)))
-        for j = 1, count do
-            poses = G.advance(model, poses, {x = px + (x - px) * j / count,
-                z = pz + (z - pz) * j / count, t = angle + delta(nextAngle, angle) * j / count})
+    local i, j, count, x, z, nextAngle = 2, 0
+    return {step = function(_, budget)
+        if not ok then return true, false, reason end
+        for _ = 1, budget do
+            if i > course:getNumberOfWaypoints() then
+                if not rootOnly then
+                    for _, pose in ipairs(poses) do
+                        if math.abs(delta(pose.t, targetHeading)) > G.alignmentTolerance then
+                            return true, false, 'cart still settling at end of straight'
+                        end
+                    end
+                end
+                return true, rootOnly or alignedAtWork, (rootOnly or alignedAtWork) and peak or 'missing work entry'
+            end
+            if j == 0 then
+                x, _, z = course:getWaypointPosition(i)
+                nextAngle = course:getWaypointYRotation(i)
+                local distance = math.sqrt((x - px)^2 + (z - pz)^2)
+                count = math.max(1, math.ceil(distance / G.step), math.ceil(math.abs(delta(nextAngle, angle)) / math.rad(2)))
+            end
+            j = j + 1
+            local root = {x = px + (x - px) * j / count,
+                z = pz + (z - pz) * j / count, t = angle + delta(nextAngle, angle) * j / count}
+            poses = rootOnly and {root} or G.advance(model, poses, root)
             ok, reason = check(i)
-            if not ok then return false, reason end
+            if not ok then return true, false, reason end
+            if j == count then
+                px, pz, angle, i, j = x, z, nextAngle, i + 1, 0
+            end
         end
-        px, pz, angle = x, z, nextAngle
+        return false
+    end}
+end
+
+function G.validate(model, course, boundary, entryIx, alignmentNode, loweringDistance)
+    local validator = G.createValidator(model, course, boundary, entryIx, alignmentNode, loweringDistance)
+    while true do
+        local done, ok, detail = validator:step(64)
+        if done then return ok, detail end
     end
-    return alignedAtWork, alignedAtWork and peak or 'missing work entry'
 end
 
 --- Cheaply reject a tractor path which crosses the field edge before running
@@ -443,81 +481,152 @@ function G.rootCourseFits(model, course, boundary)
     return true
 end
 
---- Search a bounded set; shortest accepted candidate, not a global optimum.
-function G.plan(maneuver, model, loweringDistance)
+--- Incremental search. GIANTS does not provide Lua coroutines: retain explicit
+--- state and bound both candidate preparation and sampled validation per update.
+function G.createSearch(maneuver, model, loweringDistance)
+    local search = {done = false, phase = 'preparing', candidates = {}, tested = 0, rejected = {}}
     local steadyRadius = G.minimumRadius(model, maneuver.turningRadius)
-    if not steadyRadius then return nil, 'radius exceeds search limit' end
     local boundary = G.getBoundary(maneuver.vehicle)
-    if (model.internalPivots or 0) > 0 and not boundary then
-        return nil, 'field boundary unavailable for internal-pivot loop'
+    if not steadyRadius or ((model.internalPivots or 0) > 0 and not boundary) then
+        search.done = true
+        search.reason = not steadyRadius and 'radius exceeds search limit' or 'field boundary unavailable for internal-pivot loop'
+    end
+    if boundary and not G.bodyFits(model.bodies[1], model.root, boundary) then
+        search.done = true
+        search.reason = string.format('tractor starts outside %s boundary at x %.1f z %.1f',
+            boundary.source, model.root.x, model.root.z)
     end
     local width = math.max(maneuver.workWidth, model.width)
     local scale = 0
     for _, link in ipairs(model.links) do scale = scale + link.length end
-    local best, bestLength, result = nil, math.huge, 'no candidate'
-    local generated, rootRejected = 0, 0
-    local turnEndNode = maneuver.turnContext:getTurnEndNodeAndOffsets(maneuver.steeringLength)
-    -- The unrestricted solver returns only its shortest Dubins word. At a
-    -- headland corner that word can put the tractor outside the field even
-    -- though a longer forward-only word turns into the field and fits. Check
-    -- every word independently; validation still chooses the shortest route
-    -- which fits the complete articulated combination.
-    local solvers = {}
-    for pathType = DubinsSolver.PathType.LSL, DubinsSolver.PathType.LRL do
-        solvers[#solvers + 1] = {solver = DubinsSolver({pathType}), name = tostring(pathType)}
-    end
-    -- The steady-circle estimate is useful for ordering, but it is not a hard
-    -- lower bound for a transient corner. Begin at CP's configured tractor
-    -- radius and let the sampled articulation/clearance checks decide.
     local radii, seenRadius = {}, {}
     local function addRadius(radius)
         local key = math.floor(radius * 100 + 0.5)
         if not seenRadius[key] then radii[#radii + 1], seenRadius[key] = radius, true end
     end
     addRadius(maneuver.turningRadius)
-    if steadyRadius > maneuver.turningRadius + 0.1 then
-        addRadius((maneuver.turningRadius + steadyRadius) / 2)
-    end
-    for _, factor in ipairs({1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6}) do
-        addRadius(steadyRadius * factor)
+    if steadyRadius then
+        for _, factor in ipairs({1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6}) do addRadius(steadyRadius * factor) end
+        -- Refine practical radii instead of jumping directly to very large loops.
+        for r = maneuver.turningRadius + 2, math.max(steadyRadius * 2, maneuver.turningRadius + 10), 2 do addRadius(r) end
     end
     table.sort(radii)
-    for _, candidateRadius in ipairs(radii) do
-        for _, entryFactor in ipairs({1, 2, 3}) do
-            for _, pull in ipairs({0, width / 2, width}) do
-                local entry = scale * entryFactor + loweringDistance
-                for _, pathSolver in ipairs(solvers) do
-                    local candidate = Course.createFromNode(maneuver.vehicle, maneuver.vehicleDirectionNode,
-                        0, 0, math.max(0.5, pull), 1, false)
-                    local path = PathfinderUtil.findAnalyticPath(pathSolver.solver,
-                        maneuver.vehicleDirectionNode, 0, math.max(0.5, pull) + 0.5,
-                        turnEndNode, 0, -entry, candidateRadius)
-                    if path and #path > 1 then
-                        generated = generated + 1
-                        candidate:append(Course.createFromAnalyticPath(maneuver.vehicle, path, true))
-                        local entryIx = candidate:getNumberOfWaypoints()
-                        local ending = maneuver.turnContext:appendEndingTurnCourse(candidate, maneuver.steeringLength)
-                        local rootFits = G.rootCourseFits(model, candidate, boundary)
-                        if not rootFits then rootRejected = rootRejected + 1 end
-                        if candidate:getLength() < bestLength and rootFits then
-                            local ok, detail = G.validate(model, candidate, boundary, entryIx,
-                                maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance)
-                            if ok then
-                                TurnManeuver.setLowerImplements(candidate, ending, true)
-                                best, bestLength = candidate, candidate:getLength()
-                                result = string.format('%d pivots (%d internal), width %.1f m, radius %.1f m, entry %.1f m, Dubins %s, peak angle %.1f deg, articulation clearance checked, boundary %s',
-                                    #model.links, model.internalPivots or 0, width, candidateRadius, entry,
-                                    pathSolver.name, math.deg(detail), boundary and boundary.source or 'unavailable')
-                            elseif not best then result = detail end
-                        end
-                    end
-                end
+    local entries, pulls = {0, .25, .5, 1, 2, 3}, {0, width / 4, width / 2, width}
+    local solvers = {}
+    for pathType = DubinsSolver.PathType.LSL, DubinsSolver.PathType.LRL do
+        solvers[#solvers + 1] = {solver = DubinsSolver({pathType}), name = tostring(pathType)}
+    end
+    local turnEndNode = maneuver.turnContext:getTurnEndNodeAndOffsets(maneuver.steeringLength)
+    local gx, _, gz = getWorldTranslation(turnEndNode)
+    Logging.info('[CP headland loop] search pose x %.2f z %.2f heading %.2f; target x %.2f z %.2f heading %.2f; boundary %s (%d vertices)',
+        model.root.x, model.root.z, math.deg(model.root.t), gx, gz, math.deg(heading(turnEndNode)),
+        boundary and boundary.source or 'unavailable', boundary and #boundary.polygon or 0)
+    for i, link in ipairs(model.links) do
+        local body = model.bodies[i + 1]
+        Logging.info('[CP headland loop] link %d: hitch %.2f length %.2f heading %.2f limit %.2f; body left %.2f right %.2f front %.2f back %.2f',
+            i, link.hitch, link.length, math.deg(link.heading), math.deg(link.maxArticulation or G.maxArticulation),
+            body.left, body.right, body.front, body.back)
+    end
+    local ri, ei, pi, si, candidateIx = 1, 1, 1, 1, 1
+    local prepared = false
+    local function nextDescriptor()
+        local radius, entry, pull = radii[ri], scale * entries[ei] + loweringDistance, math.max(.5, pulls[pi])
+        local solver = solvers[si]
+        local x, z, t = PathfinderUtil.getNodePositionAndDirection(maneuver.vehicleDirectionNode, 0, pull + .5)
+        local start = State3D(x, -z, CpMathUtil.angleFromGame(t))
+        x, z, t = PathfinderUtil.getNodePositionAndDirection(turnEndNode, 0, -entry)
+        local goal = State3D(x, -z, CpMathUtil.angleFromGame(t))
+        local solution = solver.solver:solve(start, goal, radius)
+        if solution then
+            local length = solution:getLength(radius)
+            if length < 100000 then
+                search.candidates[#search.candidates + 1] = {solution = solution, start = start, radius = radius,
+                    entry = entry, pull = pull, name = solver.name, score = length + pull + entry}
             end
         end
+        si = si + 1
+        if si > #solvers then si, pi = 1, pi + 1 end
+        if pi > #pulls then pi, ei = 1, ei + 1 end
+        if ei > #entries then ei, ri = 1, ri + 1 end
+        return ri > #radii
     end
-    if not best and rootRejected > 0 then
-        result = string.format('field boundary (tractor route, %d of %d candidates; radius %.1f-%.1f m)',
-            rootRejected, generated, radii[1], radii[#radii])
+    local function reject(detail)
+        local category = string.match(detail, '^[^(]+') or detail
+        search.rejected[category] = (search.rejected[category] or 0) + 1
+        search.lastRejection = detail
+        -- Keep the shortest rejected route's location, not a huge loop's edge.
+        search.firstRejection = search.firstRejection or detail
     end
-    return best, result
+    function search:step()
+        if self.done then return true, self.course, self.reason end
+        if not prepared then
+            for _ = 1, 16 do
+                if nextDescriptor() then
+                    table.sort(self.candidates, function(a, b) return a.score < b.score end)
+                    prepared = true
+                    self.phase = 'validating'
+                    break
+                end
+            end
+            return false
+        end
+        if self.validator then
+            local done, ok, detail = self.validator:step(32)
+            if not done then return false end
+            if ok and self.rootPhase then
+                self.rootPhase = false
+                self.validator = G.createValidator(model, self.pending, boundary, self.entryIx,
+                    maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance)
+                return false
+            end
+            self.validator = nil
+            if ok then
+                TurnManeuver.setLowerImplements(self.pending, self.ending, true)
+                -- Descriptors are ordered by route length, so stop at the first
+                -- validated solution. This is a bounded search, not a global optimum.
+                self.course = self.pending
+                self.reason = string.format('%d pivots (%d internal), width %.1f m, radius %.1f m, entry %.1f m, Dubins %s, peak angle %.1f deg, boundary %s, %d candidates tested',
+                    #model.links, model.internalPivots or 0, width, self.option.radius, self.option.entry,
+                    self.option.name, math.deg(detail), boundary and boundary.source or 'unavailable', self.tested)
+                self.done = true
+                return true, self.course, self.reason
+            end
+            reject(detail)
+            self.pending = nil
+            return false
+        end
+        local option = self.candidates[candidateIx]
+        if not option then
+            self.done = true
+            local counts = {}
+            for category, count in pairs(self.rejected) do counts[#counts + 1] = string.format('%s=%d', category, count) end
+            table.sort(counts)
+            self.reason = string.format('no fitting candidate (%d tested; %s); shortest rejected: %s; last: %s',
+                self.tested, table.concat(counts, ', '), self.firstRejection or 'none', self.lastRejection or 'none')
+            return true, nil, self.reason
+        end
+        candidateIx = candidateIx + 1
+        self.tested = self.tested + 1
+        self.option = option
+        local candidate = Course.createFromNode(maneuver.vehicle, maneuver.vehicleDirectionNode, 0, 0, option.pull, 1, false)
+        local path = option.solution:getWaypoints(option.start, option.radius)
+        if not path or #path < 2 then reject('empty analytic path'); return false end
+        candidate:append(Course.createFromAnalyticPath(maneuver.vehicle, path, true))
+        self.entryIx = candidate:getNumberOfWaypoints()
+        self.ending = maneuver.turnContext:appendEndingTurnCourse(candidate, maneuver.steeringLength)
+        self.pending, self.rootPhase = candidate, true
+        self.validator = G.createValidator(model, candidate, boundary, self.entryIx,
+            maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance, true)
+        return false
+    end
+    return search
+end
+
+--- Synchronous entry point for offline qualification. Runtime uses step().
+function G.plan(maneuver, model, loweringDistance)
+    local search = G.createSearch(maneuver, model, loweringDistance)
+    while true do
+        local done, course, reason = search:step()
+        if done then return course, reason end
+    end
 end

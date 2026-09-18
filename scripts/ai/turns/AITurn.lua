@@ -119,6 +119,7 @@ function AITurn:startRecoveryTurn(...)
 end
 
 function AITurn:onBlocked()
+    if self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then return end
     self:startRecoveryTurn(1 * self.turningRadius)
 end
 
@@ -249,10 +250,15 @@ function AITurn:getDriveData(dt)
         end
     elseif self.state == self.states.WAITING_FOR_PATHFINDER then
         maxSpeed = 0
+    elseif self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then
+        self:updateLoopSearch()
+        maxSpeed = 0
     else
         -- Performing the actual turn
         gx, gz, moveForwards, maxSpeed = self:turn(dt)
     end
+    -- finishRow can enter the waiting state in this same update.
+    if self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then maxSpeed = 0 end
     return gx, gz, moveForwards, maxSpeed
 end
 
@@ -504,6 +510,14 @@ end
 --      = if turn on field setting is off, use pathfinder turns if enabled in settings, calculated turns otherwise
 --
 function CourseTurn:startTurn()
+    if not self.loopSearchAttempted and self.turnContext:isHeadlandCorner() and
+            self.settings.loopTurnsOnHeadland:getValue() and HeadlandLoopGeometry.detect(self.vehicle) then
+        self.loopSearchAttempted = true
+        self:addState('WAITING_FOR_LOOP')
+        self.state = self.states.WAITING_FOR_LOOP
+        self:debug('Stopping before incremental headland loop search')
+        return
+    end
     local canTurnOnField = AITurn.canTurnOnField(self.turnContext, self.vehicle, self.workWidth, self.turningRadius)
     if self.turnContext:isHeadlandCorner() then
         self:debug('Starting a headland corner turn')
@@ -544,6 +558,29 @@ function CourseTurn:startTurn()
         self.ppc:setCourse(self.turnCourse)
         self.ppc:initialize(1)
     end
+end
+
+function CourseTurn:updateLoopSearch()
+    -- Freeze the initial pose only after braking. No candidate may be generated
+    -- from a live node while the tractor is still moving along the finishing row.
+    if self.vehicle:getLastSpeed() > 0.1 then
+        self.loopManeuver = nil
+        return
+    end
+    if not self.loopManeuver then
+        self.loopManeuver = LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
+            self.turningRadius, self.workWidth, self.steeringLength,
+            self.driveStrategy:getLoweringDurationMs() * self.settings.turnSpeed:getValue() / 3600 + 0.5, true)
+        return
+    end
+    local timer = openIntervalTimer()
+    local done = false
+    for _ = 1, 64 do
+        done = self.loopManeuver:resumeSearch()
+        if done or readIntervalTimerMs(timer) >= 5 then break end
+    end
+    closeIntervalTimer(timer)
+    if done then self:startTurn() end
 end
 
 function CourseTurn:isForwardOnly()
@@ -667,7 +704,7 @@ function CourseTurn:generateCalculatedTurn()
         self:debug('This is a headland turn')
         if self.settings.loopTurnsOnHeadland:getValue() then
             -- do a 270° turn forward only
-            turnManeuver = LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
+            turnManeuver = self.loopManeuver or LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
                     self.turningRadius, self.workWidth, self.steeringLength,
                     self.driveStrategy:getLoweringDurationMs() * self.settings.turnSpeed:getValue() / 3600 + 0.5)
             self.enableTightTurnOffset = not turnManeuver.chainPlanned

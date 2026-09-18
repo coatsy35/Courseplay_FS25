@@ -33,14 +33,14 @@ sets the search distances only; it does not replace the separate pivot model.
 Each candidate is sampled at at most 0.5 m and two degrees of tractor heading
 change. Passive trailer headings are integrated from each parent's actual hitch
 displacement. Candidates exceeding a 45-degree relative heading at a conventional
-hitch, or 25 degrees at either side of an approximated internal drawbar, are
-rejected. The tighter internal limit is a clearance proxy for the missing
-collision shape, not the cart's mechanical joint limit. Candidates must also
+hitch, or the detected yaw limit at an approximated internal drawbar, are
+rejected. The drawbar remains a kinematic approximation, not a measured
+collision shape. Candidates must also
 settle all headings within five degrees of the outgoing direction before the
 estimated lowering position.
 The lowering allowance uses CP's configured turn speed and lowering duration.
 
-Each body's predicted declared physical rectangle is checked
+Each body's declared physical rectangle and its separate working-marker area are checked
 against the boundary and islands, including polygon edges and enclosed islands.
 An edge grid limits repeated polygon work. These are sampled planar footprint
 checks, not continuous swept-volume or game-physics guarantees. An internal-pivot
@@ -82,8 +82,8 @@ reason. Unknown geometry is not silently described as a checked chain.
 
 The captures do not contain collision meshes or a measured safe drawbar angle.
 Declared solid-body rectangles are used for non-adjacent body intersections;
-the 25-degree internal articulation limit protects the drill/cart coupling where
-their declared rectangular envelopes overlap even when straight. Slopes, tyre
+internal articulation is checked against the detected yaw limit, with separate
+non-adjacent body clearance checks. Slopes, tyre
 slip, articulated tractor motion and actual tracking require in-game tests. Keep
 CP's existing collision detection enabled.
 
@@ -118,3 +118,34 @@ logged mode, wider loop, retained speed, corner work coverage and straight retur
 Also check a narrow field and an island: a rejected route must stop rather than
 cross the boundary. Inspect actual hitch motion and clearance before judging
 whether a separate model for the cart's internal drawbar is sufficient.
+
+## Incremental loop search — test 8.1.0.311
+
+The 8.1.0.310 live log records 475 rejected candidates in one update between
+18:19:40.695 and 18:19:45.266. Every candidate failed the tractor boundary check.
+The previous radius change did not resolve this failure.
+
+Loop planning now has an explicit waiting state. It brakes before recording the
+chain pose, prepares at most 16 analytic descriptors per step, and validates at
+most 32 footprint samples per step. Runtime yields after a 5 ms budget between
+steps (an individual step may exceed that budget); it does not use coroutines.
+Course construction is still one bounded operation per candidate. Candidates
+are ordered by analytic length including approach and exit distances, and the
+search stops at the first validated route. Shorter entry distances and intermediate
+radii are now considered. Configured driving speeds remain unchanged.
+
+Boundary validation checks the union of the chassis and working-marker area.
+It neither drops the working width nor stretches the entire chassis to that
+width. Logs include initial chain geometry and rejection body/waypoint/world
+position, along with rejection counts.
+
+The saved Saxlingham corner was replayed with its map outline and approximate
+start pose. The old search's universal tractor-boundary rejection was reproduced;
+shorter entries admit tractor paths but full-chain checks still reject the replay.
+This build addresses calculation stalls and improves diagnostics/search coverage;
+it does **not** establish that this particular corner can be driven successfully.
+The live initial pose and GIANTS dynamics are still required to resolve that.
+
+The combined local test includes `aad9736b` and the straight-entry baseline.
+Its filename remains `FS25_Courseplay_StraightEntryTest.zip`, in its own numbered
+top-level folder outside `dist`. Release checks run on source and extracted ZIP.

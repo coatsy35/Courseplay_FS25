@@ -146,17 +146,18 @@ class LoopTests(unittest.TestCase):
             local model=assert(HeadlandLoopGeometry.detect(v))
             local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
                 turningRadius=10,workWidth=25.6,steeringLength=9.8}
-            local validate,rootFits=HeadlandLoopGeometry.validate,HeadlandLoopGeometry.rootCourseFits
-            local calls=0
-            HeadlandLoopGeometry.rootCourseFits=function() return true end
-            HeadlandLoopGeometry.validate=function()
-                calls=calls+1
-                return calls==2, calls==2 and math.rad(10) or 'synthetic rejection'
+            local search=HeadlandLoopGeometry.createSearch(maneuver,model,.5)
+            while search.phase=='preparing' do assert(not search:step()) end
+            local words={}
+            local last=-math.huge
+            for _,candidate in ipairs(search.candidates) do
+                words[candidate.name]=true
+                assert(candidate.score>=last)
+                last=candidate.score
             end
-            local course,reason=HeadlandLoopGeometry.plan(maneuver,model,.5)
-            HeadlandLoopGeometry.validate,HeadlandLoopGeometry.rootCourseFits=validate,rootFits
-            assert(course and calls>1, 'planner did not try another Dubins word')
-            assert(string.find(reason,'Dubins 3'), tostring(reason))
+            local count=0
+            for _ in pairs(words) do count=count+1 end
+            assert(count==6, 'search omitted a Dubins word')
         ''')
 
     def test_transient_search_starts_at_configured_radius(self):
@@ -166,15 +167,15 @@ class LoopTests(unittest.TestCase):
             local model=assert(HeadlandLoopGeometry.detect(v))
             local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
                 turningRadius=10,workWidth=25.6,steeringLength=9.8}
-            local minimum,validate,rootFits=HeadlandLoopGeometry.minimumRadius,
-                HeadlandLoopGeometry.validate,HeadlandLoopGeometry.rootCourseFits
             HeadlandLoopGeometry.minimumRadius=function() return 20 end
-            HeadlandLoopGeometry.rootCourseFits=function() return true end
-            HeadlandLoopGeometry.validate=function() return true,math.rad(10) end
-            local course,reason=HeadlandLoopGeometry.plan(maneuver,model,.5)
-            HeadlandLoopGeometry.minimumRadius,HeadlandLoopGeometry.validate,
-                HeadlandLoopGeometry.rootCourseFits=minimum,validate,rootFits
-            assert(course and string.find(reason,'radius 10.0 m'), tostring(reason))
+            local search=HeadlandLoopGeometry.createSearch(maneuver,model,.5)
+            while search.phase=='preparing' do assert(not search:step()) end
+            local configured,shortEntry=false,false
+            for _,candidate in ipairs(search.candidates) do
+                configured=configured or candidate.radius==10
+                shortEntry=shortEntry or candidate.entry<1
+            end
+            assert(configured and shortEntry, 'search discarded transient corner approaches')
         ''')
 
     def test_internal_pivot_uses_chain_planner_and_detected_width(self):
@@ -188,7 +189,7 @@ class LoopTests(unittest.TestCase):
             assert(course, tostring(reason))
             assert(string.find(reason,'3 pivots %(1 internal%)'))
             local plannedRadius=tonumber(string.match(reason,'radius ([%d.]+)'))
-            assert(plannedRadius>15.5 and plannedRadius<50, tostring(reason))
+            assert(plannedRadius>=10 and plannedRadius<50, tostring(reason))
             local m=LoopTurnManeuver(v,c,v.rootNode,10,8,9.8,.5)
             assert(m.chainPlanned and m.course, tostring(reason))
         ''')
@@ -263,7 +264,14 @@ class LoopTests(unittest.TestCase):
                     states={TURNING={}},ppc={setCourse=function() error('must not install rejected course') end}},CourseTurn)
                 t.debug=function() end
                 AITurn.canTurnOnField=function() return true end
+                v.getLastSpeed=function() return 0 end
+                openIntervalTimer=function() return 1 end
+                readIntervalTimerMs=function() return 5 end
+                closeIntervalTimer=function() end
                 t:startTurn()
+                assert(not stopped and t.state==t.states.WAITING_FOR_LOOP)
+                t:updateLoopSearch()
+                t:updateLoopSearch()
                 assert(stopped and not t.turnCourse)
             end
         ''')
@@ -302,6 +310,79 @@ class LoopTests(unittest.TestCase):
             if 'out' in file.relative_to(ROOT).parts or 'test' in file.relative_to(ROOT).parts:
                 continue
             check(file.read_text(encoding='utf-8-sig'), file.as_posix())
+
+    def test_incremental_search_matches_offline_result_with_bounded_validation(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,field=field})
+            local m=assert(G.detect(v))
+            local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local expected=assert(G.plan(maneuver,m,.5))
+            local search=G.createSearch(maneuver,m,.5)
+            local advances,updates=0,0
+            local advance=G.advance
+            G.advance=function(...) advances=advances+1; return advance(...) end
+            repeat
+                advances=0
+                search:step()
+                assert(advances<=32, 'validation blocked instead of yielding')
+                updates=updates+1
+                assert(updates<20000, 'search did not terminate')
+            until search.done
+            G.advance=advance
+            assert(updates>1 and search.course)
+            assert(math.abs(search.course:getLength()-expected:getLength())<.001)
+        ''')
+
+    def test_runtime_waits_for_braking_and_installs_only_completed_search(self):
+        self.lua.execute('''
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,field=field})
+            c.isHeadlandCorner=function() return true end
+            local speed,installed,closed=12,0,0
+            v.getLastSpeed=function() return speed end
+            v.stopCurrentAIJob=function() error('valid loop unexpectedly rejected') end
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 5 end
+            closeIntervalTimer=function() closed=closed+1 end
+            AITurn.canTurnOnField=function() return true end
+            local t=setmetatable({vehicle=v,turnContext=c,workWidth=25.6,turningRadius=10,steeringLength=9.8,
+                settings={loopTurnsOnHeadland={getValue=function() return true end},turnSpeed={getValue=function() return 17 end}},
+                driveStrategy={getLoweringDurationMs=function() return 1500 end},states={TURNING={}},
+                ppc={setCourse=function(_,course) assert(course); installed=installed+1 end,initialize=function() end}},CourseTurn)
+            t.debug=function() end
+            t:startTurn()
+            local _,_,_,limit=t:getDriveData(16)
+            assert(limit==0 and not t.loopManeuver and installed==0)
+            t.startRecoveryTurn=function() error('waiting triggered blocked recovery') end
+            t:onBlocked()
+            speed=0
+            t:getDriveData(16)
+            assert(t.loopManeuver.search and installed==0)
+            local updates=0
+            while t.state==t.states.WAITING_FOR_LOOP do
+                local _,_,_,limit=t:getDriveData(16)
+                assert(limit==0)
+                updates=updates+1
+                assert(updates<20000)
+            end
+            assert(t.state==t.states.TURNING and installed==1 and closed==updates)
+            assert(t:getForwardSpeed()==17 and not t.enableTightTurnOffset)
+        ''')
+
+    def test_unfolded_work_area_boundary_and_narrow_chassis_are_both_checked(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local field={{x=-10,z=-50},{x=10,z=-50},{x=10,z=50},{x=-10,z=50}}
+            local v,c,drill=fixture({field=field})
+            local m=G.detect(v)
+            local b=G.getBoundary(v)
+            local pose={x=0,z=-9.8,t=0}
+            assert(G.bodyFits(m.bodies[2].collision,pose,b))
+            assert(not G.bodyFits(m.bodies[2],pose,b), 'wide working bar escaped boundary validation')
+        ''')
 
 
 if __name__ == '__main__':
