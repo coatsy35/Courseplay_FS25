@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<GUI onOpen="onOpen" onClose="onClose">
+    <GuiElement profile="newLayer" />
+    <!-- Content only: Lua supplies a private copy of the native Yes/No shell. -->
+    <GuiElement profile="fs25_dialogBg" id="dialogElement" size="800px 300px">
+        <Text profile="cpProfileDialogTitle" text="$l10n_CP_implementProfiles_dialogTitle" />
+        <MultiTextOption profile="cpProfileDialogSelector" id="profileSelector" namedComponents="true" hideButtonOnLimitReached="false" />
+        <BoxLayout profile="fs25_dialogButtonBox">
+            <Button profile="buttonExtra1" text="$l10n_CP_implementProfiles_viewProfiles" onClick="onClickView" />
+            <Button profile="buttonBack" text="$l10n_CP_implementProfiles_dontLoad" onClick="onClickBack" />
+            <Button profile="buttonOK" text="$l10n_CP_implementProfiles_loadProfile" onClick="onClickLoad" />
+        </BoxLayout>
+    </GuiElement>
+    <GUIProfiles>
+        <Profile name="cpProfileDialogTitle" extends="fs25_settingsSectionHeader">
+            <anchor value="0 1" /><pivot value="0 1" /><position value="30px -138px" /><size value="740px 32px" /><textSize value="18px" />
+            <textAlignment value="center" />
+        </Profile>
+        <Profile name="cpProfileDialogSelector" extends="fs25_settingsMultiTextOption">
+            <anchor value="0 1" /><pivot value="0 1" /><position value="50px -177px" /><size value="700px 40px" />
+        </Profile>
+    </GUIProfiles>
+</GUI>

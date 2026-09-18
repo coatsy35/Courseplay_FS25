@@ -35,6 +35,14 @@ function CpInGameMenu.new(target, customMt, messageCenter, l10n, inputManager, c
 		local index = self.pagingElement:getPageMappingIndexByElement(self.pageVehicleSettings)
 		self.pageSelector:setState(index, true)
 	end, self)
+	self.messageCenter:subscribe(MessageType.GUI_CP_INGAME_OPEN_IMPLEMENT_PROFILES, function ()
+		g_gui:showGui("CpInGameMenu")
+		self:changeScreen(CpInGameMenu)
+		self:updatePages()
+		self.pageImplementProfiles.attachedOnly = true
+		local index = self.pagingElement:getPageMappingIndexByElement(self.pageImplementProfiles)
+		self.pageSelector:setState(index, true)
+	end, self)
 	self.messageCenter:subscribe(MessageType.GUI_CP_INGAME_OPEN_COURSE_GENERATOR, function (menu)
 		g_gui:showGui("CpInGameMenu")
 		self:changeScreen(CpInGameMenu)
@@ -74,6 +82,7 @@ end
 function CpInGameMenu.createFromExistingGui(gui, guiName)
 	CpGlobalSettingsFrame.createFromExistingGui(g_gui.frames.cpInGameMenuGlobalSettings.target, "CpGlobalSettingsFrame")
 	CpVehicleSettingsFrame.createFromExistingGui(g_gui.frames.cpInGameMenuVehicleSettings.target, "CpVehicleSettingsFrame")
+	CpImplementProfilesFrame.createFromExistingGui(g_gui.frames.cpInGameMenuImplementProfiles.target, "CpImplementProfilesFrame")
 	CpCourseGeneratorFrame.createFromExistingGui(g_gui.frames.cpInGameMenuCourseGenerator.target, "CpCourseGeneratorFrame")
 	CpCourseManagerFrame.createFromExistingGui(g_gui.frames.cpInGameMenuCourseManager.target, "CpCourseManagerFrame")
 	CpHelpFrame.createFromExistingGui(g_gui.frames.cpInGameMenuHelpLine.target, "CpHelpFrame")
@@ -98,6 +107,7 @@ function CpInGameMenu.setupGui(courseStorage)
 	MessageType.GUI_CP_INGAME_OPEN = nextMessageTypeId()
 	MessageType.GUI_CP_INGAME_OPEN_GLOBAL_SETTINGS = nextMessageTypeId()
 	MessageType.GUI_CP_INGAME_OPEN_VEHICLE_SETTINGS = nextMessageTypeId()
+	MessageType.GUI_CP_INGAME_OPEN_IMPLEMENT_PROFILES = nextMessageTypeId()
 	MessageType.GUI_CP_INGAME_OPEN_COURSE_GENERATOR = nextMessageTypeId()
 	MessageType.GUI_CP_INGAME_OPEN_COURSE_MANAGER = nextMessageTypeId()
 	MessageType.GUI_CP_INGAME_OPEN_HELP_MENU = nextMessageTypeId()
@@ -107,6 +117,8 @@ function CpInGameMenu.setupGui(courseStorage)
 	CpCourseGeneratorFrame.setupGui()
 	CpGlobalSettingsFrame.setupGui()
 	CpVehicleSettingsFrame.setupGui()
+	CpImplementProfilesFrame.setupGui()
+    CpImplementProfileDialog.setupGui()
 	CpCourseManagerFrame.setupGui()
 	CpHelpFrame.setupGui()
 	CpConstructionFrame.setupGui()
@@ -161,6 +173,7 @@ function CpInGameMenu:initializePages()
 	self.pageHelpLine:initialize(self)
 	self.pageGlobalSettings:initialize(self)
 	self.pageVehicleSettings:initialize(self)
+	self.pageImplementProfiles:initialize(self)
 	self.pageCourseGenerator:initialize(self)
 	self.pageCourseManager:initialize(self)
 	self.pageConstruction:initialize(self)
@@ -181,6 +194,11 @@ function CpInGameMenu:setupMenuPages()
 				return self.currentVehicle ~= nil
 			end,
 			"cpUi.vehicleCogwheel"
+		},
+		{
+			self.pageImplementProfiles,
+			function () return true end,
+			"cpImplementUi.ploughGear"
 		},
 		{
 			self.pageCourseGenerator,

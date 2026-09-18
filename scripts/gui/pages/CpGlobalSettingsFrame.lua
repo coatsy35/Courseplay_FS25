@@ -15,6 +15,14 @@ CpGlobalSettingsFrame = {
 }
 CpGlobalSettingsFrame.NUM_CATEGORIES = #CpGlobalSettingsFrame.CATEGRORY_TEXTS
 
+-- Assign sections by their stable translation keys, never by their position in the XML.
+-- This keeps the original pages intact when profile settings or future sections are reordered.
+CpGlobalSettingsFrame.SETTINGS_PAGES = {
+    CP_global_setting_subTitle_general = CpGlobalSettingsFrame.CATEGRORIES.BASIC_SETTINGS,
+    CP_global_setting_subTitle_userSettings = CpGlobalSettingsFrame.CATEGRORIES.USER_SETTINGS,
+    CP_implementProfiles_title = CpGlobalSettingsFrame.CATEGRORIES.USER_SETTINGS
+}
+
 local CpGlobalSettingsFrame_mt = Class(CpGlobalSettingsFrame, TabbedMenuFrameElement)
 
 function CpGlobalSettingsFrame.new(target, custom_mt)
@@ -100,17 +108,19 @@ function CpGlobalSettingsFrame:onFrameOpen()
 		self.wasOpened = true
 		local settings = g_Courseplay.globalSettings:getSettings()
 		local settingsBySubTitle = g_Courseplay.globalSettings:getSettingSetup()
-		local ix = 1
-		for _, data in pairs(settingsBySubTitle) do 
-			local layout = self.subCategoryPages[ix]:getDescendantByName("layout")
-			CpSettingsUtil.generateAndBindGuiElements(data, layout, 
-				self.multiTextPrefab, self.booleanPrefab, settings)
-			CpSettingsUtil.updateGuiElementsBoundToSettings(layout)
-			if ix >= 2 then 
-				break 
-			end
-			ix = ix + 1
-		end
+        for _, data in ipairs(settingsBySubTitle) do
+            local page = self.SETTINGS_PAGES[data.title]
+            -- Unmapped sections (such as the internal pathfinder settings) stay outside this menu.
+            if page then
+                local layout = self.subCategoryPages[page]:getDescendantByName("layout")
+                local heading = self.sectionHeaderPrefab:clone(layout)
+                heading:setText(g_i18n:getText(data.title))
+                FocusManager:loadElementFromCustomValues(heading)
+                CpSettingsUtil.generateAndBindGuiElements(data, layout,
+                    self.multiTextPrefab, self.booleanPrefab, settings)
+                CpSettingsUtil.updateGuiElementsBoundToSettings(layout)
+            end
+        end
 	end
 	self:updateSubCategoryPages(self.CATEGRORIES.BASIC_SETTINGS)
 end

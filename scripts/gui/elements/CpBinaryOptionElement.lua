@@ -17,12 +17,13 @@ end
 function CpBinaryOptionElement:setDataSource(dataSource)
 	self.dataSource = dataSource
 	self.useYesNoTexts = false
+    self.bindingDataSource = true
 	self:setTexts({self.dataSource.texts[1], self.dataSource.texts[2]})
-	if self.dataSource:getValue() then 
-		self:setState(BinaryOptionElement.STATE_RIGHT, true)
-	else 
-		self:setState(BinaryOptionElement.STATE_LEFT, true)
-	end	
+    -- Binding is a display refresh, never a user click or setting mutation.
+    local state = dataSource:getValue() and BinaryOptionElement.STATE_RIGHT or BinaryOptionElement.STATE_LEFT
+    CpBinaryOptionElement:superClass().setState(self, state, false, true)
+    self.bindingDataSource = false
+    self:updateTitle()
 end
 function CpBinaryOptionElement:updateTitle()
 	if self.labelElement then 
@@ -34,7 +35,16 @@ function CpBinaryOptionElement:updateTitle()
 	end
 end
 
-function CpBinaryOptionElement:setState(state, ...)
+function CpBinaryOptionElement:raiseClickCallback(...)
+    if not self.bindingDataSource then
+        return CpBinaryOptionElement:superClass().raiseClickCallback(self, ...)
+    end
+end
+
+function CpBinaryOptionElement:setState(state, forceEvent, skipAnimation)
+    if not self.dataSource then
+        return CpBinaryOptionElement:superClass().setState(self, state, forceEvent, skipAnimation)
+    end
 	if state == BinaryOptionElement.STATE_RIGHT then 
 		self.dataSource:setValue(true)
 	else 
@@ -42,9 +52,9 @@ function CpBinaryOptionElement:setState(state, ...)
 	end
 	self:updateTitle()
 	if self.dataSource:getValue() then 
-		CpBinaryOptionElement:superClass().setState(self, BinaryOptionElement.STATE_RIGHT, true)
+		CpBinaryOptionElement:superClass().setState(self, BinaryOptionElement.STATE_RIGHT, forceEvent, skipAnimation)
 	else
-		CpBinaryOptionElement:superClass().setState(self, BinaryOptionElement.STATE_LEFT, true)
+		CpBinaryOptionElement:superClass().setState(self, BinaryOptionElement.STATE_LEFT, forceEvent, skipAnimation)
 	end
 end
 

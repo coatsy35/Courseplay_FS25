@@ -28,7 +28,9 @@ function CpVehicleSettings.initSpecialization()
     CpSettingsUtil.registerXmlSchema(schema, 
         "vehicles.vehicle(?)" .. CpVehicleSettings.KEY .. CpVehicleSettings.USER_KEY .. "(?)")
 
-    -- Debug 
+    ImplementProfileManager.registerVehicleSchema(schema,
+        "vehicles.vehicle(?)" .. CpVehicleSettings.KEY .. ".implementProfile")
+    -- Debug
     schema:register(XMLValueType.BOOL,"vehicles.vehicle(?)" .. CpVehicleSettings.KEY .. "#debugActive", "Vehicle debug active ?", true)
 
     CpVehicleSettings.loadSettingsSetup()
@@ -98,6 +100,10 @@ function CpVehicleSettings:onLoad(savegame)
     local spec = self.spec_cpVehicleSettings
     spec.userSettings = {}
     CpVehicleSettings.loadSettings(self, savegame)
+    if g_Courseplay.implementProfiles and savegame then
+        g_Courseplay.implementProfiles:loadVehicle(self, savegame,
+            savegame.key .. CpVehicleSettings.KEY .. ".implementProfile")
+    end
 end
 
 --- Resets the tool offset to a saved value after all implements are loaded and attached.
@@ -124,18 +130,23 @@ function CpVehicleSettings:onUpdate()
         CpVehicleSettings.validateSettings(self)
         spec.needsRefresh = false
     end
+    if g_Courseplay.implementProfiles then g_Courseplay.implementProfiles:updateVehicle(self) end
 end
 
 --- Changes the sprayer work width on fill type change, as it might depend on the loaded fill type.
 --- For example Lime and Fertilizer might have a different work width.
 function CpVehicleSettings:onStateChange(state, data)
     local spec = self.spec_cpVehicleSettings
+    if state == VehicleStateChange.ATTACH or state == VehicleStateChange.DETACH or state == VehicleStateChange.FILLTYPE_CHANGE then
+        ImplementProfileManager.markChanged(self, nil, state == VehicleStateChange.ATTACH)
+    end
     if state == VehicleStateChange.FILLTYPE_CHANGE and self:getIsSynchronized() then
         local _, hasSprayer = AIUtil.getAllChildVehiclesWithSpecialization(self, Sprayer, nil)
         if self.isServer and hasSprayer then 
             local width, offset = WorkWidthUtil.getAutomaticWorkWidthAndOffset(self, nil, nil)
             local oldWidth = self:getCourseGeneratorSettings().workWidth:getValue()
             if not MathUtil.equalEpsilon(width, oldWidth, 1)  then 
+                ImplementProfileManager.markChanged(self, true)
                 CpUtil.debugVehicle(CpDebug.DBG_IMPLEMENTS, self, "Changed work width, as the fill type changed.")
                 self:getCourseGeneratorSettings().workWidth:setFloatValue(width)
             end
@@ -179,6 +190,7 @@ function CpVehicleSettings:onReadStream(streamId, connection)
     for i, setting in ipairs(spec.settings) do 
         setting:readStream(streamId, connection)
     end
+    ImplementProfileEvent.readVehicle(streamId, self)
 end
 
 function CpVehicleSettings:onWriteStream(streamId, connection)
@@ -186,6 +198,7 @@ function CpVehicleSettings:onWriteStream(streamId, connection)
     for i, setting in ipairs(spec.settings) do 
         setting:writeStream(streamId, connection)
     end
+    ImplementProfileEvent.writeVehicle(streamId, self)
 end
 
 function CpVehicleSettings:cpSaveUserSettingValue(userId, name, value)
@@ -242,6 +255,9 @@ end
 
 function CpVehicleSettings:saveToXMLFile(xmlFile, baseKey, usedModNames)
     local spec = self.spec_cpVehicleSettings
+    if g_Courseplay.implementProfiles then
+        g_Courseplay.implementProfiles:saveVehicle(self, xmlFile, baseKey .. ".implementProfile")
+    end
     --- Saves the settings.
     CpSettingsUtil.saveToXmlFile(spec.settings, xmlFile, 
         baseKey .. CpVehicleSettings.SETTINGS_KEY, self, nil)
@@ -398,6 +414,19 @@ end
 
 function CpVehicleSettings:areCourseSettingsVisible()
     return not self:getCanStartCpCombineUnloader()
+end
+
+-- Implement defaults are edited in the library; the vehicle page displays the effective source.
+function CpVehicleSettings:isImplementTimingHidden()
+    return false
+end
+
+function CpVehicleSettings:isRaiseTimingOverrideDisabled()
+    return not self:getCpSettings().raiseImplementLateOverrideEnabled:getValue()
+end
+
+function CpVehicleSettings:isLowerTimingOverrideDisabled()
+    return not self:getCpSettings().raiseImplementLateOverrideEnabled:getValue()
 end
 
 function CpVehicleSettings:areBunkerSiloSettingsVisible()

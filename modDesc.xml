@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="105">
-    <version>8.1.0.3</version>
+    <version>8.1.0.26</version>
 	<author><![CDATA[Courseplay.devTeam]]></author>
 	<title>
 		<en>CoursePlay</en>
@@ -131,6 +131,9 @@ Changelog 8.1.0.3
 
 		<sourceFile filename="scripts/courseManager/FileSystem.lua"/>
 		<sourceFile filename="scripts/courseManager/AssignedCoursesManager.lua"/>
+		<sourceFile filename="scripts/implementProfiles/ImplementProfile.lua"/>
+		<sourceFile filename="scripts/implementProfiles/ImplementProfileManager.lua"/>
+		<sourceFile filename="scripts/events/ImplementProfileEvent.lua"/>
 
 		<sourceFile filename="scripts/courseGenerator/CourseGenerator.lua"/>
 
@@ -310,6 +313,9 @@ Changelog 8.1.0.3
 		<sourceFile filename="scripts/gui/pages/CpCourseManagerFrame.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpCourseGeneratorFrame.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpVehicleSettingsFrame.lua"/>
+		<sourceFile filename="scripts/gui/pages/CpImplementProfilesFrame.lua"/>
+        <sourceFile filename="scripts/gui/CpImplementProfileGui.lua"/>
+        <sourceFile filename="scripts/gui/CpImplementProfileDialog.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpGlobalSettingsFrame.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpHelpFrame.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpConstructionFrame.lua"/>
@@ -371,7 +377,13 @@ Changelog 8.1.0.3
 		<specialization name="cpShovelPositions" className="CpShovelPositions" filename="scripts/specializations/CpShovelPositions.lua"/>
 	</specializations>
 
-	<inputBinding>
+    <inputBinding>
+        <actionBinding action="CP_PROFILE_RENAME">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_lshift KEY_r" />
+        </actionBinding>
+        <actionBinding action="CP_PROFILE_DELETE">
+            <binding device="KB_MOUSE_DEFAULT" input="KEY_delete" />
+        </actionBinding>
 		<actionBinding action="CP_DBG_CHANNEL_SELECT_PREVIOUS">
 			<binding device="KB_MOUSE_DEFAULT" input="KEY_lshift KEY_1" />
 		</actionBinding>
@@ -439,7 +451,9 @@ Changelog 8.1.0.3
 		</actionBinding>
     </inputBinding>
 
-	<actions>
+    <actions>
+        <action name="CP_PROFILE_RENAME" />
+        <action name="CP_PROFILE_DELETE" />
 		<action name="CP_DBG_CHANNEL_SELECT_PREVIOUS" />
 		<action name="CP_DBG_CHANNEL_SELECT_NEXT" />
 		<action name="CP_DBG_CHANNEL_TOGGLE_CURRENT" />

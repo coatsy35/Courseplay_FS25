@@ -172,6 +172,7 @@ function CpCourseGeneratorSettings.onVariableWorkWidthSectionChanged(object)
     --- Object could be an implement, so make sure we use the root vehicle.
     local self = object.rootVehicle
     if self:getIsSynchronized() then
+        ImplementProfileManager.markChanged(self)
         CpCourseGeneratorSettings.setAutomaticWorkWidthAndOffset(self)
     end
 end

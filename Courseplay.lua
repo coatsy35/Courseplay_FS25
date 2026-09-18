@@ -23,6 +23,7 @@ function Courseplay:init()
 
 	g_overlayManager:addTextureConfigFile(Utils.getFilename("img/iconSprite.xml", self.BASE_DIRECTORY), "cpIconSprite")
 	g_overlayManager:addTextureConfigFile(Utils.getFilename("img/ui_courseplay.xml", self.BASE_DIRECTORY), "cpUi")
+	g_overlayManager:addTextureConfigFile(Utils.getFilename("img/implementProfile.xml", self.BASE_DIRECTORY), "cpImplementUi")
 	g_gui:loadProfiles(Utils.getFilename("config/gui/GUIProfiles.xml", self.BASE_DIRECTORY))
 end
 
@@ -239,6 +240,7 @@ function Courseplay:keyEvent(unicode, sym, modifier, isDown)
 end
 
 function Courseplay:load()
+	self.implementProfiles = ImplementProfileManager(self.baseDir)
 	--- Sub folder for debug information
 	self.debugDir = self.baseDir .. "Debug/"
 	createFolder(self.debugDir) 

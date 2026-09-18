@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<GUI name="cpInGameMenuImplementProfiles">
+    <GuiElement profile="fs25_menuContainer">
+        <GuiElement profile="fs25_menuHeaderPanel">
+            <Bitmap profile="fs25_menuHeaderIconBg">
+                <Bitmap profile="fs25_menuHeaderIcon" id="categoryHeaderIcon" />
+            </Bitmap>
+            <Text profile="fs25_menuHeaderTitle" id="categoryHeaderText" text="$l10n_CP_implementProfiles_title" />
+        </GuiElement>
+        <GuiElement profile="cpProfileFilterBox">
+            <Text profile="cpProfileFilterLabel" text="$l10n_CP_implementProfiles_show" />
+            <MultiTextOption profile="cpProfileFilterOption" id="equipmentFilter" namedComponents="true" onClick="onClickEquipmentFilter" />
+        </GuiElement>
+        <BoxLayout profile="fs25_subCategorySelectorTabbedBox">
+            <Button profile="fs25_subCategorySelectorTabbedTab" id="advancedButton" text="$l10n_CP_implementProfiles_advanced" onClick="onClickAdvanced">
+                <ThreePartBitmap profile="fs25_subCategorySelectorTabbedTabBg" name="background" />
+            </Button>
+        </BoxLayout>
+        <ThreePartBitmap profile="fs25_lineSeparatorTopHighlighted" position="0px -57px" />
+        <GuiElement profile="fs25_subCategorySelectorTabbedContainer">
+            <GuiElement profile="fs25_statisticsHeaderBox">
+                <Text profile="fs25_statisticsHeaderText" id="activeText" size="1400px 40px" />
+                <ThreePartBitmap profile="fs25_lineSeparatorBottom" position="0px -2dp" />
+            </GuiElement>
+            <Text profile="fs25_settingsNoPermissionText" id="emptyText" text="$l10n_CP_implementProfiles_empty" />
+            <SmoothList profile="cpProfileTree" id="profileList" selectedWithoutFocus="true">
+                <ListItem profile="fs25_pricesProductListItem">
+                    <Text name="title" profile="cpProfileRowText" textMaxNumLines="2" />
+                </ListItem>
+            </SmoothList>
+            <ThreePartBitmap profile="cpProfileTreeSlider">
+                <Slider profile="fs25_listSlider" dataElementId="profileList" />
+            </ThreePartBitmap>
+            <SmoothList profile="cpProfileDetails" id="detailList">
+                <ListItem profile="cpProfileDetailRow">
+                    <Text name="title" profile="cpProfileRowText" textMaxNumLines="2" />
+                    <Text name="option" profile="cpProfileOptionText" textMaxNumLines="2" />
+                    <Text name="value" profile="cpProfileValueText" textMaxNumLines="2" />
+                    <CpOptionToggle name="editor" profile="cpProfileInlineEditor" namedComponents="true" hideButtonOnLimitReached="false" />
+                    <CpBinaryyOption name="booleanEditor" profile="cpProfileInlineBoolean" namedComponents="true" />
+                </ListItem>
+            </SmoothList>
+            <ThreePartBitmap profile="cpProfileDetailsSlider">
+                <Slider profile="fs25_listSlider" dataElementId="detailList" />
+            </ThreePartBitmap>
+        </GuiElement>
+    </GuiElement>
+    <GUIProfiles>
+        <Profile name="cpProfileFilterBox" extends="emptyPanel">
+            <anchor value="0 1" /><pivot value="0 1" />
+            <position value="25px -10px" /><size value="600px 40px" />
+        </Profile>
+        <Profile name="cpProfileFilterLabel" extends="fs25_settingsSectionHeader">
+            <anchor value="0 0.5" /><pivot value="0 0.5" />
+            <position value="0px 0px" /><size value="90px 32px" /><textSize value="16px" />
+        </Profile>
+        <Profile name="cpProfileFilterOption" extends="fs25_settingsMultiTextOption">
+            <anchor value="0 0.5" /><pivot value="0 0.5" />
+            <position value="100px 0px" /><size value="400px 32px" /><height value="32px" />
+        </Profile>
+        <Profile name="cpProfileDetailRow" extends="fs25_pricesPriceListItem">
+            <size value="695px 48px" />
+            <height value="48px" />
+            <updateChildrenState value="false" />
+        </Profile>
+        <Profile name="cpProfileTree" extends="emptyPanel" with="anchorStretchingYLeft pivotTopLeft">
+            <width value="695px" />
+            <absoluteSizeOffset value="0px 56px" />
+            <position value="25px -56px" />
+        </Profile>
+        <Profile name="cpProfileTreeSlider" extends="fs25_listSliderBox" with="anchorTopLeft">
+            <absoluteSizeOffset value="0px 56px" />
+            <position value="733px -56px" />
+        </Profile>
+        <Profile name="cpProfileDetails" extends="emptyPanel" with="anchorStretchingYLeft pivotTopRight">
+            <width value="695px" />
+            <absoluteSizeOffset value="0px 56px" />
+            <position value="-63px -56px" />
+        </Profile>
+        <Profile name="cpProfileDetailsSlider" extends="fs25_listSliderBox" with="anchorTopRight">
+            <absoluteSizeOffset value="0px 56px" />
+            <position value="-41px -56px" />
+        </Profile>
+        <Profile name="cpProfileRowText" extends="fs25_pricesProductListItemName">
+            <position value="12px 0px" />
+            <size value="660px 48px" />
+            <textSize value="16px" />
+        </Profile>
+        <Profile name="cpProfileOptionText" extends="cpProfileRowText">
+            <size value="375px 48px" />
+        </Profile>
+        <Profile name="cpProfileValueText" extends="cpProfileRowText">
+            <position value="402px 0px" />
+            <size value="270px 48px" />
+            <textAlignment value="right" />
+        </Profile>
+        <Profile name="cpProfileInlineEditor" extends="fs25_settingsMultiTextOption">
+            <anchor value="0 0.5" /><pivot value="0 0.5" />
+            <position value="402px 0px" />
+            <size value="270px 32px" />
+            <height value="32px" />
+            <textSize value="16px" />
+        </Profile>
+        <Profile name="cpProfileInlineBoolean" extends="fs25_settingsBinaryOption">
+            <anchor value="0 0.5" /><pivot value="0 0.5" />
+            <position value="402px 0px" />
+            <size value="270px 32px" />
+            <height value="32px" />
+            <textSize value="16px" />
+        </Profile>
+    </GUIProfiles>
+</GUI>

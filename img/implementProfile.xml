@@ -1,0 +1,9 @@
+<texture>
+    <meta>
+        <filename>implementProfile.dds</filename>
+        <size width="128" height="128" />
+    </meta>
+    <slices>
+        <slice id="ploughGear" uvs="0px 0px 128px 128px" />
+    </slices>
+</texture>
