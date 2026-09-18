@@ -91,6 +91,8 @@ AIDriveStrategyUnloadCombine.maxDirectionDifferenceDeg = 35 -- under this angle 
 -- Add a short straight section to align with the combine's course in case it is late for the rendezvous
 AIDriveStrategyUnloadCombine.driveToCombineCourseExtensionLength = 10
 AIDriveStrategyUnloadCombine.targetDistanceBehindChopper = 1
+-- Keep the unloader's nearest edge clear of the chopper header when driving alongside it.
+AIDriveStrategyUnloadCombine.chopperHeaderClearance = 2
 
 -- Developer hack: to check the class of an object one should use the is_a() defined in CpObject.lua.
 -- However, when we reload classes on the fly during the development, the is_a() calls in other modules still
@@ -798,7 +800,9 @@ function AIDriveStrategyUnloadCombine:handleChopper180Turn()
             local turnCourse = self.combineToUnload:getCpDriveStrategy():getTurnCourse()
             if turnCourse then
                 self:debug('Follow chopper through the turn')
-                self:startCourse(turnCourse:copy(self.vehicle), 1)
+                local unloaderTurnCourse = turnCourse:copy(self.vehicle)
+                unloaderTurnCourse:setOffset(self.followingCourseOffset, 0)
+                self:startCourse(unloaderTurnCourse, 1)
                 self:setNewState(self.states.FOLLOW_CHOPPER_THROUGH_TURN)
                 return
             else
@@ -890,8 +894,8 @@ function AIDriveStrategyUnloadCombine:handleChopperTurn(harvester)
             speed = combineSpeed + CpMathUtil.clamp(self.targetDistanceBehindChopper - dReference, -combineSpeed,
                     self.settings.reverseSpeed:getValue() * 1.5)
         else
-            -- reverse speed only depends on distance from the combine, stop when at working width
-            speed = CpMathUtil.clamp(harvester:getCpDriveStrategy():getWorkWidth() - d, 0,
+            -- Reverse far enough to keep the unloader outside the complete header envelope.
+            speed = CpMathUtil.clamp(self:getChopperSideDistance(harvester) - d, 0,
                     self.settings.reverseSpeed:getValue() * 1.5)
         end
     else
@@ -950,11 +954,18 @@ end
 --- Calculate a virtual pipe offset for the unloader to drive beside the chopper based on which
 --- side of the chopper is already harvested, or behind it if both sides have fruit.
 ------------------------------------------------------------------------------------------------------------------------
+function AIDriveStrategyUnloadCombine:getChopperSideDistance(harvester, strategy)
+    strategy = strategy or harvester:getCpDriveStrategy()
+    local headerWidth = math.max(strategy:getWorkWidth() or 0, AIUtil.getWidth(harvester))
+    return headerWidth / 2 + AIUtil.getWidth(self.vehicle) / 2 + self.chopperHeaderClearance
+end
+
 function AIDriveStrategyUnloadCombine:calculateAutoAimPipeOffsetX(harvester)
     local strategy = harvester and harvester:getCpDriveStrategy()
     if strategy and strategy.hasAutoAimPipe and strategy:hasAutoAimPipe() then
         local fruitLeft, fruitRight = strategy:getFruitAtSides()
-        local targetOffsetX, distanceBetweenVehicles = 0, (AIUtil.getWidth(harvester) + AIUtil.getWidth(self.vehicle)) / 2 + 1
+        local distanceBetweenVehicles = self:getChopperSideDistance(harvester, strategy)
+        local targetOffsetX = 0
         -- we use 20% of the average as a threshold for significant difference
         local fruitThreshold = 0.2 * 0.5 * (fruitLeft + fruitRight)
         if strategy:isOnHeadland(1) then
@@ -1102,7 +1113,9 @@ function AIDriveStrategyUnloadCombine:getFollowingCourseOffset(combine)
 end
 
 function AIDriveStrategyUnloadCombine:getAutoAimPipeOffsetX()
-    return self.autoAimPipeOffsetX and self.autoAimPipeOffsetX:get() or 0
+    local automaticOffset = self.autoAimPipeOffsetX and self.autoAimPipeOffsetX:get() or 0
+    -- The setting uses right as positive, while the Giants coordinate system uses left as positive.
+    return automaticOffset - self.settings.combineOffsetX:getValue()
 end
 
 function AIDriveStrategyUnloadCombine:getCombinesMeasuredBackDistance()
