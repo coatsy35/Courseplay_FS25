@@ -79,11 +79,12 @@ local function getInternalDrawbar(object, joint, axle)
             not ImplementUtil.findJointNodeConnectingToNode then return nil end
     local _, nodes, limits = ImplementUtil.findJointNodeConnectingToNode(
         object, joint.rootNode, object.rootNode)
-    local pivot
+    local pivot, yawLimit
     for i, limit in ipairs(limits or {}) do
         if math.abs(limit[2] or 0) > math.rad(5) then
             if pivot then return nil end
             pivot = nodes and nodes[i]
+            yawLimit = math.abs(limit[2])
         end
     end
     if not pivot or pivot == 0 then return nil end
@@ -93,7 +94,7 @@ local function getInternalDrawbar(object, joint, axle)
     local ax, _, axleLength = localToLocal(pivot, axle, 0, 0, 0)
     if not finite(drawbarLength) or not finite(axleLength) or drawbarLength < 0.5 or
             axleLength < 0.5 or math.abs(hx - px) > 0.25 or math.abs(ax) > 0.25 then return nil end
-    return pivot, drawbarLength, axleLength
+    return pivot, drawbarLength, axleLength, yawLimit
 end
 
 --- Detect a serial chain. One unsteered internal yaw joint in an implement's
@@ -137,16 +138,16 @@ function G.detect(vehicle)
             return nil, 'off-centre, front-mounted or invalid hitch geometry'
         end
         if yawJoints == 1 then
-            local pivot, drawbarLength, axleLength = getInternalDrawbar(object, joint, axle)
+            local pivot, drawbarLength, axleLength, yawLimit = getInternalDrawbar(object, joint, axle)
             if not pivot then return nil, 'unsupported internal yaw geometry' end
             local drawbarBody = {left = 0.75, right = -0.75,
                 front = drawbarLength + 0.25, back = -0.25, virtual = true}
             addLink(model, {length = drawbarLength, hitch = hitch,
                 heading = heading(joint.rootNode), internal = true,
-                maxArticulation = G.internalArticulation}, drawbarBody, false)
+                maxArticulation = yawLimit}, drawbarBody, false)
             addLink(model, {length = axleLength, hitch = 0,
                 heading = heading(axle), internal = true,
-                maxArticulation = G.internalArticulation}, body)
+                maxArticulation = yawLimit}, body)
             model.internalPivots = (model.internalPivots or 0) + 1
         else
             local lx, _, length = localToLocal(joint.node, axle, 0, 0, 0)
@@ -199,9 +200,7 @@ function G.minimumRadius(model, minimum)
             local squared = radius * radius + link.hitch * link.hitch - link.length * link.length
             if squared <= 0 then return false end
             local nextRadius = math.sqrt(squared)
-            local body = model.bodies[i + 1]
-            if nextRadius < math.max(math.abs(body.left), math.abs(body.right)) + 0.5 or
-                    math.atan2(link.length, nextRadius) - math.atan2(link.hitch, radius) >
+            if math.atan2(link.length, nextRadius) - math.atan2(link.hitch, radius) >
                         (link.maxArticulation or G.maxArticulation) then
                 return false
             end
@@ -446,8 +445,8 @@ end
 
 --- Search a bounded set; shortest accepted candidate, not a global optimum.
 function G.plan(maneuver, model, loweringDistance)
-    local radius = G.minimumRadius(model, maneuver.turningRadius)
-    if not radius then return nil, 'radius exceeds search limit' end
+    local steadyRadius = G.minimumRadius(model, maneuver.turningRadius)
+    if not steadyRadius then return nil, 'radius exceeds search limit' end
     local boundary = G.getBoundary(maneuver.vehicle)
     if (model.internalPivots or 0) > 0 and not boundary then
         return nil, 'field boundary unavailable for internal-pivot loop'
@@ -456,6 +455,7 @@ function G.plan(maneuver, model, loweringDistance)
     local scale = 0
     for _, link in ipairs(model.links) do scale = scale + link.length end
     local best, bestLength, result = nil, math.huge, 'no candidate'
+    local generated, rootRejected = 0, 0
     local turnEndNode = maneuver.turnContext:getTurnEndNodeAndOffsets(maneuver.steeringLength)
     -- The unrestricted solver returns only its shortest Dubins word. At a
     -- headland corner that word can put the tractor outside the field even
@@ -466,7 +466,23 @@ function G.plan(maneuver, model, loweringDistance)
     for pathType = DubinsSolver.PathType.LSL, DubinsSolver.PathType.LRL do
         solvers[#solvers + 1] = {solver = DubinsSolver({pathType}), name = tostring(pathType)}
     end
-    for _, radiusFactor in ipairs({1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6}) do
+    -- The steady-circle estimate is useful for ordering, but it is not a hard
+    -- lower bound for a transient corner. Begin at CP's configured tractor
+    -- radius and let the sampled articulation/clearance checks decide.
+    local radii, seenRadius = {}, {}
+    local function addRadius(radius)
+        local key = math.floor(radius * 100 + 0.5)
+        if not seenRadius[key] then radii[#radii + 1], seenRadius[key] = radius, true end
+    end
+    addRadius(maneuver.turningRadius)
+    if steadyRadius > maneuver.turningRadius + 0.1 then
+        addRadius((maneuver.turningRadius + steadyRadius) / 2)
+    end
+    for _, factor in ipairs({1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6}) do
+        addRadius(steadyRadius * factor)
+    end
+    table.sort(radii)
+    for _, candidateRadius in ipairs(radii) do
         for _, entryFactor in ipairs({1, 2, 3}) do
             for _, pull in ipairs({0, width / 2, width}) do
                 local entry = scale * entryFactor + loweringDistance
@@ -475,19 +491,22 @@ function G.plan(maneuver, model, loweringDistance)
                         0, 0, math.max(0.5, pull), 1, false)
                     local path = PathfinderUtil.findAnalyticPath(pathSolver.solver,
                         maneuver.vehicleDirectionNode, 0, math.max(0.5, pull) + 0.5,
-                        turnEndNode, 0, -entry, radius * radiusFactor)
+                        turnEndNode, 0, -entry, candidateRadius)
                     if path and #path > 1 then
+                        generated = generated + 1
                         candidate:append(Course.createFromAnalyticPath(maneuver.vehicle, path, true))
                         local entryIx = candidate:getNumberOfWaypoints()
                         local ending = maneuver.turnContext:appendEndingTurnCourse(candidate, maneuver.steeringLength)
-                        if candidate:getLength() < bestLength and G.rootCourseFits(model, candidate, boundary) then
+                        local rootFits = G.rootCourseFits(model, candidate, boundary)
+                        if not rootFits then rootRejected = rootRejected + 1 end
+                        if candidate:getLength() < bestLength and rootFits then
                             local ok, detail = G.validate(model, candidate, boundary, entryIx,
                                 maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance)
                             if ok then
                                 TurnManeuver.setLowerImplements(candidate, ending, true)
                                 best, bestLength = candidate, candidate:getLength()
                                 result = string.format('%d pivots (%d internal), width %.1f m, radius %.1f m, entry %.1f m, Dubins %s, peak angle %.1f deg, articulation clearance checked, boundary %s',
-                                    #model.links, model.internalPivots or 0, width, radius * radiusFactor, entry,
+                                    #model.links, model.internalPivots or 0, width, candidateRadius, entry,
                                     pathSolver.name, math.deg(detail), boundary and boundary.source or 'unavailable')
                             elseif not best then result = detail end
                         end
@@ -495,6 +514,10 @@ function G.plan(maneuver, model, loweringDistance)
                 end
             end
         end
+    end
+    if not best and rootRejected > 0 then
+        result = string.format('field boundary (tractor route, %d of %d candidates; radius %.1f-%.1f m)',
+            rootRejected, generated, radii[1], radii[#radii])
     end
     return best, result
 end

@@ -35,7 +35,18 @@ class LoopTests(unittest.TestCase):
             assert(#m.links==3 and m.internalPivots==1)
             assert(math.abs(m.links[2].length-3.78)<.02 and m.links[2].internal)
             assert(math.abs(m.links[3].length-4.30)<.02 and m.links[3].internal)
+            assert(math.abs(m.links[2].maxArticulation-math.pi/3)<1e-6)
+            assert(math.abs(m.links[3].maxArticulation-math.pi/3)<1e-6)
             assert(math.abs(m.width-30)<1e-6)
+        ''')
+
+    def test_working_width_does_not_inflate_axle_turning_radius(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local narrow=assert(G.detect(fixture({internal=true,width=8})))
+            local wide=assert(G.detect(fixture({internal=true,width=30})))
+            local nr,wr=assert(G.minimumRadius(narrow,10)),assert(G.minimumRadius(wide,10))
+            assert(math.abs(nr-wr)<.001, string.format('width changed radius %.2f -> %.2f',nr,wr))
         ''')
 
     def test_unsupported_geometry_is_not_silently_modelled(self):
@@ -48,13 +59,13 @@ class LoopTests(unittest.TestCase):
             v,c,d,cart=fixture(); v.children[2]={object=cart}; assert(not G.detect(v))
         ''')
 
-    def test_width_and_second_link_change_radius_independently(self):
+    def test_second_link_length_changes_radius_but_width_does_not(self):
         self.lua.execute('''
             local G=HeadlandLoopGeometry
             local narrow=G.detect(fixture({width=8,cartLength=5}))
             local wide=G.detect(fixture({width=40,cartLength=5}))
             local long=G.detect(fixture({width=8,cartLength=14}))
-            assert(G.minimumRadius(wide,10)>G.minimumRadius(narrow,10))
+            assert(math.abs(G.minimumRadius(wide,10)-G.minimumRadius(narrow,10))<.001)
             assert(G.minimumRadius(long,10)>G.minimumRadius(narrow,10))
         ''')
 
@@ -146,6 +157,24 @@ class LoopTests(unittest.TestCase):
             HeadlandLoopGeometry.validate,HeadlandLoopGeometry.rootCourseFits=validate,rootFits
             assert(course and calls>1, 'planner did not try another Dubins word')
             assert(string.find(reason,'Dubins 3'), tostring(reason))
+        ''')
+
+    def test_transient_search_starts_at_configured_radius(self):
+        self.lua.execute('''
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,field=field})
+            local model=assert(HeadlandLoopGeometry.detect(v))
+            local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local minimum,validate,rootFits=HeadlandLoopGeometry.minimumRadius,
+                HeadlandLoopGeometry.validate,HeadlandLoopGeometry.rootCourseFits
+            HeadlandLoopGeometry.minimumRadius=function() return 20 end
+            HeadlandLoopGeometry.rootCourseFits=function() return true end
+            HeadlandLoopGeometry.validate=function() return true,math.rad(10) end
+            local course,reason=HeadlandLoopGeometry.plan(maneuver,model,.5)
+            HeadlandLoopGeometry.minimumRadius,HeadlandLoopGeometry.validate,
+                HeadlandLoopGeometry.rootCourseFits=minimum,validate,rootFits
+            assert(course and string.find(reason,'radius 10.0 m'), tostring(reason))
         ''')
 
     def test_internal_pivot_uses_chain_planner_and_detected_width(self):
