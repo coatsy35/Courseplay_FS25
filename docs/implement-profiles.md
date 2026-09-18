@@ -1,6 +1,6 @@
 # Implement profiles
 
-Initial implementation on `codex/implement-profile-library`.
+Current development branch: `implement-directory`. Keep it separate from implement-envelope turn development.
 
 ## Local test build naming
 
@@ -19,18 +19,18 @@ does not add the test title suffix.
 ## Using the library
 
 Open CP's **Implement profiles** page. **Attached equipment** shows exact and partial matches;
-**All profiles** allows browsing without entering a tractor. Expand an implement type, then a model
+**All equipment** allows browsing without entering a tractor. Expand an implement type, then a model
 or combination, to see its saved profiles. Combinations
 also appear under their component implement types; these are links to one saved profile.
 
 With the tractor and CP stopped, adjust vehicle and course generation settings, then select
-**Save as new**. Select a matching profile and choose **Apply profile** to reuse it. **Update profile**
+**Save as new**. Select a matching profile and choose **Load profile** to reuse it. **Update profile**
 replaces the selected entry with the current settings and increments its revision. **Save as new**
 keeps alternatives as separate named entries. Deleting or updating a library entry does not change
 working copies already applied to vehicles.
 
-After attachment changes settle, an entered, stationary vehicle offers to open matching profiles.
-Profiles are never applied automatically. Partial matches can be inspected but cannot be applied to
+After a new attachment settles, an entered, stationary vehicle offers matching profiles.
+Optional silent loading applies only to a single exact match when attachment prompts are disabled. Partial matches can be inspected but cannot be applied to
 an entire combination. Courses are not generated or replaced by applying a profile. A differing
 course working width prompts the user to generate or load a suitable course.
 
@@ -83,8 +83,8 @@ for the user-to-farm mapping.
 
 ### Implement timing and vehicle overrides
 
-The vehicle settings page has one **Tool timing** section. Each raise/lower override switch is
-followed by a single timing row. With override off, the row displays the implement default read-only.
+The vehicle settings page has one **Tool timing** section. A shared override switch enables
+the raising and lowering timing rows. With override off, the row displays the implement default read-only.
 With override on, it displays the editable vehicle value. Switching off restores the default display
 without erasing the manual choice. Implement defaults are edited in the profile library. Overrides
 use the existing vehicle savegame and multiplayer settings system and are excluded from profiles.
@@ -112,7 +112,7 @@ Before merging, verify in Farming Simulator 25:
 6. Verify mouse/controller navigation, scrolling, long names, empty results and width warnings.
 7. Test a host plus two clients: application, joining after application, attachment changes, an
    unauthorised farm and saving/reloading a dedicated server.
-8. Set opposite implement and vehicle raising/lowering timings. Toggle each override, switch profiles,
+8. Set opposite implement and vehicle raising/lowering timings. Toggle the override, switch profiles,
    save/update a profile and reload the savegame. Confirm overrides stay vehicle-specific and fieldwork
    uses the selected source.
 
@@ -125,8 +125,8 @@ installations by copying the library file while the game is closed; merging libr
 Open Course generation > Fieldwork Settings. The first row is an implement profile selector,
 filtered to exact matches for the attached equipment or complete combination. Select a profile and
 choose Load profile (or press the selector centre), adjust the fieldwork settings, then generate.
-Selecting Keep current settings leaves the working setup unchanged. With no matches the selector
-shows an explanation and is disabled; use the Implement Profiles directory to save a setup.
+Selecting Custom settings leaves the working setup unchanged. With no matches the selector
+is disabled; Save implement profile still saves the current setup directly from Fieldwork Settings.
 The current library revision is selected when it matches the applied working profile. Loading uses
 existing equipment, access and stationary checks, preserves vehicle timing overrides and warns if
 an existing course has a different width. The directory remains available for library management.
@@ -182,17 +182,6 @@ Loading runs only for the entered, stationary, inactive vehicle after attachment
 normal access and server validation. Existing applied profiles are preserved. Silent loading is
 skipped when an existing course has a different work width; load manually to review that warning.
 
-When attachment prompts are enabled and several profiles match, the native option dialogue lists
-Don't load a profile first, followed by matching profile names and View profiles. Confirming a named
-profile loads that selection through the same validation and course-width warning as single-profile
-loading. Cancel or Don't load a profile leaves the current values unchanged. No profile is selected
-automatically when several match.
-
-Edit profile and Rename profile are bottom-bar actions for a selected profile. Editing keeps the
-same details column and uses inline left/right value selectors; no per-setting selection dialogue
-is needed. Save and Cancel remain at the bottom. More actions contains Save as new, Update from the
-current tractor (when available), and Delete.
-
 The attachment chooser now uses a dedicated dialogue titled Matching implement profiles. Its
 selector contains profile names only, for both one and multiple matches. Separate Load profile,
 View profiles and Don't load a profile buttons perform the actions. Closing or cancelling loads
@@ -235,3 +224,34 @@ current settings. New attachments start with that policy before an optional prof
 Defaults reset the profile allow-list and detect equipment width; Keep retains the previous
 working values as custom settings. Vehicle timing overrides are excluded. Startup attachments
 do not trigger this policy. Reset requests are validated and applied on the server.
+
+## Code organisation and translations
+
+- `ImplementProfile` defines portable identity, settings ownership and value validation.
+- `ImplementProfileManager` owns library persistence and vehicle changes. Its update function
+  delegates attachment restoration and profile offers to separate methods.
+- `CpImplementProfileGui` shares naming, translated errors and course-width confirmation across
+  the directory, fieldwork page and attachment flow. Delayed callbacks recheck their context.
+- `CpImplementProfilesFrame` builds the grouped directory separately from list refresh and draft editing.
+- `CpImplementProfileDialog.cloneQuestionShell` isolates the dependency on FS25's native GUI tree.
+  It changes only a private clone, preserving the stock dialogue's graphics and question icon.
+- Global settings sections map their stable title keys to pages explicitly; XML position does not
+  decide which page receives a section. The XML retains the original settings order.
+
+UI text uses CP's existing `g_i18n` / `$l10n_` system. Register text in
+`config/MasterTranslations.xml`; provide translations there or in the corresponding
+`translations/translation_<language>.xml` catalogue, following the normal CP workflow. Run
+`.github/scripts/update-translations/updateTranslations.py` to regenerate all 27 supported
+catalogues. Missing translations use English; existing translator contributions are preserved.
+This is translation support, not a claim that every new phrase has a human translation.
+
+Translate complete messages, retaining the order and types of Lua format arguments (`%s`, `%d`).
+The profile/revision caption is one translatable message. User-entered profile names remain user
+content, equipment names come from the game, and setting labels/values reuse CP's translated
+parameter definitions. Never translate stored IDs, equipment keys or setting values.
+
+Run `python -m unittest discover -s .github/scripts -p 'test_*.py' -v` for packaging and catalogue
+checks. The language tests verify profile key coverage and format arguments across every declared
+CP language. The Lua suite also covers shared dialogue cancellation, changed equipment/selection,
+native-shell isolation and settings-section routing. These boundary tests do not replace in-game
+layout and multiplayer testing.

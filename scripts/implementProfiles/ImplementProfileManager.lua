@@ -1,6 +1,7 @@
 --- User-local library; only validated working copies are sent to the server.
 ImplementProfileManager = CpObject()
 
+-- XML schema and codecs. Library files and savegames use the same portable profile representation.
 function ImplementProfileManager.registerProfileSchema(schema, key)
     schema:register(XMLValueType.STRING, key .. '#id')
     schema:register(XMLValueType.STRING, key .. '#name')
@@ -72,6 +73,7 @@ function ImplementProfileManager.readProfile(xml, key)
     return ImplementProfile.valid(profile) and profile.settings and profile or nil
 end
 
+-- Library storage and recovery. Validate replacements and keep a backup before changing saved data.
 function ImplementProfileManager:init(directory)
     self.path = directory .. 'implementProfiles.xml'
     self.profiles, self.nextId = {}, 1
@@ -171,6 +173,7 @@ function ImplementProfileManager:persist(profiles, nextId)
     return true
 end
 
+-- Library editing. Work on copies so failed writes and edits never mutate an applied vehicle setup.
 function ImplementProfileManager:save(vehicle, name, existing)
     if not self:canChange(vehicle) then return nil, 'stopFirst' end
     if not g_currentMission.accessHandler:canPlayerAccess(vehicle) then return nil, 'noAccess' end
@@ -249,6 +252,7 @@ function ImplementProfileManager:remove(profile)
     return self:persist(profiles, self.nextId)
 end
 
+-- Applying profiles. All entry points share stationary, equipment and access checks before changing values.
 function ImplementProfileManager:canChange(vehicle)
     return vehicle and vehicle.getCpSettings and not vehicle:getIsAIActive() and
         not vehicle:getIsCpActive() and math.abs(vehicle.lastSpeedReal or 0) < 0.0001 and
@@ -298,6 +302,7 @@ function ImplementProfileManager:requestApply(vehicle, profile)
 end
 
 --- Apply the user's no-profile policy on the server for the current attachment only.
+-- No-profile policy. Reset only portable settings, or restore the last working values as a custom setup.
 function ImplementProfileManager:withoutProfile(vehicle, equipment, useDefaults)
     if not self:canChange(vehicle) then return false, 'stopFirst' end
     if equipment ~= ImplementProfile.signature(ImplementProfile.describe(vehicle)) then return false, 'mismatch' end
@@ -331,6 +336,7 @@ function ImplementProfileManager:requestWithoutProfile(vehicle, equipment)
     return true
 end
 
+-- Attachment invalidation. Restore the baseline, then recalculate geometry for the new combination.
 function ImplementProfileManager:clear(vehicle)
     local state = vehicle.cpImplementProfile
     if not state then return end
@@ -360,6 +366,7 @@ function ImplementProfileManager.markChanged(vehicle, invalidate, attached)
     end
 end
 
+-- Savegame persistence. Keep working copies independent of the personal library and its later revisions.
 function ImplementProfileManager:loadVehicle(vehicle, savegame, key)
     if not savegame or savegame.resetVehicles then return end
     local xml = savegame.xmlFile
@@ -384,6 +391,54 @@ function ImplementProfileManager:saveVehicle(vehicle, xml, key)
     end
 end
 
+-- Equipment refresh runs after the attachment debounce, separately from user-facing offers.
+-- Restore saved working values only when the complete equipment identity still matches.
+function ImplementProfileManager:refreshVehicle(vehicle)
+    vehicle.cpProfileRefreshAt = nil
+    local state = vehicle.cpImplementProfile
+    if state then
+        if vehicle.cpProfileInvalidated or ImplementProfile.match(state.profile, ImplementProfile.describe(vehicle)) ~= 'exact' then
+            if vehicle.isServer then self:clear(vehicle) end
+        elseif vehicle.cpProfileRestorePending then
+            if ImplementProfile.validateSettings(vehicle, state.profile.settings) then
+                ImplementProfile.setSettings(vehicle, state.profile.settings)
+                if vehicle.isServer then ImplementProfileEvent.sendState(vehicle) end
+            elseif vehicle.isServer then
+                self:clear(vehicle)
+            end
+        end
+    end
+    vehicle.cpProfileRestorePending = nil
+    vehicle.cpProfileInvalidated = nil
+end
+
+-- Only new attachments queue offers. Opening a savegame must restore its setup without a prompt.
+-- Apply the no-profile policy first so declining a profile uses the chosen defaults/current values.
+function ImplementProfileManager:offerAttachedProfiles(vehicle)
+    if not vehicle.cpProfileOfferPending or vehicle.cpProfileRefreshAt or vehicle.cpImplementProfile or
+        not vehicle.getIsEntered or not vehicle:getIsEntered() or not self:canChange(vehicle) or g_gui:getIsGuiVisible() then return end
+    vehicle.cpProfileOfferPending = false
+    local equipment = ImplementProfile.signature(ImplementProfile.describe(vehicle))
+    if not self:requestWithoutProfile(vehicle, equipment) then return end
+    local matches = self:getMatchingProfiles(vehicle)
+    local preferences = g_Courseplay.globalSettings
+    local suggestions = preferences and preferences.showImplementProfileSuggestions
+    local automatic = preferences and preferences.autoLoadSingleImplementProfile
+    if #matches > 0 and (not suggestions or suggestions:getValue()) then
+        CpImplementProfileDialog.show(matches, function(profile)
+            self:loadAttachmentProfile(vehicle, profile, false)
+        end, function()
+            g_messageCenter:publish(MessageType.GUI_CP_INGAME_OPEN_IMPLEMENT_PROFILES)
+        end, function()
+            local accepted, reason = self:requestWithoutProfile(vehicle, equipment)
+            if not accepted then CpImplementProfileGui.showError(reason) end
+        end)
+    elseif #matches == 1 and automatic and automatic:getValue() then
+        self:loadAttachmentProfile(vehicle, ImplementProfile.copy(matches[1]), true)
+    end
+end
+
+-- Tick orchestration only: let normal CP attachment callbacks settle before restoring or offering.
 function ImplementProfileManager:updateVehicle(vehicle)
     if not vehicle.cpProfileInitialised then
         vehicle.cpProfileInitialised = true
@@ -391,48 +446,9 @@ function ImplementProfileManager:updateVehicle(vehicle)
     end
     if vehicle.cpProfileRefreshAt and g_time >= vehicle.cpProfileRefreshAt then
         if vehicle:getIsAIActive() then return end
-        vehicle.cpProfileRefreshAt = nil
-        local state = vehicle.cpImplementProfile
-        if state then
-            if vehicle.cpProfileInvalidated or ImplementProfile.match(state.profile, ImplementProfile.describe(vehicle)) ~= 'exact' then
-                if vehicle.isServer then self:clear(vehicle) end
-            elseif vehicle.cpProfileRestorePending then
-                if ImplementProfile.validateSettings(vehicle, state.profile.settings) then
-                    ImplementProfile.setSettings(vehicle, state.profile.settings)
-                    if vehicle.isServer then ImplementProfileEvent.sendState(vehicle) end
-                else
-                    if vehicle.isServer then self:clear(vehicle) end
-                end
-            end
-        end
-        vehicle.cpProfileRestorePending = nil
-        vehicle.cpProfileInvalidated = nil
+        self:refreshVehicle(vehicle)
     end
-    local preferences = g_Courseplay.globalSettings
-    local suggestions = preferences and preferences.showImplementProfileSuggestions
-    local showPrompt = not suggestions or suggestions:getValue()
-    local automatic = preferences and preferences.autoLoadSingleImplementProfile
-    local autoLoad = automatic and automatic:getValue()
-    if vehicle.cpProfileOfferPending and not vehicle.cpProfileRefreshAt and not vehicle.cpImplementProfile and
-        vehicle.getIsEntered and vehicle:getIsEntered() and self:canChange(vehicle) and not g_gui:getIsGuiVisible() then
-        vehicle.cpProfileOfferPending = false
-        local equipment = ImplementProfile.signature(ImplementProfile.describe(vehicle))
-        local ok = self:requestWithoutProfile(vehicle, equipment)
-        if not ok then return end
-        local matches = self:getMatchingProfiles(vehicle)
-        if #matches > 0 and showPrompt then
-            CpImplementProfileDialog.show(matches, function(profile)
-                self:loadAttachmentProfile(vehicle, profile, false)
-            end, function()
-                g_messageCenter:publish(MessageType.GUI_CP_INGAME_OPEN_IMPLEMENT_PROFILES)
-            end, function()
-                local accepted, reason = self:requestWithoutProfile(vehicle, equipment)
-                if not accepted then InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. reason)) end
-            end)
-        elseif #matches == 1 and autoLoad then
-            self:loadAttachmentProfile(vehicle, ImplementProfile.copy(matches[1]), true)
-        end
-    end
+    self:offerAttachedProfiles(vehicle)
 end
 
 --- Recheck a delayed dialogue choice; never apply to a different attachment or occupied job.
@@ -441,16 +457,9 @@ function ImplementProfileManager:loadAttachmentProfile(vehicle, profile, silent,
     if not current or current.revision ~= profile.revision or vehicle.cpImplementProfile or
         not vehicle:getIsEntered() or not self:canChange(vehicle) then return end
     if ImplementProfile.match(profile, ImplementProfile.describe(vehicle)) ~= 'exact' then return end
-    local course = vehicle.getFieldWorkCourse and vehicle:getFieldWorkCourse()
-    local width = profile.settings['generator.workWidth']
-    if not courseConfirmed and course and type(width) == 'number' and math.abs((course:getWorkWidth() or 0) - width) > 0.05 then
-        -- Silent loading must not silently invalidate an existing course's working width.
-        if silent then return end
-        YesNoDialog.show(function(_, accepted)
-            if accepted then self:loadAttachmentProfile(vehicle, profile, false, true) end
-        end, self, g_i18n:getText('CP_implementProfiles_courseWarning'))
-        return
-    end
+    if not CpImplementProfileGui.confirmCourseWidth(vehicle, profile, courseConfirmed, silent, function()
+        self:loadAttachmentProfile(vehicle, profile, false, true)
+    end) then return end
     local ok, reason = self:requestApply(vehicle, profile)
-    if not ok and not silent then InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. reason)) end
+    if not ok and not silent then CpImplementProfileGui.showError(reason) end
 end

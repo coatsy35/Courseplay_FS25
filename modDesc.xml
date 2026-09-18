@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="105">
-    <version>8.1.0.19</version>
+    <version>8.1.0.25</version>
 	<author><![CDATA[Courseplay.devTeam]]></author>
 	<title>
 		<en>CoursePlay</en>
@@ -314,6 +314,7 @@ Changelog 8.1.0.3
 		<sourceFile filename="scripts/gui/pages/CpCourseGeneratorFrame.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpVehicleSettingsFrame.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpImplementProfilesFrame.lua"/>
+        <sourceFile filename="scripts/gui/CpImplementProfileGui.lua"/>
         <sourceFile filename="scripts/gui/CpImplementProfileDialog.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpGlobalSettingsFrame.lua"/>
 		<sourceFile filename="scripts/gui/pages/CpHelpFrame.lua"/>

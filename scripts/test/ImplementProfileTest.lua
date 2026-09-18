@@ -1,5 +1,5 @@
 local lu = require('luaunit')
-package.path = package.path .. ';../?.lua;../implementProfiles/?.lua;../events/?.lua;../gui/pages/?.lua'
+package.path = package.path .. ';../?.lua;../implementProfiles/?.lua;../events/?.lua;../gui/pages/?.lua;../gui/?.lua'
 require('CpObject')
 require('ImplementProfile')
 
@@ -20,6 +20,7 @@ table.clone = ImplementProfile.copy
 InputAction = {MENU_ACTIVATE = 1, MENU_EXTRA_1 = 2, MENU_EXTRA_2 = 3, MENU_CANCEL = 4, CP_PROFILE_RENAME = 5, CP_PROFILE_DELETE = 6}
 g_i18n = {getText = function(_, text) return text end}
 g_gui = {getIsGuiVisible = function() return true end}
+require('CpImplementProfileGui')
 require('ImplementProfileManager')
 require('ImplementProfileEvent')
 require('CpImplementProfilesFrame')
@@ -1141,6 +1142,144 @@ function TestImplementProfiles:testNoProfileRejectsChangedEquipmentOrBusyVehicle
     v.lastSpeedReal = 1
     lu.assertFalse(manager:withoutProfile(v, ImplementProfile.signature(ImplementProfile.describe(v)), true))
     lu.assertEquals(ImplementProfile.capture(v), before)
+end
+
+-- Shared dialogue regressions: cancellation and delayed callbacks must not change another setup.
+function TestImplementProfiles:testNamingRechecksVehicleAndAttachment()
+    local first, second = vehicle(), vehicle('second')
+    local current, callback, errorText = first
+    local oldText, oldInfo = TextInputDialog, InfoDialog
+    TextInputDialog = {show = function(fn, target) lu.assertEquals(target, CpImplementProfileGui); callback = fn end}
+    InfoDialog = {show = function(text) errorText = text end}
+    local saved = false
+    local function open()
+        CpImplementProfileGui.saveNew(function() return current end, 'CP_implementProfiles_saveNew', function() saved = true end)
+    end
+    open()
+    current = second
+    callback(nil, 'Wrong tractor', true)
+    lu.assertEquals(errorText, 'CP_implementProfiles_mismatch')
+    lu.assertNil(next(g_Courseplay.implementProfiles.profiles))
+    current = first
+    open()
+    first.attachments = {}
+    callback(nil, 'Detached', true)
+    lu.assertFalse(saved)
+    lu.assertNil(next(g_Courseplay.implementProfiles.profiles))
+    TextInputDialog, InfoDialog = oldText, oldInfo
+end
+
+function TestImplementProfiles:testWidthWarningCancelSilentAndConfirmation()
+    local v = vehicle()
+    v.getFieldWorkCourse = function() return {getWorkWidth = function() return 12 end} end
+    local callback, resumed, shown = nil, 0, 0
+    local oldDialog = YesNoDialog
+    YesNoDialog = {show = function(fn, target) lu.assertEquals(target, CpImplementProfileGui); callback = fn; shown = shown + 1 end}
+    local function resume() resumed = resumed + 1 end
+    local profile = profileFor(v)
+    lu.assertFalse(CpImplementProfileGui.confirmCourseWidth(v, profile, false, true, resume))
+    lu.assertEquals(shown, 0)
+    lu.assertFalse(CpImplementProfileGui.confirmCourseWidth(v, profile, false, false, resume))
+    callback(nil, false)
+    lu.assertEquals(resumed, 0)
+    callback(nil, true)
+    lu.assertEquals(resumed, 1)
+    lu.assertTrue(CpImplementProfileGui.confirmCourseWidth(v, profile, true, false, resume))
+    lu.assertEquals(shown, 1)
+    v.getFieldWorkCourse = function() return {getWorkWidth = function() return 6.01 end} end
+    lu.assertTrue(CpImplementProfileGui.confirmCourseWidth(v, profile, false, false, resume))
+    YesNoDialog = oldDialog
+end
+
+function TestImplementProfiles:testWidthConfirmationCannotLoadAChangedSelection()
+    local v = vehicle()
+    local manager = g_Courseplay.implementProfiles
+    local first = manager:save(v, 'First')
+    v.generatorSettings.workWidth.value = 3
+    local second = manager:save(v, 'Second')
+    v.getFieldWorkCourse = function() return {getWorkWidth = function() return 12 end} end
+    local frame = setmetatable({fieldworkProfileVehicle = v, fieldworkProfiles = {first, second},
+        fieldworkProfileSelector = setting(1), cpMenu = {getCurrentVehicle = function() return v end}},
+        {__index = CpCourseGeneratorFrame})
+    local callback
+    local oldDialog = YesNoDialog
+    YesNoDialog = {show = function(fn) callback = fn end}
+    frame:loadFieldworkProfile()
+    frame.fieldworkProfileSelector.value = 2
+    callback(nil, true)
+    lu.assertNil(v.cpImplementProfile)
+    lu.assertEquals(v.generatorSettings.workWidth.value, 3)
+    frame:loadFieldworkProfile()
+    callback(nil, true)
+    lu.assertEquals(v.cpImplementProfile.profile.id, second.id)
+    YesNoDialog = oldDialog
+end
+
+-- Exercise real page construction with reordered sections and an unrelated extra section.
+function TestImplementProfiles:testGlobalSectionsUseKeysInsteadOfPositions()
+    require('CpGlobalSettingsFrame')
+    local oldSuper = CpGlobalSettingsFrame.superClass
+    CpGlobalSettingsFrame.superClass = function() return {onFrameOpen = function() end} end
+    local oldSettings, oldUtil, oldFocus = g_Courseplay.globalSettings, CpSettingsUtil, FocusManager
+    local general, user, profiles = 'CP_global_setting_subTitle_general', 'CP_global_setting_subTitle_userSettings', 'CP_implementProfiles_title'
+    g_Courseplay.globalSettings = {
+        getSettings = function() return {} end,
+        getSettingSetup = function() return {{title = profiles}, {title = 'unrelated'}, {title = user}, {title = general}} end
+    }
+    local layouts = {{}, {}}
+    CpSettingsUtil = {
+        generateAndBindGuiElements = function(data, layout) table.insert(layout, data.title) end,
+        updateGuiElementsBoundToSettings = function() end
+    }
+    FocusManager = {loadElementFromCustomValues = function() end}
+    local frame = setmetatable({subCategoryPages = {
+        {getDescendantByName = function() return layouts[1] end},
+        {getDescendantByName = function() return layouts[2] end}},
+        sectionHeaderPrefab = {clone = function() return {setText = function() end} end},
+        superClass = function() return {onFrameOpen = function() end} end,
+        updateSubCategoryPages = function() end}, {__index = CpGlobalSettingsFrame})
+    frame:onFrameOpen()
+    lu.assertEquals(layouts[1], {general})
+    lu.assertEquals(layouts[2], {profiles, user})
+    g_Courseplay.globalSettings, CpSettingsUtil, FocusManager = oldSettings, oldUtil, oldFocus
+    CpGlobalSettingsFrame.superClass = oldSuper
+end
+
+-- Verify the native-skin boundary strips only the clone, preserving graphics and the original GUI.
+function TestImplementProfiles:testNativeQuestionShellLeavesSharedDialogueUntouched()
+    local oldDialog, oldBase = CpImplementProfileDialog, DialogElement
+    local oldText, oldButton, oldBox = TextElement, ButtonElement, BoxLayoutElement
+    DialogElement, TextElement, ButtonElement, BoxLayoutElement = {}, {}, {}, {}
+    dofile('../gui/CpImplementProfileDialog.lua')
+    local function node(kind, children)
+        local item = {kind = kind, elements = children or {}}
+        item.isa = function(self, class) return self.kind == class end
+        item.delete = function(self)
+            for i, child in ipairs(self.parent.elements) do
+                if child == self then table.remove(self.parent.elements, i); break end
+            end
+        end
+        for _, child in ipairs(item.elements) do child.parent = item end
+        item.clone = function(self, parent)
+            local copies = {}
+            for _, child in ipairs(self.elements) do table.insert(copies, child:clone()) end
+            local copy = node(self.kind, copies)
+            copy.parent = parent
+            return copy
+        end
+        return item
+    end
+    local graphics = {}
+    local template = node(graphics, {node(TextElement), node(graphics, {node(ButtonElement), node(graphics)}), node(BoxLayoutElement)})
+    local shell = CpImplementProfileDialog.cloneQuestionShell(template, {})
+    lu.assertEquals(#template.elements, 3)
+    lu.assertEquals(#template.elements[2].elements, 2)
+    lu.assertEquals(#shell.elements, 1)
+    lu.assertEquals(#shell.elements[1].elements, 1)
+    lu.assertEquals(shell.elements[1].elements[1].kind, graphics)
+    lu.assertError(CpImplementProfileDialog.cloneQuestionShell, nil, {})
+    CpImplementProfileDialog, DialogElement = oldDialog, oldBase
+    TextElement, ButtonElement, BoxLayoutElement = oldText, oldButton, oldBox
 end
 
 os.exit(lu.LuaUnit.run())

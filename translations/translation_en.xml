@@ -1132,7 +1132,7 @@ Now your selection should look similar to the image.
     <text name="CP_implementProfiles_show" text="Show"/>
     <text name="CP_implementProfiles_allEquipment" text="All equipment"/>
     <text name="CP_global_setting_noImplementProfileSettings_title" text="When no profile is loaded"/>
-    <text name="CP_global_setting_noImplementProfileSettings_tooltip" text="Use defaults resets implement settings for newly attached equipment. Keep current settings retains the previous working setup. Existing saved setups are preserved when loading a savegame."/>
+    <text name="CP_global_setting_noImplementProfileSettings_tooltip" text="When you attach an implement without loading a profile, use its default settings or keep your current settings. Reloading a saved game keeps your saved setup."/>
     <text name="CP_global_setting_noImplementProfileSettings_defaults" text="Use defaults"/>
     <text name="CP_global_setting_noImplementProfileSettings_keep" text="Keep current settings"/>
     <text name="CP_implementProfiles_saveProfile" text="Save implement profile"/>
@@ -1161,6 +1161,7 @@ Now your selection should look similar to the image.
     <text name="CP_implementProfiles_name" text="Implement already identified. Name the course setup."/>
     <text name="CP_implementProfiles_active" text="Applied: %s (revision %d)"/>
     <text name="CP_implementProfiles_noActive" text="No implement profile applied"/>
+    <text name="CP_implementProfiles_profileRevision" text="%s — revision %d"/>
     <text name="CP_implementProfiles_revision" text="revision %d"/>
     <text name="CP_implementProfiles_empty" text="No profiles found. Attach equipment and save your current CP setup, or browse all profiles."/>
     <text name="CP_implementProfiles_help" text="Select a profile to view its equipment and saved settings."/>

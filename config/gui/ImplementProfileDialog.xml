@@ -13,10 +13,11 @@
     </GuiElement>
     <GUIProfiles>
         <Profile name="cpProfileDialogTitle" extends="fs25_settingsSectionHeader">
-            <anchor value="0 1" /><pivot value="0 1" /><position value="30px -150px" /><size value="740px 32px" /><textSize value="18px" />
+            <anchor value="0 1" /><pivot value="0 1" /><position value="30px -138px" /><size value="740px 32px" /><textSize value="18px" />
+            <textAlignment value="center" />
         </Profile>
         <Profile name="cpProfileDialogSelector" extends="fs25_settingsMultiTextOption">
-            <anchor value="0 1" /><pivot value="0 1" /><position value="50px -195px" /><size value="700px 40px" />
+            <anchor value="0 1" /><pivot value="0 1" /><position value="50px -177px" /><size value="700px 40px" />
         </Profile>
     </GUIProfiles>
 </GUI>

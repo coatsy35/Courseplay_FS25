@@ -29,6 +29,7 @@ ImplementProfile.GROUPS = {
     {'harvesters', 'spec_combine'}, {'headers', 'spec_cutter'}
 }
 
+-- Data helpers and equipment identity. Stable keys allow profiles to move between maps and machines.
 function ImplementProfile.copy(value)
     if type(value) ~= 'table' then return value end
     local result = {}
@@ -151,6 +152,7 @@ function ImplementProfile.match(profile, equipment)
     return #profile.equipment > 0 and 'partial' or 'none'
 end
 
+-- Settings ownership. Only allow-listed implement values are captured; tractor preferences stay local.
 function ImplementProfile.containers(vehicle)
     return {vehicle = vehicle:getCpSettings(), generator = vehicle:getCourseGeneratorSettings()}
 end
@@ -194,6 +196,7 @@ function ImplementProfile.matchesSettings(vehicle, profile)
     return true
 end
 
+-- Persistence validation. Reject invalid values before they can reach a setting or cross the network.
 function ImplementProfile.decode(value)
     if value == 'true' then return true end
     if value == 'false' then return false end

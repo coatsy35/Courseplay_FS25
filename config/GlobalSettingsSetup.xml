@@ -48,12 +48,6 @@
 		</Setting>
 	</SettingSubTitle>
 	<SettingSubTitle prefix="true" title="userSettings">
-		<Setting classType="AIParameterBooleanSetting" name="autoLoadSingleImplementProfile" isUserSetting="true" defaultBool="false"/>
-		<Setting classType="AIParameterBooleanSetting" name="showImplementProfileSuggestions" isUserSetting="true" defaultBool="true"/>
-        <Setting classType="AIParameterSettingList" name="noImplementProfileSettings" isUserSetting="true" default="1">
-            <Values><Value>1</Value><Value>2</Value></Values>
-            <Texts><Text>defaults</Text><Text>keep</Text></Texts>
-        </Setting>
 		<!-- When enabled, then a few settings are invisible and return their default values. -->
 		<Setting classType="AIParameterBooleanSetting" name="expertModeActive" isUserSetting="true" defaultBool="false"/>
 		<!-- <Setting classType="AIParameterBooleanSetting" name="controllerHudSelected" isUserSetting="true" defaultBool="false" onChangeCallback="onHudSelectionChanged"/> -->
@@ -86,6 +80,14 @@
 				<Text>imperial</Text>
 			</Texts>
 		</Setting>
+	</SettingSubTitle>
+	<SettingSubTitle prefix="false" title="CP_implementProfiles_title">
+		<Setting classType="AIParameterBooleanSetting" name="autoLoadSingleImplementProfile" isUserSetting="true" defaultBool="false"/>
+		<Setting classType="AIParameterBooleanSetting" name="showImplementProfileSuggestions" isUserSetting="true" defaultBool="true"/>
+        <Setting classType="AIParameterSettingList" name="noImplementProfileSettings" isUserSetting="true" default="1">
+            <Values><Value>1</Value><Value>2</Value></Values>
+            <Texts><Text>defaults</Text><Text>keep</Text></Texts>
+        </Setting>
 	</SettingSubTitle>
 	<SettingSubTitle prefix="true" title="pathfinder" isExpertModeOnly="true">
 		<Setting classType="AIParameterSettingList" name="maxDeltaAngleAtGoalDeg" min="5" max="90" incremental="5" default="45" isExpertModeOnly="true"/>

@@ -1161,6 +1161,7 @@ Now your selection should look similar to the image.
     <text name="CP_implementProfiles_name" text="Profile name"/>
     <text name="CP_implementProfiles_active" text="Applied: %s (revision %d)"/>
     <text name="CP_implementProfiles_noActive" text="No implement profile applied"/>
+    <text name="CP_implementProfiles_profileRevision" text="%s — revision %d"/>
     <text name="CP_implementProfiles_revision" text="revision %d"/>
     <text name="CP_implementProfiles_empty" text="No profiles found. Attach equipment and save your current CP setup, or browse all profiles."/>
     <text name="CP_implementProfiles_help" text="Select a profile to view its equipment and saved settings."/>

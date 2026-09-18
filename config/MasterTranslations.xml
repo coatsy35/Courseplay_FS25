@@ -3355,7 +3355,7 @@ TPS extension
             <Text language="en"><![CDATA[All equipment]]></Text>
         </Translation>
         <Translation name="CP_global_setting_noImplementProfileSettings_title"><Text language="en"><![CDATA[When no profile is loaded]]></Text></Translation>
-        <Translation name="CP_global_setting_noImplementProfileSettings_tooltip"><Text language="en"><![CDATA[Use defaults resets implement settings for newly attached equipment. Keep current settings retains the previous working setup. Existing saved setups are preserved when loading a savegame.]]></Text></Translation>
+        <Translation name="CP_global_setting_noImplementProfileSettings_tooltip"><Text language="en"><![CDATA[When you attach an implement without loading a profile, use its default settings or keep your current settings. Reloading a saved game keeps your saved setup.]]></Text></Translation>
         <Translation name="CP_global_setting_noImplementProfileSettings_defaults"><Text language="en"><![CDATA[Use defaults]]></Text></Translation>
         <Translation name="CP_global_setting_noImplementProfileSettings_keep"><Text language="en"><![CDATA[Keep current settings]]></Text></Translation>
 		<Translation name="CP_implementProfiles_saveProfile">
@@ -3406,6 +3406,10 @@ TPS extension
 		<Translation name="CP_implementProfiles_noActive">
 			<Text language="en"><![CDATA[No implement profile applied]]></Text>
 		</Translation>
+        <!-- Keep the complete caption translatable instead of joining English fragments in Lua. -->
+        <Translation name="CP_implementProfiles_profileRevision">
+            <Text language="en"><![CDATA[%s — revision %d]]></Text>
+        </Translation>
 		<Translation name="CP_implementProfiles_revision">
 			<Text language="en"><![CDATA[revision %d]]></Text>
 		</Translation>

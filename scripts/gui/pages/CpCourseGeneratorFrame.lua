@@ -353,22 +353,10 @@ function CpCourseGeneratorFrame:addImplementProfileSelector(layout, vehicle)
     FocusManager:loadElementFromCustomValues(control)
 end
 
+-- Save directly from fieldwork settings, then select the new entry without reapplying its values.
 function CpCourseGeneratorFrame:saveFieldworkProfile()
-    local vehicle = self.cpMenu:getCurrentVehicle()
-    if not vehicle then return end
-    local equipment = ImplementProfile.signature(ImplementProfile.describe(vehicle))
-    TextInputDialog.show(function(_, name, accepted)
-        if not accepted then return end
-        if vehicle ~= self.cpMenu:getCurrentVehicle() or
-            equipment ~= ImplementProfile.signature(ImplementProfile.describe(vehicle)) then
-            InfoDialog.show(g_i18n:getText('CP_implementProfiles_mismatch'))
-            return
-        end
-        local profile, reason = g_Courseplay.implementProfiles:save(vehicle, name)
-        if not profile then
-            InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. (reason or 'saveFailed')))
-            return
-        end
+    CpImplementProfileGui.saveNew(function() return self.cpMenu:getCurrentVehicle() end,
+        'CP_implementProfiles_saveProfile', function(profile)
         self:updateSubCategoryPages(self.CATEGRORIES.BASIC_SETTINGS)
         for i, saved in ipairs(self.fieldworkProfiles) do
             if saved.id == profile.id then
@@ -377,25 +365,24 @@ function CpCourseGeneratorFrame:saveFieldworkProfile()
                 break
             end
         end
-    end, self, '', g_i18n:getText('CP_implementProfiles_name'),
-        g_i18n:getText('CP_implementProfiles_saveProfile'), 50)
+    end)
 end
 
+-- Explicit loading shares the directory warning and rechecks selection after delayed confirmation.
 function CpCourseGeneratorFrame:loadFieldworkProfile(confirmed)
     local vehicle = self.cpMenu:getCurrentVehicle()
     if vehicle ~= self.fieldworkProfileVehicle then return end
     local profile = self.fieldworkProfiles and self.fieldworkProfiles[self.fieldworkProfileSelector:getValue()]
     if not profile then return end
-    local course = vehicle:getFieldWorkCourse()
-    local width = profile.settings['generator.workWidth']
-    if not confirmed and course and type(width) == 'number' and math.abs((course:getWorkWidth() or 0) - width) > 0.05 then
-        YesNoDialog.show(function(_, accepted)
-            if accepted then self:loadFieldworkProfile(true) end
-        end, self, g_i18n:getText('CP_implementProfiles_courseWarning'))
-        return
-    end
+    if not CpImplementProfileGui.confirmCourseWidth(vehicle, profile, confirmed, false, function()
+        -- Do not carry confirmation over to another vehicle or a newly selected profile.
+        if self.cpMenu:getCurrentVehicle() == vehicle and
+            self.fieldworkProfiles[self.fieldworkProfileSelector:getValue()] == profile then
+            self:loadFieldworkProfile(true)
+        end
+    end) then return end
     local ok, reason = g_Courseplay.implementProfiles:requestApply(vehicle, profile)
-    if not ok then InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. reason)) end
+    if not ok then CpImplementProfileGui.showError(reason) end
 end
 
 function CpCourseGeneratorFrame:updateSettings(vehicle)
@@ -1215,7 +1202,7 @@ function CpCourseGeneratorFrame:generateFieldworkCourse(profileReady)
         vehicle.cpProfileApplyError = nil
         local ok, reason = g_Courseplay.implementProfiles:requestApply(vehicle, profile)
         if not ok then
-            InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. reason))
+            CpImplementProfileGui.showError(reason)
             return false
         end
         if not vehicle.isServer then

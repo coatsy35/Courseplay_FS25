@@ -1,6 +1,7 @@
 CpImplementProfilesFrame = {}
 local CpImplementProfilesFrame_mt = Class(CpImplementProfilesFrame, TabbedMenuFrameElement)
 
+-- Page lifecycle and focus. Reuse CP menu controls while keeping library selection local to this page.
 function CpImplementProfilesFrame.new(target, customMt)
     local self = TabbedMenuFrameElement.new(target, customMt or CpImplementProfilesFrame_mt)
     self.expanded, self.rows, self.details = {}, {}, {}
@@ -50,9 +51,9 @@ function CpImplementProfilesFrame:onFrameOpen()
     FocusManager:setFocus(self.profileList)
 end
 
-function CpImplementProfilesFrame:refresh()
+-- Directory model. A combination can have several tree links, all referring to the same saved profile.
+function CpImplementProfilesFrame:buildGroups()
     local manager = g_Courseplay.implementProfiles
-    self.equipment = self.vehicle and ImplementProfile.describe(self.vehicle) or {}
     local groups = {}
     for _, profile in pairs(manager.profiles) do
         local match = ImplementProfile.match(profile, self.equipment)
@@ -79,6 +80,11 @@ function CpImplementProfilesFrame:refresh()
             end
         end
     end
+    return groups
+end
+
+-- Flatten only expanded groups for the native list; saved profiles themselves remain untouched.
+function CpImplementProfilesFrame:buildRows(groups)
     local keys = {}
     for key in pairs(groups) do table.insert(keys, key) end
     table.sort(keys, function(a, b) return groups[a].title < groups[b].title end)
@@ -112,6 +118,12 @@ function CpImplementProfilesFrame:refresh()
             end
         end
     end
+end
+
+-- Rebuild after library changes and restore the active selection when opening the page.
+function CpImplementProfilesFrame:refresh()
+    self.equipment = self.vehicle and ImplementProfile.describe(self.vehicle) or {}
+    self:buildRows(self:buildGroups())
     self.emptyText:setVisible(#self.rows == 0)
     self.profileList:reloadData()
     if self.selectActiveOnRefresh then
@@ -127,6 +139,7 @@ function CpImplementProfilesFrame:refresh()
     self:updateDetails()
 end
 
+-- List interaction. Let the list handle scrolling and individual native controls handle value changes.
 function CpImplementProfilesFrame:getSelectedRow()
     return self.rows[self.profileList:getSelectedIndexInSection()]
 end
@@ -200,6 +213,7 @@ function CpImplementProfilesFrame:toggleRow(row)
     self:refresh()
 end
 
+-- Details presentation. Use CP setting titles and option texts so units and language follow the game.
 function CpImplementProfilesFrame:updateDetails()
     self.detailList.showHighlights = self.editDraft == nil
     self.details = {}
@@ -209,11 +223,11 @@ function CpImplementProfilesFrame:updateDetails()
     local row = self:getSelectedRow()
     if row and row.profile then
         local profile = self.editDraft or row.profile
-        table.insert(self.details, profile.name .. ' — ' .. string.format(g_i18n:getText('CP_implementProfiles_revision'), profile.revision))
+        for _, item in ipairs(profile.equipment) do table.insert(self.details, item.name) end
+        table.insert(self.details, string.format(g_i18n:getText('CP_implementProfiles_profileRevision'), profile.name, profile.revision))
         if row.match ~= 'exact' then
             table.insert(self.details, g_i18n:getText('CP_implementProfiles_match_' .. row.match))
         end
-        for _, item in ipairs(profile.equipment) do table.insert(self.details, item.name) end
         for _, group in ipairs({'vehicle', 'generator'}) do
             for _, name in ipairs(ImplementProfile.SETTINGS[group]) do
                 local key = group .. '.' .. name
@@ -239,6 +253,7 @@ function CpImplementProfilesFrame:updateDetails()
     self:updateMenuButtons()
 end
 
+-- Footer actions. Expose only actions allowed by the selection, vehicle access and current edit state.
 function CpImplementProfilesFrame:updateMenuButtons()
     self.menuButtonInfo = self.cpMenu.backButtonInfo and {self.cpMenu.backButtonInfo} or {}
     local row = self:getSelectedRow()
@@ -276,6 +291,7 @@ function CpImplementProfilesFrame:updateMenuButtons()
     self:setMenuButtonInfoDirty()
 end
 
+-- Draft editing. Bind controls to independent parameters; only Save changes writes to the library.
 function CpImplementProfilesFrame:onClickEdit()
     local row = self:getSelectedRow()
     if not row or not row.profile or g_Courseplay.implementProfiles.readOnly then return end
@@ -334,6 +350,7 @@ function CpImplementProfilesFrame:onFrameClose()
     self:superClass().onFrameClose(self)
 end
 
+-- Library commands. Shared dialogues handle naming and width warnings; the manager validates writes.
 function CpImplementProfilesFrame:onClickAdvanced()
     InfoDialog.show(g_i18n:getText('CP_implementProfiles_advancedPlaceholder'))
 end
@@ -352,15 +369,11 @@ function CpImplementProfilesFrame:onClickRename()
 end
 
 function CpImplementProfilesFrame:apply(profile, courseConfirmed)
-    local course = self.vehicle and self.vehicle.getFieldWorkCourse and self.vehicle:getFieldWorkCourse()
-    local width = profile.settings['generator.workWidth']
-    if not courseConfirmed and course and type(width) == 'number' and math.abs((course:getWorkWidth() or 0) - width) > 0.05 then
-        YesNoDialog.show(function(_, accepted)
-            if accepted then self:apply(profile, true) end
-        end, self, g_i18n:getText('CP_implementProfiles_courseWarning'))
-        return
-    end
-    local ok, reason = g_Courseplay.implementProfiles:requestApply(self.vehicle, profile)
+    local vehicle = self.vehicle
+    if not CpImplementProfileGui.confirmCourseWidth(vehicle, profile, courseConfirmed, false, function()
+        if self.vehicle == vehicle then self:apply(profile, true) end
+    end) then return end
+    local ok, reason = g_Courseplay.implementProfiles:requestApply(vehicle, profile)
     if not ok then self:showError(reason) end
     self:updateDetails()
 end
@@ -378,15 +391,10 @@ function CpImplementProfilesFrame:update(dt)
 end
 
 function CpImplementProfilesFrame:saveNew()
-    local vehicle = self.vehicle
-    local equipment = ImplementProfile.signature(ImplementProfile.describe(vehicle))
-    TextInputDialog.show(function(_, name, accepted)
-        if not accepted then return end
-        if equipment ~= ImplementProfile.signature(ImplementProfile.describe(vehicle)) then self:showError('mismatch'); return end
-        local profile, reason = g_Courseplay.implementProfiles:save(vehicle, name)
-        if profile then self:apply(profile) else self:showError(reason) end
+    CpImplementProfileGui.saveNew(function() return self.vehicle end, 'CP_implementProfiles_saveNew', function(profile)
+        self:apply(profile)
         self:refresh()
-    end, self, '', g_i18n:getText('CP_implementProfiles_name'), g_i18n:getText('CP_implementProfiles_saveNew'), 50)
+    end)
 end
 
 function CpImplementProfilesFrame:updateProfile(profile)
@@ -408,7 +416,7 @@ function CpImplementProfilesFrame:deleteProfile(profile)
 end
 
 function CpImplementProfilesFrame:showError(reason)
-    InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. (reason or 'saveFailed')))
+    CpImplementProfileGui.showError(reason)
 end
 
 function CpImplementProfilesFrame:onClickEquipmentFilter()

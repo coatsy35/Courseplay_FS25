@@ -2,6 +2,7 @@
 CpImplementProfileDialog = {}
 local CpImplementProfileDialog_mt = Class(CpImplementProfileDialog, DialogElement)
 
+-- Dialogue lifecycle. Load our controls once, then reuse a private copy of the native FS25 skin.
 function CpImplementProfileDialog.new()
     return DialogElement.new(nil, CpImplementProfileDialog_mt)
 end
@@ -13,11 +14,11 @@ function CpImplementProfileDialog.setupGui()
     dialog:useNativeQuestionBackground(g_gui.guis.YesNoDialog.target.dialogElement)
 end
 
---- Reuse the loaded game's Yes/No shell, including its actual background slices.
--- A private clone avoids modifying the shared YesNoDialog or its callbacks.
-function CpImplementProfileDialog:useNativeQuestionBackground(template)
-    local content = self.dialogElement
-    local shell = template:clone(self, false, true)
+-- Native FS25 skin adapter: this is the only place that depends on the stock dialogue tree.
+-- Retain its graphics/question icon and remove stock content from a private clone only.
+function CpImplementProfileDialog.cloneQuestionShell(template, parent)
+    assert(template and template.clone and template.elements, 'Implement profiles require the native YesNoDialog shell')
+    local shell = template:clone(parent, false, true)
     local function removeContent(element)
         for i = #element.elements, 1, -1 do
             local child = element.elements[i]
@@ -29,6 +30,13 @@ function CpImplementProfileDialog:useNativeQuestionBackground(template)
         end
     end
     removeContent(shell)
+    return shell
+end
+
+-- Move our translated controls into the native skin without touching the shared Yes/No dialogue.
+function CpImplementProfileDialog:useNativeQuestionBackground(template)
+    local content = self.dialogElement
+    local shell = CpImplementProfileDialog.cloneQuestionShell(template, self)
     shell:setSize(unpack(content.size))
     while #content.elements > 0 do
         local child = content.elements[1]
@@ -39,6 +47,7 @@ function CpImplementProfileDialog:useNativeQuestionBackground(template)
     self.dialogElement = shell
 end
 
+-- Attachment choice. Names are user data; button labels and headings come from the translation XML.
 function CpImplementProfileDialog.show(profiles, onLoad, onView, onSkip)
     local dialog = g_gui.guis.CpImplementProfileDialog.target
     dialog.profiles = ImplementProfile.copy(profiles)
@@ -52,6 +61,7 @@ function CpImplementProfileDialog.show(profiles, onLoad, onView, onSkip)
     FocusManager:setFocus(dialog.profileSelector)
 end
 
+-- Close before callbacks so opening another page or dialogue does not leave two active modals.
 function CpImplementProfileDialog:onClickLoad()
     local profile = self.profiles and self.profiles[self.profileSelector:getState()]
     local callback = self.loadCallback

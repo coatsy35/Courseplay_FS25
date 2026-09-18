@@ -3,6 +3,7 @@ ImplementProfileEvent = {}
 local ImplementProfileEvent_mt = Class(ImplementProfileEvent, Event)
 InitEventClass(ImplementProfileEvent, 'ImplementProfileEvent')
 
+-- Event construction. Requests carry proposed changes; responses carry only server-accepted state.
 function ImplementProfileEvent.emptyNew()
     return Event.new(ImplementProfileEvent_mt)
 end
@@ -14,6 +15,7 @@ function ImplementProfileEvent.new(vehicle, profile, request, errorKey, equipmen
     return self
 end
 
+-- Wire codecs. Send stable setting names and values, never translated labels or selector indices.
 function ImplementProfileEvent.writeValues(streamId, values)
     local names = {}
     for name in pairs(values) do table.insert(names, name) end
@@ -63,6 +65,7 @@ function ImplementProfileEvent.readProfile(streamId)
     return ImplementProfile.valid(profile) and profile.settings and profile or nil
 end
 
+-- Working-state replication. Joining players need the applied snapshot without the owner's library.
 function ImplementProfileEvent.writeVehicle(streamId, vehicle)
     ImplementProfileEvent.writeValues(streamId, ImplementProfile.capture(vehicle))
     local state = vehicle.cpImplementProfile
@@ -92,6 +95,7 @@ function ImplementProfileEvent.readVehicle(streamId, vehicle)
     end
 end
 
+-- Request/response transport. Consume untrusted payloads without treating clients as authoritative.
 function ImplementProfileEvent:writeStream(streamId, connection)
     NetworkUtil.writeNodeObject(streamId, self.vehicle)
     streamWriteBool(streamId, self.request)
@@ -129,11 +133,12 @@ function ImplementProfileEvent:readStream(streamId, connection)
     self:run(connection)
 end
 
+-- Server authority. Check farm access and validate the full change before broadcasting it.
 function ImplementProfileEvent:run(connection)
     if connection:getIsServer() then
         if not self.request and self.errorKey ~= '' then
             if self.vehicle then self.vehicle.cpProfileApplyError = self.errorKey end
-            InfoDialog.show(g_i18n:getText('CP_implementProfiles_' .. self.errorKey))
+            CpImplementProfileGui.showError(self.errorKey)
         end
         return
     end
