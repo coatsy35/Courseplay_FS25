@@ -56,6 +56,122 @@ class EntryTests(unittest.TestCase):
                 result = self.lua.globals().handoverFixture(points, 1, x, z, math.atan2(dx,dz))
                 self.assertEqual(result, 'turn:1')
 
+    def test_headland_finish_checks_required_marker_distance_not_reserve(self):
+        self.lua.execute("""
+        function finishCheck(side, late, corner, front, back, boundaryEnabled)
+            local node={x=0,z=0,t=0}
+            local vehicle={getAIDirectionNode=function() return node end,
+                cpGetFieldPolygon=function() if boundaryEnabled then return {
+                    {x=-20,z=-20},{x=20,z=-20},{x=20,z=20},{x=-20,z=20}} end end}
+            local context=setmetatable({vehicle=vehicle,workWidth=5.6,
+                frontMarkerDistance=front,backMarkerDistance=back,
+                isHeadlandCorner=function() return corner end},TurnContext)
+            return context:getHeadlandFinishLimit(vehicle,{x=0,z=side*4,t=side==1 and 0 or math.pi},late) == nil
+        end
+        """)
+        for side in [-1, 1]:
+            run = self.lua.globals().finishCheck
+            self.assertTrue(run(side, False, True, -4, -17.7, True))
+            self.assertFalse(run(side, True, True, -4, -17.7, True))
+            self.assertTrue(run(side, True, False, -4, -17.7, True))
+            self.assertTrue(run(side, True, True, -4, -17.7, False))
+            self.assertTrue(run(side, True, True, -1, -2, True))
+
+    def test_unsafe_finish_raises_before_starting_checked_turn(self):
+        self.lua.execute("""
+        AIDriveStrategyCourse=AIDriveStrategyCourse or {onFinishRowEvent='finish'}
+        for _, speed in ipairs({5,12,20,35}) do
+            local events={}
+            local node={x=0,z=0,t=0}
+            local turn=setmetatable({workWidth=5.6,headlandFinishLimit=20,
+                vehicle={getAIDirectionNode=function() return node end,getLastSpeed=function() return speed end},
+                getRaiseImplementNode=function() return {x=0,z=0,t=0} end,debug=function() end,
+                turnContext={isHeadlandCorner=function() return true end},
+                workEndHandler={raiseImplementsAsNeeded=function() events[#events+1]='check' end,
+                    allRaised=function() return false end},
+                driveStrategy={raiseImplements=function() events[#events+1]='raise' end,
+                    raiseControllerEvent=function() events[#events+1]='event' end},
+                startTurn=function() events[#events+1]='turn' end},AITurn)
+            turn:finishRow(16)
+            assert(table.concat(events,',')=='check') -- keep working while there is room
+            events={}; node.z=20-math.max(2.8,2*speed/3.6)
+            assert(turn:finishRow(16)==false)
+            assert(table.concat(events,',')=='raise,event,turn')
+        end
+        """)
+
+    def test_pathfinder_tail_preserves_straight_row_and_reverse_behaviour(self):
+        self.lua.execute("""
+        for _, kind in ipairs({'straight','row','reverse','pastCorner'}) do
+            local source=Course({},{{x=0,z=0},{x=0,z=5},{x=0,z=10},{x=0,z=20}},false)
+            local finish=kind=='pastCorner' and 2 or -2
+            local course=Course({},{{x=0,z=finish-1},{x=0,z=finish}},true)
+            if kind=='reverse' then course.isForwardOnly=function() return false end end
+            local context=setmetatable({fieldWorkCourse=source,turnEndWpIx=1,workWidth=5.6,
+                frontMarkerDistance=-4,backMarkerDistance=-17.7,
+                turnEndWpNode={node={x=0,z=0,t=0}},
+                isHeadlandCorner=function() return kind~='row' end,
+                appendEndingTurnCourse=function(_,c,extra)
+                    assert(c==course and extra==0 and c:getNumberOfWaypoints()==2)
+                    return 123
+                end},TurnContext)
+            assert(context:appendPathfinderEndingTurnCourse(course,0)==123)
+        end
+        """)
+
+    def test_saved_pw100_curved_recovery_rejoins_actual_headland(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/handover-fixture.lua').read_text())
+        # savegame18/CpAssignedCourses.xml, T7.300, 18 September 2026:
+        # original headland waypoints 4411..4423; 4410 is the turn start.
+        original=[(-100.79,-145.47),(-98.53,-143.20),(-96.75,-141.42),
+                  (-94.75,-137.71),(-94.02,-133.29),(-93.81,-131.62),
+                  (-94.69,-129.40),(-95.25,-127.64),(-95.64,-126.82),
+                  (-97.08,-125.24),(-99.62,-121.63),(-102.92,-117.69),(-104.69,-115.59)]
+        self.lua.execute("""
+        function recoveryTail(points, nextCorner)
+            local source=Course({},points,false)
+            if nextCorner>0 then source.waypoints[nextCorner+1].attributes:setHeadlandTurn(true) end
+            local node={x=points[1].x,z=points[1].z,t=math.atan2(points[2].x-points[1].x,points[2].z-points[1].z)}
+            local ax,_,az=localToWorld(node,0,0,-12)
+            local bx,_,bz=localToWorld(node,0,0,-11)
+            local course=Course({},{{x=ax,z=az},{x=bx,z=bz}},true)
+            local context=setmetatable({fieldWorkCourse=source,turnEndWpIx=1,
+                frontMarkerDistance=-4,backMarkerDistance=-17.7,workWidth=5.6,
+                turnEndWpNode={node=node},isHeadlandCorner=function() return true end,
+                debug=function() end},TurnContext)
+            local length=context:appendPathfinderEndingTurnCourse(course,0)
+            return course,source,length
+        end
+        """)
+        for side in [-1, 1]:
+            for degrees in [0, 37, 90, 192, 270]:
+                a=math.radians(degrees)
+                coords=[(side*x*math.cos(a)+z*math.sin(a),-side*x*math.sin(a)+z*math.cos(a)) for x,z in original]
+                pts=self.lua.table_from([self.lua.table_from(dict(x=x,z=z)) for x,z in coords])
+                course,source,length=self.lua.globals().recoveryTail(pts,0)
+                self.assertGreater(length,13.7)
+                end=course.waypoints[len(course.waypoints)]
+                self.assertAlmostEqual(end.x,coords[4][0])
+                self.assertAlmostEqual(end.z,coords[4][1])
+                # Real handover must accept the new tail along the curved pass.
+                heading=math.atan2(coords[5][0]-coords[4][0],coords[5][1]-coords[4][1])
+                result=self.lua.globals().handoverFixture(pts,0,end.x,end.z,heading)
+                self.assertTrue(result.startswith('lookahead,wait,lower,work:'),result)
+                # The former tangent extension misses this same saved pass.
+                tangent=math.atan2(coords[1][0]-coords[0][0],coords[1][1]-coords[0][1])
+                oldx=coords[0][0]+math.sin(tangent)*13.7
+                oldz=coords[0][1]+math.cos(tangent)*13.7
+                self.assertEqual(self.lua.globals().handoverFixture(pts,0,oldx,oldz,tangent),'raise,stop:noPath')
+                for i,(x,z) in enumerate(coords,1):
+                    self.assertAlmostEqual(source.waypoints[i].x,x)
+                    self.assertAlmostEqual(source.waypoints[i].z,z)
+
+                # A second pending corner truncates the tail and is not skipped.
+                course,_,_=self.lua.globals().recoveryTail(pts,3)
+                end=course.waypoints[len(course.waypoints)]
+                self.assertAlmostEqual(end.x,coords[2][0])
+                self.assertAlmostEqual(end.z,coords[2][1])
+
     def course(self, **overrides):
         p = dict(side=1, pike=.8, length=12.5, duration=1000,
                  speed=20, room=24, enabled=True)

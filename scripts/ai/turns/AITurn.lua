@@ -234,13 +234,15 @@ function AITurn:getDriveData(dt)
     local maxSpeed = self:getForwardSpeed()
     local gx, gz, moveForwards
     if self.state == self.states.INITIALIZING then
+        self.headlandFinishLimit = self.turnContext:getHeadlandFinishLimit(self.vehicle,
+                self:getRaiseImplementNode(), self.driveStrategy:getImplementRaiseLate())
         local rowFinishingCourse = self.turnContext:createFinishingRowCourse(self.vehicle, self:getRaiseImplementNode())
         self.ppc:setCourse(rowFinishingCourse)
         self.ppc:initialize(1)
         self.state = self.states.FINISHING_ROW
         -- Finishing the current row
     elseif self.state == self.states.FINISHING_ROW then
-        self:finishRow(dt)
+        if self:finishRow(dt) == false then maxSpeed = 0 end
     elseif self.state == self.states.ENDING_TURN then
         -- Ending the turn (starting next row)
         local allowedToDrive = self:endTurn(dt)
@@ -301,6 +303,19 @@ function AITurn:setRaiseLowerNodes()
 end
 
 function AITurn:finishRow(dt)
+    if self.headlandFinishLimit then
+        local _, _, distance = localToLocal(self.vehicle:getAIDirectionNode(), self:getRaiseImplementNode(), 0, 0, 0)
+        -- Leave room to stop/replan at the user's actual speed, rather than
+        -- committing the full implement length beyond the field edge.
+        local reserve = math.max(self.workWidth / 2, 2 * self.vehicle:getLastSpeed() / 3.6)
+        if distance + reserve >= self.headlandFinishLimit then
+            self:debug('Headland finishing approach reaches field corridor; raise and start checked turn')
+            self.driveStrategy:raiseImplements()
+            self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onFinishRowEvent, true)
+            self:startTurn()
+            return false
+        end
+    end
     -- keep driving straight until we need to raise our implements
     self.workEndHandler:raiseImplementsAsNeeded(self:getRaiseImplementNode())
     if self.workEndHandler:allRaised() then
@@ -814,7 +829,7 @@ function CourseTurn:onPathfindingDone(path)
         self.turnCourse = Course(self.vehicle, CpMathUtil.pointsToGameInPlace(path), true)
         -- make sure we use tight turn offset towards the end of the course so a towed implement is aligned with the new row
         self.turnCourse:setUseTightTurnOffsetForLastWaypoints(15)
-        local endingTurnLength = self.turnContext:appendEndingTurnCourse(self.turnCourse, nil)
+        local endingTurnLength = self.turnContext:appendPathfinderEndingTurnCourse(self.turnCourse, nil)
         self.turnCourse:setUseTightTurnOffsetForLastWaypoints(endingTurnLength)
         local x = AIUtil.getDirectionNodeToReverserNodeOffset(self.vehicle)
         self:debug('Extending course at direction switch for reversing to %.1f m (or at least 1m)', -x)
