@@ -3,6 +3,11 @@
 ---@class PlowController : ImplementController
 PlowController = CpObject(ImplementController)
 
+-- Keep rotation clearance separate from pivot detection. Small joint freedoms
+-- do not make a steering pivot; genuine yaw pivots must settle before turnover.
+local ROTATION_ALIGNMENT_DEGREES = 10
+local MINIMUM_YAW_PIVOT_RADIANS = math.rad(5)
+
 function PlowController:init(vehicle, implement)
     ImplementController.init(self, vehicle, implement)
     self.plowSpec = self.implement.spec_plow
@@ -118,13 +123,17 @@ end
 
 --- Wait for lifting permission and the actual centre animation, not a timer.
 function PlowController:getRecoveryPreparationState()
+    -- Recovery may interrupt the row before lifting completes. Do not centre
+    -- until the tool is raised and the implement permits its rotation.
     if not self:isRotatablePlow() then return true end
     if self.implement.getIsLowered and self.implement:getIsLowered() then return false end
     local centre = self.plowSpec.ai and self.plowSpec.ai.centerPosition or 0.5
     local position = self.implement:getAnimationTime(self.plowSpec.rotationPart.turnAnimation)
+    -- An animation stopping short of its configured centre is not readiness.
     if not self:isRotationActive() and math.abs(position - centre) < 0.001 then return true end
     if not self:getIsPlowRotationAllowed() then return false end
     if not self.recoveryCenterRequested then
+        -- Send the synchronised event once per recovery, not on every update.
         self:debug('Recovery: centring raised plough before manoeuvring')
         PlowCenterTurnEvent.sendEvent(self.implement)
         self.recoveryCenterRequested = true
@@ -145,41 +154,60 @@ function PlowController:onLowering()
     end
 end
 
+--- Compare horizontal headings in a common frame so both plough sides and all
+--- world headings use the same tolerance. Sparse logging explains delayed turnover.
+local function areRotationFramesAligned(controller, a, b)
+    local x, _, z = localDirectionToLocal(a, b, 0, 0, 1)
+    local angle = math.abs(math.atan2(x, z))
+    if angle >= math.rad(ROTATION_ALIGNMENT_DEGREES) then
+        controller:debugSparse('Waiting for drawbar alignment before turnover: %.1f degrees (limit %d)',
+                math.deg(angle), ROTATION_ALIGNMENT_DEGREES)
+        return false
+    end
+    return true
+end
+
+--- Resolve the two components of a discovered pivot. A missing component blocks
+--- rotation; nil means no matching joint was found and lets the caller use its fallback.
+---@return boolean|nil
+function PlowController:getDrawbarJointAlignment(node)
+    local tool = self.implement
+    local aligned
+    for _, joint in ipairs(tool.componentJoints) do
+        if joint.jointNode == node then
+            local a, b = tool.components[joint.componentIndices[1]], tool.components[joint.componentIndices[2]]
+            if not a or not b or not areRotationFramesAligned(self, a.node, b.node) then return false end
+            aligned = true
+        end
+    end
+    return aligned
+end
+
 --- Check the steering pivot, not the working frame: multi-component ploughs
 --- can have a permanent frame angle on either working side.
 function PlowController:isDrawbarAlignedForRotation()
     local tool = self.implement
-    local function aligned(a, b)
-        local x, _, z = localDirectionToLocal(a, b, 0, 0, 1)
-        local angle = math.abs(math.atan2(x, z))
-        if angle >= math.rad(10) then
-            self:debugSparse('Waiting for drawbar alignment before turnover: %.1f degrees (limit 10)', math.deg(angle))
-            return false
-        end
-        return true
-    end
     local input = tool.getActiveInputAttacherJoint and tool:getActiveInputAttacherJoint()
     if input and input.rootNode and tool.components and tool.componentJoints then
+        -- Restrict checks to the input-to-root chain. Other component joints
+        -- may belong to folding sections and do not describe drawbar articulation.
         local _, nodes, limits = ImplementUtil.findJointNodeConnectingToNode(tool, input.rootNode, tool.rootNode)
         local checked = false
         for i, node in ipairs(nodes or {}) do
-            if limits and limits[i] and math.abs(limits[i][2] or 0) > math.rad(5) then
-                for _, joint in ipairs(tool.componentJoints) do
-                    if joint.jointNode == node then
-                        local a, b = tool.components[joint.componentIndices[1]], tool.components[joint.componentIndices[2]]
-                        if not a or not b or not aligned(a.node, b.node) then
-                            return false
-                        end
-                        checked = true
-                    end
-                end
+            if limits and limits[i] and math.abs(limits[i][2] or 0) > MINIMUM_YAW_PIVOT_RADIANS then
+                local aligned = self:getDrawbarJointAlignment(node)
+                if aligned == false then return false end
+                checked = checked or aligned == true
             end
         end
-        if checked then return aligned(input.rootNode, self.vehicle:getAIDirectionNode()) end
+        -- Straight internal joints alone are insufficient if the whole tool is
+        -- still angled at the tractor coupling.
+        if checked then return areRotationFramesAligned(self, input.rootNode, self.vehicle:getAIDirectionNode()) end
     end
-    -- Single-component trailers have their yaw pivot at the tractor coupling.
+    -- Single-component trailers, or chains with no identified yaw pivot, retain
+    -- the axle-to-tractor check. Use the root only when no steering axle exists.
     local node = tool.steeringAxleNode or tool.rootNode
-    return aligned(node, self.vehicle:getAIDirectionNode())
+    return areRotationFramesAligned(self, node, self.vehicle:getAIDirectionNode())
 end
 
 --- This is called in every loop when we approach the start of the row, the location where

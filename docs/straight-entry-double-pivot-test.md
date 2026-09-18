@@ -1,8 +1,8 @@
-# Straight Entry + Loop Test v0.20
+# Straight Entry + Loop Test v0.21
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry + Loop Test v0.20`.
-Manifest version: `8.1.0.308`.
+In-game title: `CoursePlay - Straight Entry + Loop Test v0.21`.
+Manifest version: `8.1.0.309`.
 
 This local test merges straight-entry v0.13 at `7aad509b` with the main-based
 double-pivot headland-loop work. It lives on
@@ -30,6 +30,17 @@ packaging tests, runtime Lua compilation, deterministic source packaging and
 both suites again against the extracted ZIP. The numbered archive and stable
 copy are written only under `dist/straight-entry-double-pivot`; existing test
 build folders and the live `FS25_Courseplay.zip` are untouched.
+
+## Drawbar alignment refactor (v0.21)
+
+Behaviour-preserving cleanup of the in-game-tested v0.20 controller. The 10-degree
+alignment tolerance and 5-degree pivot-detection threshold now have descriptive
+names. The frame-angle helper is defined once, and component resolution is
+separate from chain traversal to reduce nesting. CP-style comments explain the
+recovery preparation, frame checks, pivot selection, coupling check and fallback.
+No node lookup is cached, so attachment changes still use current geometry.
+Speeds, thresholds, rotation timing and fallback decisions are unchanged.
+The v0.20 archive and tag remain the proven candidate for rollback.
 
 ## Plough drawbar alignment before turnover (v0.20)
 
