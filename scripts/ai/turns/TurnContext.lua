@@ -451,7 +451,7 @@ end
 --- Assuming a vehicle just finished a row, provide parameters for calculating a path to the start
 --- of the next row, making sure that the vehicle and the implement arrives there aligned with the row direction
 ---@return number, number the node where the turn ends, z offset to use with the end node
-function TurnContext:getTurnEndNodeAndOffsets(steeringLength)
+function TurnContext:getTurnEndNodeAndOffsets(steeringLength, useStraightEntry)
     local turnEndNode, goalOffset
     if self.frontMarkerDistance > 0 then
         -- implement in front of vehicle. Turn should end with the implement at the work start position, this is where
@@ -476,7 +476,54 @@ function TurnContext:getTurnEndNodeAndOffsets(steeringLength)
             goalOffset = self.frontMarkerDistance + self.turnEndForwardOffset
         end
     end
+    if useStraightEntry ~= false and self.straightEntryDistance then
+        -- The target is the start of the straight, not the position where work begins.
+        -- Keep the stock marker/offset target if it already provides more room.
+        local vehicleAtWorkStart = turnEndNode == self.vehicleAtTurnEndNode and 0 or self.turnEndForwardOffset
+        goalOffset = math.min(goalOffset, vehicleAtWorkStart - self.straightEntryDistance)
+    end
+    if self.straightEntryDistance then
+        local boundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
+        if boundary then
+            local x, _, z = getWorldTranslation(turnEndNode)
+            goalOffset = FieldworkBoundary.fitOffset(boundary, x, z, CpMathUtil.getNodeDirection(turnEndNode), goalOffset)
+        end
+    end
     return turnEndNode, goalOffset
+end
+
+--- Reserve room for a trailed implement to settle before the normal lowering point.
+--- This is an approach allowance, not a prediction or a live alignment gate. Retain
+--- stock field fitting, reverse controls and lowering; do not apply it to startup
+--- waypoint selection or headland corners, which have their own coverage rules.
+function TurnContext:setStraightEntryDistance(steeringLength, loweringDurationMs, turnSpeed)
+    self.straightEntryDistance = nil
+    self.mountedStraightEntry = nil
+    self.entryLoweringDistance = nil
+    if self:isHeadlandCorner() then
+        return
+    end
+    local settlingDistance, loweringDistance = TurnContext.getStraightEntryAllowance(steeringLength, loweringDurationMs,
+            turnSpeed, steeringLength <= 0 and AIUtil.getTurningRadius(self.vehicle) or nil)
+    self.straightEntryDistance = settlingDistance + loweringDistance
+    self.entryLoweringDistance = loweringDistance
+    if steeringLength <= 0 then
+        self.mountedStraightEntry = true
+    end
+    self:debug('Straight entry: steering length %.1f, settling allowance %.1f, lowering allowance %.1f',
+            steeringLength, settlingDistance, loweringDistance)
+end
+
+--- Shared by row turns and initial approaches; does not select a course waypoint.
+function TurnContext.getStraightEntryAllowance(steeringLength, loweringDurationMs, turnSpeed, turningRadius)
+    -- A passive trailer pulled straight from 90 degrees to stock CP's 5-degree
+    -- alignment tolerance needs L * log(tan(45) / tan(2.5)). Use this as a
+    -- conservative allowance with CP's measured steering length, not a new
+    -- vehicle dynamics model. Actual field space is still handled by stock CP.
+    local settlingDistance = steeringLength > 0 and steeringLength * math.log(1 / math.tan(math.rad(2.5)))
+            or (turningRadius or 0) / 2
+    local loweringDistance = math.max(0, turnSpeed) / 3600 * math.max(0, loweringDurationMs) + 0.5
+    return settlingDistance, loweringDistance
 end
 
 ---@return string|nil id of the boundary for this turn

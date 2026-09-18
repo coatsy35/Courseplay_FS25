@@ -140,8 +140,15 @@ function PlowController:onTurnEndProgress(workStartNode, reversing, shouldLower,
         if CpMathUtil.isSameDirection(self.implement.rootNode, workStartNode, 30) or shouldLower then
             if self.towed then
                 -- let towed plows remain in the center position while reversing to the start of the row
-                if not reversing then
-                    self:debug('Rotating towed plow to working position.')
+                -- Finish steering onto the row before the animation pause.
+                -- The plough root can remain angled relative to the tractor
+                -- (especially on multi-component ploughs); requiring those two
+                -- frames to match consumes the straight approach on one side.
+                -- Retain CP's implement-to-row check above, and use the tractor
+                -- heading only to delay turnover until it leaves the bulb.
+                if not reversing and CpMathUtil.isSameDirection(self.vehicle:getAIDirectionNode(),
+                        workStartNode, 5) then
+                    self:debug('Rotating towed plow to working position on straight entry (left %s).', tostring(shouldBeOnTheLeft))
                     self.implement:setRotationMax(shouldBeOnTheLeft)
                 end
             else
@@ -158,4 +165,16 @@ function PlowController:canContinueWork()
     else
         return true
     end
+end
+
+--- Keep deployment separate from working readiness: other controllers may need
+--- their implements lowered before canContinueWork() can ever become true.
+---@return boolean readyToLower
+---@return boolean waitForAnimation pause the straight approach while turnover runs
+function PlowController:getTurnEntryPreparationState()
+    if not self:isRotatablePlow() then
+        return true, false
+    end
+    local rotating = self:isRotationActive()
+    return self:isFullyRotated() and not rotating, rotating
 end

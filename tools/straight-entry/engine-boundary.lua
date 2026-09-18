@@ -58,7 +58,6 @@ end
 function setRotation(n,x,t,z) n.t=t+(n.parent and n.parent.t or 0) end
 require('CpMathUtil')
 require('FieldworkBoundary')
-require('HeadlandLoopGeometry')
 require('Logger')
 Logger.debug = function() end
 Logger.debugSparse = function() end
@@ -75,55 +74,43 @@ require('AIUtil')
 require('PathfinderUtil')
 require('Corner')
 require('TurnContext')
-
+require('BulbTurnExtension')
+require('HeadlandLoopGeometry')
+Logging = {info = function() end}
+ImplementUtil = {isWheeledImplement = function() return false end}
+WorkWidthUtil = {getAutomaticWorkWidthAndOffset = function(_, _, _) return 0, 0 end}
 require('TurnManeuver')
 require('AITurn')
 require('AIReverseDriver')
 require('WorkStartHandler')
 require('WorkEndHandler')
 
-g_vehicleConfigurations = {getRecursively = function() end}
-Logging = {info = function() end}
-ImplementUtil = {isWheeledImplement = function(o) return o.wheeled end}
-WorkWidthUtil = {getAutomaticWorkWidthAndOffset = function(v) return v.detectedWidth or 0 end}
-AIUtil.hasArticulatedAxis = function() return false end
-
-function fixture(p)
-    p = p or {}
-    local function body(z, width, length)
-        local node = {x=0,z=z,t=0}
-        local o = {rootNode=node,steeringAxleNode=node,wheeled=true,
-            size={width=width,length=length},children={},componentJoints={},
-            spec_wheels={wheels={{steering={steeringAxleScale=0}}}}}
-        o.getAttachedImplements=function(self) return self.children end
-        return o
+-- Only the GIANTS boundary is mocked. Courses, Dubins, offsets and field fitting
+-- execute the runtime Lua files in the source tree or extracted test ZIP.
+g_vehicleConfigurations = { getRecursively = function() end }
+AIUtil.canReverse = function(v) return v.allowReverse end
+AIUtil.getTurningRadius = function() return 9 end
+AIUtil.getReverserNode = function(v) return v.reverser, 'fixture axle' end
+function entryCourse(p)
+    local node={x=0,z=p.startZ or 17.8,t=0}
+    local width,radius=p.width or 5.6,p.radius or 9
+    local goal={x=p.side*width,z=p.pike,t=math.pi}
+    local gx,_,gz=localToWorld(goal,0,0,p.workOffset or 4)
+    local c=setmetatable({frontMarkerDistance=p.front or -4,backMarkerDistance=p.back or -17.7,
+        turnEndForwardOffset=p.workOffset or 4,workStartNode=goal,
+        vehicleAtTurnEndNode={x=gx,z=gz,t=math.pi}},TurnContext)
+    c.isHeadlandCorner=function() return false end
+    c.isLeftTurn=function() return p.side<0 end
+    c.getHeadlandAngle=function() return p.headlandAngle or math.pi/2 end
+    c.getTurnEndForwardOffset=function() return p.pike end
+    local v={allowReverse=p.allowReverse~=false,getAIDirectionNode=function() return node end,
+        reverser={x=0,z=node.z-p.length,t=0}}
+    c.vehicle=v; c.workWidth=width; c.turnStartWpIx=1; c.turnEndWpIx=2
+    if p.enabled then c:setStraightEntryDistance(p.length,p.duration,p.speed) end
+    local m=DubinsTurnManeuver(v,c,node,radius,width,p.length,p.room)
+    local points={}
+    for i,w in ipairs(m.course.waypoints) do
+        points[i]={x=w.x,z=w.z,heading=w.yRot,reverse=w.rev}
     end
-    local vehicle = body(0,3.5,8)
-    vehicle.getAIDirectionNode=function(self) return self.rootNode end
-    vehicle.detectedWidth=p.width or 25.6
-    local drill = body(-9.8,9,11.15)
-    drill.joint={node={x=0,z=-3.3,t=0}}
-    drill.getActiveInputAttacherJoint=function(self) return self.joint end
-    drill.getAIMarkers=function(self)
-        return {x=vehicle.detectedWidth/2,z=-8.3,t=0}, {x=-vehicle.detectedWidth/2,z=-8.3,t=0}, {x=0,z=-11.2,t=0}
-    end
-    local cart = body(-9.8-4.47-(p.cartLength or 8.08),5.5,17)
-    cart.joint={node={x=0,z=-14.27,t=0}}
-    cart.getActiveInputAttacherJoint=function(self) return self.joint end
-    vehicle.children={{object=drill}}; drill.children={{object=cart}}
-    if p.single then drill.children={} end
-    if p.internal then cart.componentJoints={{rotLimit={0,math.pi/3,0}}} end
-    if p.field then
-        vehicle.cpGetFieldPolygon=function() return p.field end
-        vehicle.cpGetIslandPolygons=function() return p.islands or {} end
-    end
-    local side=p.side or 1
-    local goal={x=side*20,z=-10,t=side*math.pi/2}
-    local x,_,z=localToWorld(goal,0,0,8.3)
-    local context=setmetatable({frontMarkerDistance=-8.3,backMarkerDistance=-11.2,
-        workStartNode=goal,vehicleAtTurnEndNode={x=x,z=z,t=goal.t},
-        turnEndForwardOffset=8.3,vehicle=vehicle,workWidth=vehicle.detectedWidth},TurnContext)
-    context.isLeftTurn=function() return side<0 end
-    context.debug=function() end
-    return vehicle,context,drill,cart
+    return points,c,m.course
 end

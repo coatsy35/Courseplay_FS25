@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="105">
-    <version>8.1.0.301</version>
+    <version>8.1.0.302</version>
 	<author><![CDATA[Courseplay.devTeam]]></author>
 	<title>
-		<en>CoursePlay</en>
-		<cs>自动作业</cs>
-		<ct>自動作業</ct>
-		<hu>CoursePlay - A Vezetősegéd</hu>
-		<jp>コースプレイ</jp>
-		<kr>코스 플레이</kr>
+		<en>CoursePlay - Straight Entry + Loop Test v0.14</en>
+		<cs>CoursePlay - Straight Entry + Loop Test v0.14</cs>
+		<ct>CoursePlay - Straight Entry + Loop Test v0.14</ct>
+		<hu>CoursePlay - Straight Entry + Loop Test v0.14</hu>
+		<jp>CoursePlay - Straight Entry + Loop Test v0.14</jp>
+		<kr>CoursePlay - Straight Entry + Loop Test v0.14</kr>
 	</title>
 
     <description>
@@ -216,10 +216,11 @@ Changelog 8.1.0.3
 
 		<sourceFile filename="scripts/ai/turns/AITurn.lua"/>
 		<sourceFile filename="scripts/ai/turns/Corner.lua"/>
+		<sourceFile filename="scripts/ai/util/FieldworkBoundary.lua"/>
 		<sourceFile filename="scripts/ai/turns/TurnContext.lua"/>
 		<sourceFile filename="scripts/ai/turns/HeadlandLoopGeometry.lua"/>
+		<sourceFile filename="scripts/ai/turns/BulbTurnExtension.lua"/>
 		<sourceFile filename="scripts/ai/turns/TurnManeuver.lua"/>
-		<sourceFile filename="scripts/ai/turns/TurnContext.lua"/>
 		<sourceFile filename="scripts/ai/turns/WorkStartHandler.lua"/>
 		<sourceFile filename="scripts/ai/turns/WorkEndHandler.lua"/>
 

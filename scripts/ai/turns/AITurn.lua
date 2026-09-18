@@ -450,6 +450,9 @@ function CourseTurn:init(vehicle, driveStrategy, ppc, proximityController, turnC
     self.forceTightTurnOffset = false
     self.enableTightTurnOffset = false
     self.fieldWorkCourse = fieldWorkCourse
+    -- Reserve the run-in before generating the turn, not by extending it into unworked ground.
+    self.turnContext:setStraightEntryDistance(self.steeringLength,
+            self.driveStrategy:getLoweringDurationMs(), self.settings.turnSpeed:getValue())
 end
 
 function CourseTurn:getForwardSpeed()
@@ -536,9 +539,18 @@ function CourseTurn:startTurn()
         end
     end
     if self.state == self.states.TURNING then
-        if not self.turnCourse then
+        if self.headlandLoopGeometryChecked and not self.turnCourse then
             self:debug('No headland loop passed the detected chain geometry checks')
             self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+            return
+        elseif not self.headlandLoopGeometryChecked and not self:fitCalculatedTurnToBoundary() then
+            if self.headlandLoopWidthChecked then
+                self:debug('No width-checked headland loop fits the field corridor')
+                self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+            else
+                self:debug('Calculated turn leaves the field corridor; using constrained pathfinding')
+                self:generatePathfinderTurn(false)
+            end
             return
         end
         self.ppc:setCourse(self.turnCourse)
@@ -572,7 +584,12 @@ end
 ---@return boolean true if it is ok the continue driving, false when the vehicle should stop
 function CourseTurn:endTurn(dt)
     -- keep driving on the turn course until we need to lower our implements
-    local dz = self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(), self.ppc:isReversing())
+    local dz, waitForPreparation = self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(), self.ppc:isReversing())
+    if waitForPreparation then
+        -- Retain the straightening distance for the implement's working position.
+        -- A stationary wait here is for deployment, never for articulation to settle.
+        return false
+    end
 
     if self.workStartHandler:allLowered() then
         if self.ppc:isReversing() then
@@ -661,16 +678,84 @@ function CourseTurn:changeToFwdWhenWaypointReached()
     end
 end
 
+--- Entry extensions are optional. Try less extension before sending a towed
+--- combination to CP's forward-only pathfinder. Every candidate must fit the
+--- same field corridor, including reverse and appended approach sections.
+function CourseTurn:fitCalculatedTurnToBoundary()
+    local boundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
+    if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then return true end
+    local context = self.turnContext
+    local requested = context.straightEntryDistance
+    if context:isHeadlandCorner() then
+        return self:fitForwardHeadlandLoop(boundary)
+    end
+    if not requested or requested <= 0 then return false end
+    local previousBulb = context.disableBulbExtension
+    local originalCourse = self.turnCourse
+    context.disableBulbExtension = true
+    -- Keep the full straight without extra crossing first, then reduce the
+    -- optional allowance down to CP's original marker-based approach.
+    for _, fraction in ipairs({1, 0.75, 0.5, 0.25, 0}) do
+        context.straightEntryDistance = requested * fraction
+        self:generateCalculatedTurn()
+        if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then
+            self:debug('Straight entry: fitted turn with allowance %.1f of %.1f m, no bulb extension',
+                    context.straightEntryDistance, requested)
+            return true
+        end
+    end
+    context.straightEntryDistance = requested
+    context.disableBulbExtension = previousBulb
+    self.turnCourse = originalCourse
+    return false
+end
+
+--- Keep the user's forward-loop choice, but try alternative placements before
+--- giving up. Radius, corner coverage and boundary clearance stay unchanged.
+function CourseTurn:fitForwardHeadlandLoop(boundary)
+    if not self.settings.loopTurnsOnHeadland:getValue() then return false end
+    local context = self.turnContext
+    local originalCourse = self.turnCourse
+    local oldPull, oldEntry = context.loopTurnPullForward, context.loopTurnEntryDistance
+    local entry = math.max(self.steeringLength, self.turningRadius)
+    for _, distance in ipairs({self.steeringLength, entry * 2, entry * 3}) do
+        for _, pull in ipairs({0, self.workWidth / 4, self.workWidth / 2, self.workWidth}) do
+            context.loopTurnPullForward = pull
+            context.loopTurnEntryDistance = distance
+            self:generateCalculatedTurn()
+            if self.turnCourse and self.turnCourse:isForwardOnly() and
+                    FieldworkBoundary.containsCourse(boundary, self.turnCourse) then
+                self:debug('Fitted forward headland loop: pull ahead %.1f m, entry %.1f m', pull, distance)
+                return true
+            end
+        end
+    end
+    context.loopTurnPullForward, context.loopTurnEntryDistance = oldPull, oldEntry
+    self.turnCourse = originalCourse
+    return false
+end
+
 function CourseTurn:generateCalculatedTurn()
     local turnManeuver
+    self.headlandLoopGeometryChecked = false
+    self.headlandLoopWidthChecked = false
     if self.turnContext:isHeadlandCorner() then
         self:debug('This is a headland turn')
         if self.settings.loopTurnsOnHeadland:getValue() then
             -- do a 270° turn forward only
+            local loweringDistance = 0.5
+            if self.driveStrategy and self.driveStrategy.getLoweringDurationMs then
+                loweringDistance = self.driveStrategy:getLoweringDurationMs() *
+                    self.settings.turnSpeed:getValue() / 3600 + 0.5
+            end
             turnManeuver = LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
-                    self.turningRadius, self.workWidth, self.steeringLength,
-                    self.driveStrategy:getLoweringDurationMs() * self.settings.turnSpeed:getValue() / 3600 + 0.5)
+                    self.turningRadius, self.workWidth, self.steeringLength, loweringDistance)
             self.enableTightTurnOffset = not turnManeuver.chainPlanned
+            -- Fully modelled chain routes have already passed body, pivot and
+            -- boundary checks. Width-only layouts retain the existing search
+            -- through alternative loop placements.
+            self.headlandLoopGeometryChecked = turnManeuver.chainPlanned == true
+            self.headlandLoopWidthChecked = not turnManeuver.chainPlanned
         else
             turnManeuver = HeadlandCornerTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
                     self.turningRadius, self.workWidth, self.reversingImplement, self.steeringLength)
@@ -713,7 +798,8 @@ function CourseTurn:generatePathfinderTurn(useHeadland)
             self.turningRadius, self.driveStrategy:getAllowReversePathfinding(),
             useHeadland and self.fieldWorkCourse or nil,
             self.driveStrategy:getWorkWidth(), backMarkerDistance,
-            self.driveStrategy:isTurnOnFieldActive(), self.turnContext:getBoundaryId())
+            self.driveStrategy:isTurnOnFieldActive(), self.turnContext:getBoundaryId(),
+            FieldworkBoundary.forVehicle(self.vehicle, self.workWidth))
     if result.done then
         return self:onPathfindingDone(result.path)
     else
@@ -738,7 +824,12 @@ function CourseTurn:onPathfindingDone(path)
         self:debug('No path found in %d ms, falling back to normal turn course generator', g_currentMission.time - (self.pathfindingStartedAt or 0))
         self:generateCalculatedTurn()
     end
-    if not self.turnCourse then
+    if self.headlandLoopGeometryChecked and not self.turnCourse then
+        self:debug('No headland loop passed the detected chain geometry checks')
+        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        return
+    elseif not self.headlandLoopGeometryChecked and not self:fitCalculatedTurnToBoundary() then
+        self:debug('No turn route fits the field corridor; stopping instead of using an unchecked fallback')
         self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
         return
     end
@@ -988,6 +1079,8 @@ function StartRowOnly:init(vehicle, driveStrategy, ppc, turnContext, startRowCou
 
     self.forceTightTurnOffset = false
     local _, steeringLength = AIUtil.getSteeringParameters(self.vehicle)
+    self.turnContext:setStraightEntryDistance(steeringLength,
+            self.driveStrategy:getLoweringDurationMs(), self.settings.turnSpeed:getValue())
     self.enableTightTurnOffset = steeringLength > 0
     -- TODO: do we need tight turn offset here?
     self.turnCourse:setUseTightTurnOffsetForLastWaypoints(15)
@@ -996,6 +1089,8 @@ function StartRowOnly:init(vehicle, driveStrategy, ppc, turnContext, startRowCou
     self.turnCourse:setUseTightTurnOffsetForLastWaypoints(endingTurnLength)
     TurnManeuver.setLowerImplements(self.turnCourse, endingTurnLength, true)
     self.turnCourse:adjustForReversing(2)
+    self.entryOutsideBoundary = not FieldworkBoundary.containsCourse(
+            FieldworkBoundary.forVehicle(vehicle, turnContext.workWidth), self.turnCourse)
     self.state = self.states.DRIVING_TO_ROW
 end
 
@@ -1005,6 +1100,10 @@ end
 
 --- Implements the usual getDriveData() interface, only ever sets the maximum speed though
 function StartRowOnly:getDriveData()
+    if self.entryOutsideBoundary then
+        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        return nil, nil, nil, 0
+    end
     if self.state == self.states.DRIVING_TO_ROW then
         if TurnManeuver.hasTurnControl(self.turnCourse, self.turnCourse:getCurrentWaypointIx(),
                 TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then
@@ -1012,7 +1111,10 @@ function StartRowOnly:getDriveData()
             self:debug('Approaching row')
         end
     elseif self.state == self.states.APPROACHING_ROW then
-        self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(), self.ppc:isReversing())
+        local _, waitForPreparation = self.workStartHandler:lowerImplementsAsNeeded(self:getLowerImplementNode(), self.ppc:isReversing())
+        if waitForPreparation then
+            return nil, nil, nil, 0
+        end
         if self.workStartHandler:allLowered() then
             -- have not started lowering implements yet
             self:debug('All implements lowering')

@@ -411,15 +411,38 @@ end
 -- switch back to fieldwork after the turn ended.
 ---@param ix number waypoint to resume fieldwork after
 function AIDriveStrategyFieldWorkCourse:resumeFieldworkAfterTurn(ix)
+    -- Do not resume past a corner that the straight work-start approach has
+    -- already carried the tractor across. Its implement can still be on the
+    -- short incoming section, so let the normal turn finish that section.
+    local course = self.fieldWorkCourse
+    local cornerIx
+    for i = ix, math.min(ix + 10, course:getNumberOfWaypoints()) do
+        if course:isTurnStartAtIx(i) then
+            cornerIx = i
+            break
+        end
+    end
+    local startIx, found = course:getNextFwdWaypointIxFromVehiclePosition(ix,
+            self.vehicle:getAIDirectionNode(), self.workWidth / 2, cornerIx and cornerIx - ix or 10)
+    if cornerIx and (not found or startIx >= cornerIx) then
+        self:debug('Work-start handover reaches corner %d; start its turn instead of skipping it', cornerIx)
+        -- startTurn uses self.course; this must be the fieldwork course, not
+        -- the temporary joining course. Do not initialise PPC here: that can
+        -- dispatch another waypoint callback before the turn owns it.
+        self.course = course
+        self:startTurn(cornerIx)
+        return
+    end
+    if not found then
+        self:debug('No forward continuation after waypoint %d; refusing an unaligned fieldwork handover', ix)
+        self:raiseImplements()
+        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        return
+    end
     self.ppc:setNormalLookaheadDistance()
     self:startWaitingForLower()
     self:lowerImplements()
-    local startIx, found = self.fieldWorkCourse:getNextFwdWaypointIxFromVehiclePosition(ix,
-            self.vehicle:getAIDirectionNode(), self.workWidth / 2)
-    -- if we can't found a waypoint in front of us, just use the next (ix would be the turn end, this is after that)
-    -- ix may be problematic, especially if the next waypoint is a headland corner with > 90 degrees angle, PPC
-    -- may never advance to the next waypoint
-    self:startCourse(self.fieldWorkCourse, found and startIx or ix + 1)
+    self:startCourse(course, startIx)
 end
 
 --- Attempt to recover from a turn where the vehicle got blocked. This replaces the current turn with a

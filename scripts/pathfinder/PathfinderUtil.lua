@@ -451,7 +451,7 @@ end
 ---@return PathfinderInterface pathfinder
 ---@return PathfinderResult
 function PathfinderUtil.findPathForTurn(vehicle, startOffset, goalReferenceNode, goalOffset, turnRadius, allowReverse,
-                                        courseWithHeadland, workingWidth, backMarkerDistance, turnOnField, boundaryId)
+                                        courseWithHeadland, workingWidth, backMarkerDistance, turnOnField, boundaryId, fieldworkBoundary)
     local x, z, yRot = PathfinderUtil.getNodePositionAndDirection(vehicle:getAIDirectionNode(), 0, startOffset or 0)
     local start = State3D(x, -z, CpMathUtil.angleFromGame(yRot))
     x, z, yRot = PathfinderUtil.getNodePositionAndDirection(goalReferenceNode, 0, goalOffset or 0)
@@ -483,6 +483,7 @@ function PathfinderUtil.findPathForTurn(vehicle, startOffset, goalReferenceNode,
     end
 
     local context = PathfinderContext(vehicle):useFieldNum(CpFieldUtil.getFieldNumUnderVehicle(vehicle))
+    context._fieldworkBoundary = fieldworkBoundary
     context:offFieldPenalty(turnOnField and 10 or context._offFieldPenalty)
     local constraints = PathfinderConstraints(context)
     return pathfinder, pathfinder:start(start, goal, turnRadius, allowReverse, constraints, constraints.trailerHitchLength)
@@ -525,7 +526,7 @@ function PathfinderUtil.findAnalyticPathFromStartToGoal(solver, start, goal, tur
     if length < 100000 then
         path = solution:getWaypoints(start, turnRadius)
     end
-    return path, length
+    return path, length, solution
 end
 
 function PathfinderUtil.getNodePositionAndDirection(node, xOffset, zOffset)
