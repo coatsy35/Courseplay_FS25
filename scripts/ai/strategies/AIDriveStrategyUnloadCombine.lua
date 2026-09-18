@@ -800,9 +800,7 @@ function AIDriveStrategyUnloadCombine:handleChopper180Turn()
             local turnCourse = self.combineToUnload:getCpDriveStrategy():getTurnCourse()
             if turnCourse then
                 self:debug('Follow chopper through the turn')
-                local unloaderTurnCourse = turnCourse:copy(self.vehicle)
-                unloaderTurnCourse:setOffset(self.followingCourseOffset, 0)
-                self:startCourse(unloaderTurnCourse, 1)
+                self:startCourse(turnCourse:copy(self.vehicle), 1)
                 self:setNewState(self.states.FOLLOW_CHOPPER_THROUGH_TURN)
                 return
             else
