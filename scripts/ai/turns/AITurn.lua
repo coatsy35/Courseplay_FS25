@@ -134,8 +134,12 @@ end
 function AITurn:onWaypointPassed(ix, course)
     self:debug('onWaypointPassed %d', ix)
     if ix == course:getNumberOfWaypoints() and self.state == self.states.ENDING_TURN then
-        if course.chainReturn and not HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode) then
-            self:debug('Chain did not settle within the checked straight return')
+        local aligned, alignmentDetail = true, nil
+        if course.chainReturn then
+            aligned, alignmentDetail = HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode)
+        end
+        if not aligned then
+            self:debug('Chain did not settle within the checked straight return: %s', alignmentDetail or 'unknown node')
             self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
             return
         end
@@ -587,7 +591,7 @@ function CourseTurn:updateLoopSearch()
     local done = false
     for _ = 1, 64 do
         done = self.loopManeuver:resumeSearch()
-        if done or readIntervalTimerMs(timer) >= 5 then break end
+        if done or readIntervalTimerMs(timer) >= 8 then break end
     end
     closeIntervalTimer(timer)
     if done then self:startTurn() end

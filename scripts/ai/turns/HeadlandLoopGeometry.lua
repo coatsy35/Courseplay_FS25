@@ -5,6 +5,9 @@ HeadlandLoopGeometry = {}
 local G = HeadlandLoopGeometry
 G.maxArticulation = math.rad(45)
 G.alignmentTolerance = math.rad(5)
+-- Leave a margin between the predicted settling point and the live handover.
+-- The passive drawbar approximation settles faster than the captured cart.
+G.plannedAlignmentTolerance = math.rad(2)
 G.step = 0.5
 
 local function finite(n)
@@ -196,26 +199,25 @@ end
 function G.bodiesOverlap(a, pa, b, pb)
     if a.virtual or b.virtual then return false end
     a, b = a.collision or a, b.collision or b
-    local function corners(body, pose)
+    -- Exact rectangle SAT using centres and projected half-extents. Avoid
+    -- allocating eight corners and re-projecting them onto four axes for every
+    -- body pair at every sample of every rejected route.
+    local function extents(body, pose)
         local front, back = body.front - 2, body.back + 2
         if front <= back then front, back = body.front, body.back end
-        local result = {}
-        for _, x in ipairs({body.left, body.right}) do
-            for _, z in ipairs({front, back}) do
-                local wx, wz = position(pose, x, z)
-                result[#result + 1] = {x = wx, z = wz}
-            end
-        end
-        return result
+        local x, z = position(pose, (body.left + body.right) / 2, (front + back) / 2)
+        return x, z, (body.left - body.right) / 2, (front - back) / 2
     end
-    local ac, bc = corners(a, pa), corners(b, pb)
-    for _, angle in ipairs({pa.t, pa.t + math.pi / 2, pb.t, pb.t + math.pi / 2}) do
-        local ux, uz = math.cos(angle), -math.sin(angle)
-        local amin, amax, bmin, bmax = math.huge, -math.huge, math.huge, -math.huge
-        for _, p in ipairs(ac) do local q = p.x * ux + p.z * uz; amin, amax = math.min(amin, q), math.max(amax, q) end
-        for _, p in ipairs(bc) do local q = p.x * ux + p.z * uz; bmin, bmax = math.min(bmin, q), math.max(bmax, q) end
-        if amax <= bmin or bmax <= amin then return false end
-    end
+    local ax, az, aw, al = extents(a, pa)
+    local bx, bz, bw, bl = extents(b, pb)
+    local ca, sa = math.cos(pa.t), math.sin(pa.t)
+    local dx, dz = (bx - ax) * ca - (bz - az) * sa, (bx - ax) * sa + (bz - az) * ca
+    local c, s = math.cos(pb.t - pa.t), math.sin(pb.t - pa.t)
+    local ac, as = math.abs(c), math.abs(s)
+    if math.abs(dx) >= aw + bw * ac + bl * as or
+            math.abs(dz) >= al + bw * as + bl * ac or
+            math.abs(dx * c - dz * s) >= bw + aw * ac + al * as or
+            math.abs(dx * s + dz * c) >= bl + aw * as + al * ac then return false end
     return true
 end
 
@@ -273,13 +275,11 @@ function G.bodyFits(body, pose, boundary)
         return G.bodyFits(body.collision, pose, boundary) and
             (not body.workArea or G.bodyFits(body.workArea, pose, boundary))
     end
-    local minX, minZ, maxX, maxZ = math.huge, math.huge, -math.huge, -math.huge
-    for _, bx in ipairs({body.left, body.right}) do
-        for _, bz in ipairs({body.front, body.back}) do
-            local x, z = position(pose, bx, bz)
-            minX, minZ, maxX, maxZ = math.min(minX, x), math.min(minZ, z), math.max(maxX, x), math.max(maxZ, z)
-        end
-    end
+    local centreX, centreZ = position(pose, (body.left + body.right) / 2, (body.front + body.back) / 2)
+    local halfWidth, halfLength = (body.left - body.right) / 2, (body.front - body.back) / 2
+    local c, s = math.abs(math.cos(pose.t)), math.abs(math.sin(pose.t))
+    local radiusX, radiusZ = c * halfWidth + s * halfLength, s * halfWidth + c * halfLength
+    local minX, maxX, minZ, maxZ = centreX - radiusX, centreX + radiusX, centreZ - radiusZ, centreZ + radiusZ
     local seen = {}
     for gx = math.floor(minX / 32), math.floor(maxX / 32) do
         for gz = math.floor(minZ / 32), math.floor(maxZ / 32) do
@@ -291,7 +291,7 @@ function G.bodyFits(body, pose, boundary)
             end
         end
     end
-    local x, z = position(pose, (body.left + body.right) / 2, (body.front + body.back) / 2)
+    local x, z = centreX, centreZ
     local key = math.floor(x / 32) .. ':' .. math.floor(z / 32)
     if boundary.cells[key] ~= nil then return boundary.cells[key] end
     local inside = CpMathUtil.isPointInPolygon(boundary.polygon, x, z)
@@ -486,7 +486,7 @@ function G.createValidator(model, course, boundary, entryIx, alignmentNode, lowe
                 if not rootOnly and alignedAtWork then
                     local aligned = true
                     for _, pose in ipairs(poses) do
-                        aligned = aligned and math.abs(delta(pose.t, targetHeading)) <= G.alignmentTolerance
+                        aligned = aligned and math.abs(delta(pose.t, targetHeading)) <= G.plannedAlignmentTolerance
                     end
                     settledIx = aligned and (settledIx or i) or nil
                     -- Validate another five metres as a tracking reserve. All
@@ -530,9 +530,18 @@ function G.isAligned(vehicle, targetNode)
         if seen[object] then return false end
         seen[object] = true
         local node = object == vehicle and vehicle:getAIDirectionNode() or object.steeringAxleNode
-        if not node or math.abs(delta(heading(node), target)) > G.alignmentTolerance then return false end
+        if not node then return false, 'missing axle node' end
+        local error = math.deg(math.abs(delta(heading(node), target)))
+        if error > math.deg(G.alignmentTolerance) then
+            return false, string.format('%s axle %.1f degrees', CpUtil.getName(object), error)
+        end
         local joint = object.getActiveInputAttacherJoint and object:getActiveInputAttacherJoint()
-        if joint and joint.rootNode and math.abs(delta(heading(joint.rootNode), target)) > G.alignmentTolerance then return false end
+        if joint and joint.rootNode then
+            local error = math.deg(math.abs(delta(heading(joint.rootNode), target)))
+            if error > math.deg(G.alignmentTolerance) then
+                return false, string.format('%s drawbar %.1f degrees', CpUtil.getName(object), error)
+            end
+        end
         local children = object.getAttachedImplements and object:getAttachedImplements() or {}
         if #children > 1 then return false end
         object = children[1] and children[1].object
@@ -571,6 +580,48 @@ function G.rootCourseFits(model, course, boundary)
         previous = pose
     end
     return true
+end
+
+--- Planning needs positions and tangents, not the fieldwork metadata, terrain
+--- queries and debug output built by Course for every rejected candidate.
+function G.createCandidate(node, pull, path)
+    local points = {}
+    local segments = math.max(1, math.floor(pull))
+    for i = 0, segments do
+        local x, _, z = localToWorld(node, 0, 0, pull * i / segments)
+        points[#points + 1] = {x = x, z = z}
+    end
+    for _, p in ipairs(path) do points[#points + 1] = {x = p.x, z = -p.y} end
+    local candidate = {waypoints = points}
+    function candidate:getNumberOfWaypoints() return #self.waypoints end
+    function candidate:getWaypointPosition(ix)
+        local p = self.waypoints[ix]
+        return p.x, 0, p.z
+    end
+    function candidate:getWaypointYRotation(ix)
+        ix = math.max(1, math.min(ix, #self.waypoints - 1))
+        local a, b = self.waypoints[ix], self.waypoints[ix + 1]
+        if math.abs(b.x - a.x) + math.abs(b.z - a.z) < .00001 then
+            return self:getWaypointYRotation(ix > 1 and ix - 1 or ix + 1)
+        end
+        return math.atan2(b.x - a.x, b.z - a.z)
+    end
+    function candidate:getWaypointLocalPosition(reference, ix)
+        local x, y, z = self:getWaypointPosition(ix)
+        return worldToLocal(reference, x, y, z)
+    end
+    function candidate:getLength()
+        local length = 0
+        for ix = 2, #self.waypoints do
+            local a, b = self.waypoints[ix - 1], self.waypoints[ix]
+            length = length + math.sqrt((a.x - b.x)^2 + (a.z - b.z)^2)
+        end
+        return length
+    end
+    function candidate:appendWaypoints(waypoints)
+        for _, p in ipairs(waypoints) do self.waypoints[#self.waypoints + 1] = p end
+    end
+    return candidate
 end
 
 --- Incremental search. GIANTS does not provide Lua coroutines: retain explicit
@@ -681,7 +732,11 @@ function G.createSearch(maneuver, model, loweringDistance)
             if not done then return false end
             self.validator = nil
             if ok then
-                if returnData then self.pending = self.pending:getSectionAsNewCourse(1, returnData.endIx, false, true) end
+                local points = {}
+                for ix = 1, returnData and returnData.endIx or self.pending:getNumberOfWaypoints() do
+                    points[#points + 1] = self.pending.waypoints[ix]
+                end
+                self.pending = Course(maneuver.vehicle, points, true)
                 self.pending.temporary = true
                 for ix = self.entryIx, self.pending:getNumberOfWaypoints() do
                     TurnManeuver.addTurnControlToWaypoint(self.pending.waypoints[ix], TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END, true)
@@ -731,13 +786,12 @@ function G.createSearch(maneuver, model, loweringDistance)
                 end
             end
         end
-        local candidate = Course.createFromNode(maneuver.vehicle, maneuver.vehicleDirectionNode, 0, 0, option.pull, 1, false)
-        candidate:append(Course.createFromAnalyticPath(maneuver.vehicle, path, true))
+        local candidate = G.createCandidate(maneuver.vehicleDirectionNode, option.pull, path)
         self.entryIx = candidate:getNumberOfWaypoints()
         self.ending = maneuver.turnContext:appendEndingTurnCourse(candidate, 2 * chainLength)
         self.pending = candidate
         self.validator = G.createValidator(model, candidate, boundary, self.entryIx,
-            maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance, false, maneuver.turnContext.workStartNode, true)
+            maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance, false, maneuver.turnContext.workStartNode, false)
         return false
     end
     return search

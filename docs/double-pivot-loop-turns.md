@@ -185,3 +185,36 @@ still require the next in-game test.
 
 The combined ZIP includes aad9736b and 7aad509b. Its exact filename remains
 FS25_Courseplay_StraightEntryTest.zip, in its own numbered top-level folder.
+
+
+## Live return and search cost - combined test 8.1.0.313
+
+The 21:29-21:30 live test of 8.1.0.312 spent 21.5 seconds testing 653
+candidates. It completed the loop, lowered with the drill still angled, then
+stopped at waypoint 173 because the live chain had not aligned within the
+predicted return. The log identifies the alignment stop, but did not record
+which live node failed it; this release includes that diagnostic.
+
+Keep the complete, validated straight reserve (twice the chain length) instead
+of truncating it at predicted settling plus five metres. Planning requires two
+degrees at its endpoint; live handover still requires five degrees and can occur
+earlier. The field and clearance checks cover the complete reserve. Lowering on
+this return requires the working implement itself within five degrees, while
+continuing forwards to straighten. Normal sowing-machine lowering stops remain.
+This can lower later than the original work-start line: it does not establish
+complete corner coverage, and does not add a coverage recovery pass.
+
+The inward loop remains: this change does not claim to avoid existing crop.
+The field boundary continues to constrain the complete combination.
+
+Search no longer constructs and enriches Course objects for rejected candidates.
+Only the accepted points are converted to a Course. Exact rectangle intersection
+uses centre/extent projections, and boundary bounding boxes use the same closed
+form rather than allocating corners. A 2,000-case independent corner-projection
+regression checks the intersection optimisation. Four saved-corner replays take
+about 19 seconds in the local harness, down from about 27 seconds before these
+changes; that is not an in-game timing guarantee. The runtime search budget is
+8 ms between bounded steps, raised from 5 ms, while stopped for planning.
+
+All source and extracted-ZIP checks are required for this combined release.
+Keep the same StraightEntryTest mod identity in its separate numbered folder.

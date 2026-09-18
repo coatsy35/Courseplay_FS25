@@ -304,6 +304,40 @@ class LoopTests(unittest.TestCase):
             assert(not ok and (reason=='articulation' or reason=='implement clearance'), tostring(reason))
         ''')
 
+    def test_optimised_clearance_matches_independent_corner_projection(self):
+        self.lua.execute("""
+            local function reference(a,pa,b,pb)
+                local function corners(body,pose)
+                    local front,back=body.front-2,body.back+2
+                    if front<=back then front,back=body.front,body.back end
+                    local out={}
+                    for _,x in ipairs({body.left,body.right}) do
+                        for _,z in ipairs({front,back}) do
+                            out[#out+1]={x=pose.x+x*math.cos(pose.t)+z*math.sin(pose.t),
+                                z=pose.z-x*math.sin(pose.t)+z*math.cos(pose.t)}
+                        end
+                    end
+                    return out
+                end
+                local ac,bc=corners(a,pa),corners(b,pb)
+                for _,t in ipairs({pa.t,pa.t+math.pi/2,pb.t,pb.t+math.pi/2}) do
+                    local amin,amax,bmin,bmax=math.huge,-math.huge,math.huge,-math.huge
+                    for _,p in ipairs(ac) do local q=p.x*math.cos(t)-p.z*math.sin(t);amin=math.min(amin,q);amax=math.max(amax,q) end
+                    for _,p in ipairs(bc) do local q=p.x*math.cos(t)-p.z*math.sin(t);bmin=math.min(bmin,q);bmax=math.max(bmax,q) end
+                    if amax<=bmin or bmax<=amin then return false end
+                end
+                return true
+            end
+            math.randomseed(312)
+            for i=1,2000 do
+                local a={left=math.random()*10,right=-math.random()*4,front=math.random()*10,back=-math.random()*10}
+                local b={left=math.random()*6,right=-math.random()*5,front=math.random()*9,back=-math.random()*12}
+                local pa={x=100,z=-200,t=math.random()*6.28}
+                local pb={x=85+math.random()*30,z=-215+math.random()*30,t=math.random()*6.28}
+                assert(HeadlandLoopGeometry.bodiesOverlap(a,pa,b,pb)==reference(a,pa,b,pb), 'rectangle SAT changed')
+            end
+        """)
+
     def test_all_runtime_lua_compiles(self):
         check = self.lua.eval('function(code,name) local f,e=load(code,name); assert(f,e) end')
         for file in ROOT.rglob('*.lua'):
@@ -322,9 +356,18 @@ class LoopTests(unittest.TestCase):
                 assert(math.abs(math.deg(m.links[3].maxArticulation)-60)<.001)
                 local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
                     turningRadius=10,workWidth=25.6,steeringLength=9.8}
+                local constructions,init=0,Course.init
+                Course.init=function(self,...) constructions=constructions+1;return init(self,...) end
                 local course,reason=G.plan(maneuver,m,1.68)
+                Course.init=init
+                assert(constructions==1, 'built Course metadata for rejected routes')
                 assert(course, string.format('start %.1f mirror %d: %s',case[1],case[2],reason))
                 assert(course:isForwardOnly() and course.temporary and course.chainReturn)
+                local chainLength=0
+                for _,link in ipairs(m.links) do chainLength=chainLength+link.length-link.hitch end
+                local _,_,reserve=course:getWaypointLocalPosition(c.vehicleAtTurnEndNode,course:getNumberOfWaypoints())
+                assert(reserve>=2*chainLength+c.frontMarkerDistance-c.backMarkerDistance-1.01,
+                    'trimmed the live settling reserve to the prediction')
                 local entry
                 for i=1,course:getNumberOfWaypoints() do
                     if TurnManeuver.hasTurnControl(course,i,TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then entry=entry or i end
@@ -408,6 +451,11 @@ class LoopTests(unittest.TestCase):
             c.chainReturnLateralTolerance=4
             local lower,dz=h:shouldLowerThisImplement(d,line,false)
             assert(lower and math.abs(dz+.2)<.001, 'shifted the work-start plane')
+            d.rootNode.t=math.rad(12)
+            assert(not h:shouldLowerThisImplement(d,line,false), 'lowered the crooked drill')
+            d.rootNode.t=math.rad(4)
+            assert(h:shouldLowerThisImplement(d,line,false), 'blocked the aligned drill')
+            d.rootNode.t=0
             c.chainReturnLateralTolerance=nil
             assert(not h:shouldLowerThisImplement(d,line,false))
             local pose={x=0,z=0,t=0}

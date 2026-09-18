@@ -134,6 +134,11 @@ function WorkStartHandler:shouldLowerThisImplement(object, workStartNode, revers
             -- return. The prediction bounds the drill's remaining lateral lag;
             -- do not miss the unchanged work-start line while waiting for it.
             lateralTolerance = math.max(lateralTolerance, self.turnContext.chainReturnLateralTolerance)
+            -- Keep moving while straightening; stopping cannot align a towed
+            -- drill. Cart settling is a separate handover condition.
+            if not CpMathUtil.isSameDirection(object.rootNode, workStartNode, 5) then
+                return false, dz
+            end
         end
         return dz > -loweringDistance and math.abs(dxFront) < lateralTolerance, dz
     end
