@@ -128,6 +128,13 @@ function WorkStartHandler:shouldLowerThisImplement(object, workStartNode, revers
         -- lowered, than the vehicle stops, but now the loweringDistance will be low, so we say should not be
         -- lowering, vehicle starts again, and so on ...
         local normalLoweringDistance = self.driveStrategy:getLoweringDurationMs() * self.settings.turnSpeed:getValue() / 3600
-        return dz > -loweringDistance and math.abs(dxFront) < normalLoweringDistance * 1.5, dz
+        local lateralTolerance = normalLoweringDistance * 1.5
+        if self.turnContext.chainReturnLateralTolerance then
+            -- Only enabled after the tractor reaches the validated straight
+            -- return. The prediction bounds the drill's remaining lateral lag;
+            -- do not miss the unchanged work-start line while waiting for it.
+            lateralTolerance = math.max(lateralTolerance, self.turnContext.chainReturnLateralTolerance)
+        end
+        return dz > -loweringDistance and math.abs(dxFront) < lateralTolerance, dz
     end
 end

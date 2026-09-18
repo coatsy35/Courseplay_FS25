@@ -134,6 +134,11 @@ end
 function AITurn:onWaypointPassed(ix, course)
     self:debug('onWaypointPassed %d', ix)
     if ix == course:getNumberOfWaypoints() and self.state == self.states.ENDING_TURN then
+        if course.chainReturn and not HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode) then
+            self:debug('Chain did not settle within the checked straight return')
+            self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+            return
+        end
         self:debug('Last waypoint reached, resuming fieldwork')
         self:resumeFieldworkAfterTurn(self.turnContext.turnEndWpIx)
     end
@@ -567,6 +572,11 @@ function CourseTurn:updateLoopSearch()
         self.loopManeuver = nil
         return
     end
+    if self.loopManeuver and self.loopManeuver.search and
+            not HeadlandLoopGeometry.matchesStart(self.vehicle, self.loopManeuver.search.model) then
+        self:debug('Chain moved while planning; recalculate from its new pose')
+        self.loopManeuver = nil
+    end
     if not self.loopManeuver then
         self.loopManeuver = LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
             self.turningRadius, self.workWidth, self.steeringLength,
@@ -600,6 +610,12 @@ function CourseTurn:turn()
 
     if TurnManeuver.hasTurnControl(self.turnCourse, self.turnCourse:getCurrentWaypointIx(),
             TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then
+        if self.turnCourse.chainReturn then
+            if not HeadlandLoopGeometry.isOnReturn(self.vehicle, self.turnCourse.chainReturn) then
+                return gx, gz, moveForwards, maxSpeed
+            end
+            self.turnContext.chainReturnLateralTolerance = self.turnCourse.chainReturn.lateralTolerance
+        end
         self.state = self.states.ENDING_TURN
         self:debug('About to end turn')
     end
@@ -622,6 +638,12 @@ function CourseTurn:endTurn(dt)
             local implementCheckDistance = math.max(1, 0.1 * self.vehicle:getLastSpeed())
             if dz and dz > -implementCheckDistance then
                 if self.driveStrategy:getCanContinueWork() then
+                    if self.turnCourse and self.turnCourse.chainReturn and
+                            not HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode) then
+                        -- Keep moving along the checked straight after the
+                        -- drill has finished lowering, until the cart settles.
+                        return true
+                    end
                     self:debug("implements lowered, resume fieldwork")
                     self:resumeFieldworkAfterTurn(self.turnContext.turnEndWpIx)
                 else
