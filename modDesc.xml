@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="105">
-    <version>8.1.0.3</version>
+    <version>8.1.0.301</version>
 	<author><![CDATA[Courseplay.devTeam]]></author>
 	<title>
 		<en>CoursePlay</en>
@@ -217,6 +217,7 @@ Changelog 8.1.0.3
 		<sourceFile filename="scripts/ai/turns/AITurn.lua"/>
 		<sourceFile filename="scripts/ai/turns/Corner.lua"/>
 		<sourceFile filename="scripts/ai/turns/TurnContext.lua"/>
+		<sourceFile filename="scripts/ai/turns/HeadlandLoopGeometry.lua"/>
 		<sourceFile filename="scripts/ai/turns/TurnManeuver.lua"/>
 		<sourceFile filename="scripts/ai/turns/TurnContext.lua"/>
 		<sourceFile filename="scripts/ai/turns/WorkStartHandler.lua"/>

@@ -536,6 +536,11 @@ function CourseTurn:startTurn()
         end
     end
     if self.state == self.states.TURNING then
+        if not self.turnCourse then
+            self:debug('No headland loop passed the detected chain geometry checks')
+            self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+            return
+        end
         self.ppc:setCourse(self.turnCourse)
         self.ppc:initialize(1)
     end
@@ -663,8 +668,9 @@ function CourseTurn:generateCalculatedTurn()
         if self.settings.loopTurnsOnHeadland:getValue() then
             -- do a 270° turn forward only
             turnManeuver = LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
-                    self.turningRadius, self.workWidth, self.steeringLength)
-            self.enableTightTurnOffset = true
+                    self.turningRadius, self.workWidth, self.steeringLength,
+                    self.driveStrategy:getLoweringDurationMs() * self.settings.turnSpeed:getValue() / 3600 + 0.5)
+            self.enableTightTurnOffset = not turnManeuver.chainPlanned
         else
             turnManeuver = HeadlandCornerTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
                     self.turningRadius, self.workWidth, self.reversingImplement, self.steeringLength)
@@ -731,6 +737,10 @@ function CourseTurn:onPathfindingDone(path)
     else
         self:debug('No path found in %d ms, falling back to normal turn course generator', g_currentMission.time - (self.pathfindingStartedAt or 0))
         self:generateCalculatedTurn()
+    end
+    if not self.turnCourse then
+        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        return
     end
     self.ppc:setCourse(self.turnCourse)
     self.ppc:initialize(1)

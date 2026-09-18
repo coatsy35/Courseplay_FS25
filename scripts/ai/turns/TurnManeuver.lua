@@ -465,24 +465,51 @@ end
 ---@class LoopTurnManeuver : TurnManeuver
 LoopTurnManeuver = CpObject(DubinsTurnManeuver)
 function LoopTurnManeuver:init(vehicle, turnContext, vehicleDirectionNode, turningRadius,
-                               workWidth, steeringLength)
+                               workWidth, steeringLength, loweringDistance)
     self.debugPrefix = '(LoopTurn): '
     TurnManeuver.init(self, vehicle, turnContext, vehicleDirectionNode, turningRadius,
             workWidth, steeringLength)
+    local model, reason = HeadlandLoopGeometry.detect(vehicle)
+    if model then
+        self.course, reason = HeadlandLoopGeometry.plan(self, model, loweringDistance or 0.5)
+        -- These are tractor paths already checked with each trailer. A moving
+        -- single-trailer offset would invalidate the prediction.
+        self.chainPlanned = true
+        self:debug('Chain loop: %s%s', self.course and '' or 'no fitting candidate: ', reason)
+        Logging.info('[CP headland loop] %s: %s%s', CpUtil.getName(vehicle), self.course and '' or 'no fitting candidate: ', reason)
+        return
+    end
+    local detectedWidth = WorkWidthUtil.getAutomaticWorkWidthAndOffset(vehicle)
+    local loopWidth = math.max(workWidth, detectedWidth or 0)
+    -- Width-only fallback: retain the stock single-axle tracking model, but do
+    -- not ask the centre of a wide tool to turn inside its own half-width.
+    local loopRadius = math.max(turningRadius, loopWidth / 2 + 0.5)
+    self:debug('Chain prediction unavailable (%s); width allowance %.1f m, radius %.1f m', reason, loopWidth, loopRadius)
+    Logging.info('[CP headland loop] %s: width-only loop, width %.1f m, radius %.1f m; %s',
+        CpUtil.getName(vehicle), loopWidth, loopRadius, reason)
     local turnEndNode, endZOffset = self.turnContext:getTurnEndNodeAndOffsets(steeringLength)
     self:debug('r=%.1f, w=%.1f, steeringLength=%.1f, endZOffset=%.1f', turningRadius, workWidth, steeringLength, endZOffset)
     -- pull forward a bit to have the implement reach at least the middle of the outgoing edge, so the 270 is
     -- easier to turn into the target direction. May need to increase it depending on user feedback.
-    local pullForward = 0.5 * workWidth
+    local pullForward = 0.5 * loopWidth
     self.course = Course.createFromNode(self.vehicle, vehicleDirectionNode,
             0, 0, pullForward, 1, false)
     local path = PathfinderUtil.findAnalyticPath(PathfinderUtil.dubinsSolver,
-            vehicleDirectionNode, 0, pullForward + 0.5, turnEndNode, 0, -steeringLength, turningRadius)
+            vehicleDirectionNode, 0, pullForward + 0.5, turnEndNode, 0, -steeringLength, loopRadius)
+    if not path or #path < 2 then
+        Logging.info('[CP headland loop] %s: no analytic width-only loop found', CpUtil.getName(vehicle))
+        self.course = nil
+        return
+    end
     self.course:append(Course.createFromAnalyticPath(self.vehicle, path, true))
     TurnManeuver.setLowerImplements(self.course, steeringLength, true)
     self:applyTightTurnOffsetToAnalyticPath(self.course)
     local endingTurnLength = self.turnContext:appendEndingTurnCourse(self.course, steeringLength)
     TurnManeuver.setLowerImplements(self.course, endingTurnLength, true)
+    if not HeadlandLoopGeometry.widthCourseFits(vehicle, self.course, loopWidth, steeringLength) then
+        Logging.info('[CP headland loop] %s: width-only loop does not fit the field corridor', CpUtil.getName(vehicle))
+        self.course = nil
+    end
 end
 
 -- This is an experiment to create turns with towed implements that better align with the next row.
