@@ -1,8 +1,8 @@
-# Straight Entry + Loop Test v0.18
+# Straight Entry + Loop Test v0.19
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry + Loop Test v0.18`.
-Manifest version: `8.1.0.306`.
+In-game title: `CoursePlay - Straight Entry + Loop Test v0.19`.
+Manifest version: `8.1.0.307`.
 
 This local test merges straight-entry v0.13 at `7aad509b` with the main-based
 double-pivot headland-loop work. It lives on
@@ -25,11 +25,31 @@ CP's configured driving speeds are retained. This is a planar planning test,
 not proof of physical drill/cart clearance. Keep collision detection enabled and
 inspect the actual hitch motion during the first turn.
 
-The release gate runs 47 straight-entry regressions, 17 loop regressions, six
+The release gate runs 49 straight-entry regressions, 17 loop regressions, six
 packaging tests, runtime Lua compilation, deterministic source packaging and
 both suites again against the extracted ZIP. The numbered archive and stable
 copy are written only under `dist/straight-entry-double-pivot`; existing test
 build folders and the live `FS25_Courseplay.zip` are untouched.
+
+## Multi-vehicle final-row connection (v0.19)
+
+Centre-first multi-vehicle courses now connect each vehicle's final offset row
+straight ahead to its assigned innermost headland where a valid forward
+intersection exists. Connection happens after lane offsets and small-island
+bypasses are generated, and accounts for clockwise/counter-clockwise headland
+assignment and symmetric lane changes. Row geometry and headland allocation
+are retained. Headland-first courses keep their existing generation order.
+
+The same conservative fallbacks as v0.17 remain: no forward intersection,
+an endpoint already beyond the assigned headland, or an island connection.
+This does not force every connection straight or change driving/turn strategies.
+Regenerate saved multi-vehicle courses to get the new connection.
+
+Full-generator regressions cover two to five vehicles, both headland directions,
+both lane-change modes, angled rows and one/two headland passes per vehicle.
+They verify each lane's alignment, assignment and unchanged row endpoint, and
+exercise the outside-row fallback. Additional cases cover headland-first and
+zero-headland courses. Existing single-vehicle, recovery and loop tests remain.
 
 ## PW100 headland recovery correction (v0.16)
 
@@ -57,7 +77,7 @@ ordinary row-turn endings retain their previous behaviour. The complete
 pathfinder course still passes the existing boundary check before installation.
 The v0.13 handover guard is retained.
 
-Added regressions use saved PW100 waypoints 4411–4423: the old tangent fails the
+Added regressions use saved PW100 waypoints 4411ï¿½4423: the old tangent fails the
 real handover, while the curved continuation passes in both mirrored directions
 and five world headings. Tests also cover the next pending corner, unchanged
 source points, early/late and mounted markers, unknown field boundaries, and

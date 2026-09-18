@@ -206,6 +206,110 @@ class EntryTests(unittest.TestCase):
         end
         """)
 
+    def test_multi_vehicle_final_connections_follow_each_offset_lane(self):
+        self.lua.execute("""
+        package.path=ROOT..'/scripts/courseGenerator/geometry/?.lua;'..
+            ROOT..'/scripts/courseGenerator/genetic/?.lua;'..SOURCE..'/scripts/test/?.lua;'..package.path
+        local attributes=CourseGenerator.WaypointAttributes
+        require('CourseGenerator')
+        CourseGenerator.WaypointAttributes=attributes
+        dofile(SOURCE..'/scripts/courseGenerator/test/require.lua')
+        Logger.debug=function() end; Logger.info=function() end; Logger.warning=function() end
+        local connector=CourseGenerator.HeadlandConnector.connectHeadlandsFromInside
+        local connections={}
+        local projected,fallbacks=0,0
+        CourseGenerator.HeadlandConnector.connectHeadlandsFromInside=function(headlands,start,width,radius,approach)
+            assert(approach and #approach>=2, 'missing offset lane')
+            local polygon=headlands[#headlands]:getPolygon()
+            local inside=polygon:isVectorInside(approach[#approach])
+            local nearest=polygon:findClosestVertexToPoint(start)
+            local fallback=polygon[nearest.ix]:clone()
+            local result=connector(headlands,start,width,radius,approach)
+            connections[result]={approach=approach,inside=inside,fallback=fallback}
+            return result
+        end
+        for _, vehicles in ipairs({2,3,4,5}) do
+        for _, clockwise in ipairs({false,true}) do
+        for _, sameWidth in ipairs({false,true}) do
+        for _, passes in ipairs({1,2}) do
+            local boundary=Polygon({{x=0,y=0},{x=350,y=0},{x=350,y=400},{x=0,y=400}})
+            local field=CourseGenerator.Field('multi',1,boundary)
+            local context=CourseGenerator.FieldworkContext(field,4,9,vehicles*passes)
+            context:setNumberOfVehicles(vehicles):setUseSameTurnWidth(sameWidth)
+            context:setHeadlandFirst(false)
+            context.headlandClockwise=clockwise
+            context:setBypassIslands(false)
+            context.autoRowAngle=false; context.rowAngle=math.rad(sameWidth and 70 or 20)
+            local course=CourseGenerator.FieldworkCourseMultiVehicle(context)
+            local seen={}
+            for _, position, path in course:pathIterator() do
+                local row=course:getCenterPath(position)
+                local headland=course:getHeadlandPath(position)
+                local a,b=row[#row-1],row[#row]
+                local p=headland[1]
+                local dx,dy=b.x-a.x,b.y-a.y
+                local ex,ey=p.x-b.x,p.y-b.y
+                local connection=connections[headland]
+                assert(connection.approach==row, 'wrong vehicle offset lane was used')
+                if connection.inside then
+                    assert(math.abs(dx*ey-dy*ex)<0.001, 'offset lane connection is not collinear')
+                    assert(dx*ex+dy*ey>=-0.001, 'offset lane connection goes backwards')
+                    projected=projected+1
+                else
+                    -- The adjusted outer lane can already end past its assigned headland.
+                    -- Keep the established fallback rather than project back across the field.
+                    assert((p-connection.fallback):length()<0.001, 'outside-row fallback changed')
+                    fallbacks=fallbacks+1
+                end
+                assert(path[#row].x==b.x and path[#row].y==b.y, 'final row was modified')
+                assert(path[#row+1].x==p.x and path[#row+1].y==p.y)
+                assert(#course.headlandsForVehicle[course:_positionToHeadlandIndex(position,clockwise)]==passes)
+                assert(not seen[headland], 'vehicles share a headland path')
+                seen[headland]=true
+            end
+        end
+        end
+        end
+        end
+        assert(projected>0 and fallbacks>0, 'exercise valid intersections and outside-row fallbacks')
+        """)
+
+    def test_multi_vehicle_headland_first_and_no_headland_courses_still_generate(self):
+        self.lua.execute("""
+        package.path=ROOT..'/scripts/courseGenerator/geometry/?.lua;'..
+            ROOT..'/scripts/courseGenerator/genetic/?.lua;'..SOURCE..'/scripts/test/?.lua;'..package.path
+        local attributes=CourseGenerator.WaypointAttributes
+        require('CourseGenerator')
+        CourseGenerator.WaypointAttributes=attributes
+        dofile(SOURCE..'/scripts/courseGenerator/test/require.lua')
+        Logger.debug=function() end; Logger.info=function() end; Logger.warning=function() end
+        for _, vehicles in ipairs({2,3}) do
+        for _, headlandFirst in ipairs({false,true}) do
+            local boundary=Polygon({{x=0,y=0},{x=200,y=0},{x=200,y=220},{x=0,y=220}})
+            local field=CourseGenerator.Field('multi',1,boundary)
+            local context=CourseGenerator.FieldworkContext(field,4,9,headlandFirst and vehicles*2 or 0)
+            context:setNumberOfVehicles(vehicles):setHeadlandFirst(headlandFirst)
+            context:setBypassIslands(false)
+            context.autoRowAngle=false; context.rowAngle=0
+            local course=CourseGenerator.FieldworkCourseMultiVehicle(context)
+            local count=0
+            for _, position, path in course:pathIterator() do
+                local center=course:getCenterPath(position)
+                local headland=course:getHeadlandPath(position)
+                assert(#center>0 and #path==#center+#headland)
+                if headlandFirst then
+                    assert(#headland>0 and path[1]==headland[1])
+                    assert(path[#headland+1]==center[1])
+                else
+                    assert(#headland==0 and path[1]==center[1])
+                end
+                count=count+1
+            end
+            assert(count==vehicles)
+        end
+        end
+        """)
+
     def load_headland_connector(self):
         self.lua.execute("""
         package.path=ROOT..'/scripts/courseGenerator/geometry/?.lua;'..package.path
