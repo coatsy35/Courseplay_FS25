@@ -1,4 +1,4 @@
-# Headland loop test 8.1.0.304
+# Headland loop test 8.1.0.305
 
 Branch: `codex/double-pivot-loop-turns`, based on main `9b915b07`.
 This build contains no envelope planner, straight-entry experiment or implement
@@ -40,7 +40,7 @@ settle all headings within five degrees of the outgoing direction before the
 estimated lowering position.
 The lowering allowance uses CP's configured turn speed and lowering duration.
 
-Each body's predicted working rectangle is checked
+Each body's predicted declared physical rectangle is checked
 against the boundary and islands, including polygon edges and enclosed islands.
 An edge grid limits repeated polygon work. These are sampled planar footprint
 checks, not continuous swept-volume or game-physics guarantees. An internal-pivot
@@ -99,7 +99,7 @@ The source manifest retains its release title. The packaged title is
 `CoursePlay - Implement Profiles Test`, and the filename stays
 `FS25_Courseplay_ImplementProfilesTest.zip`, as requested by the project rules.
 The builder writes the numbered archive and commit/checksum receipt under
-`history/8.1.0.304/` and a stable filename beside `history/`. Use a separate
+`history/8.1.0.305/` and a stable filename beside `history/`. Use a separate
 `dist/double-pivot-loop-turns` output directory so other branches' test archives
 are not overwritten. It never writes to the installed mods folder or the live
 `FS25_Courseplay.zip`.

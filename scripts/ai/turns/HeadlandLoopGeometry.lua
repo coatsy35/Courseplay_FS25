@@ -367,7 +367,11 @@ function G.validate(model, course, boundary, entryIx, alignmentNode, loweringDis
     local peak = 0
     local function check(ix)
         for i, pose in ipairs(poses) do
-            if not G.bodyFits(model.bodies[i], pose, boundary) then return false, 'field boundary' end
+            local boundaryBody = model.bodies[i].collision or model.bodies[i]
+            if not G.bodyFits(boundaryBody, pose, boundary) then
+                return false, string.format('field boundary (%s, body %d, waypoint %d)',
+                    boundary and boundary.source or 'unavailable', i, ix)
+            end
             if i > 1 then
                 local angle = math.abs(delta(poses[i - 1].t, pose.t))
                 peak = math.max(peak, angle)

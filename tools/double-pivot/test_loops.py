@@ -91,6 +91,17 @@ class LoopTests(unittest.TestCase):
             assert(not G.bodyFits(b,{x=48,z=0,t=0},G.getBoundary(v)))
         ''')
 
+    def test_declared_body_checks_boundary_without_treating_working_width_as_solid(self):
+        self.lua.execute('''
+            local field={{x=-10,z=-40},{x=10,z=-40},{x=10,z=20},{x=-10,z=20}}
+            local v=fixture({internal=true,width=30,field=field})
+            local m=assert(HeadlandLoopGeometry.detect(v))
+            local boundary=assert(HeadlandLoopGeometry.getBoundary(v))
+            local pose={x=0,z=-9.8,t=0}
+            assert(not HeadlandLoopGeometry.bodyFits(m.bodies[2],pose,boundary))
+            assert(HeadlandLoopGeometry.bodyFits(m.bodies[2].collision,pose,boundary))
+        ''')
+
     def test_real_loop_generation_both_sides_and_configured_speed_allowances(self):
         for side in [-1, 1]:
             for lead in [0.5, 8.0]:

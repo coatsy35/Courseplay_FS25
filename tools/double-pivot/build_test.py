@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 NAME = 'FS25_Courseplay_ImplementProfilesTest.zip'
-VERSION = '8.1.0.304'
+VERSION = '8.1.0.305'
 TITLE = 'CoursePlay - Implement Profiles Test'
 BASE = '9b915b07'
 sys.dont_write_bytecode = True
