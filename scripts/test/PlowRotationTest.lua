@@ -60,6 +60,23 @@ function testFirstCentreRowFacesEitherBlockBoundary()
     lu.assertIsFalse(course({ rowNumber = 1, rightSideBlockBoundary = true }, nil, false):shouldPlowBeOnTheLeft(1))
 end
 
+function testFirstRowBoundaryTakesPrecedenceOverHeadlandTransition()
+    local headland = { headlandPassNumber = 1 }
+    lu.assertIsTrue(course({ rowNumber = 1, leftSideBlockBoundary = true, leftSideWorked = false },
+            headland, true):shouldPlowBeOnTheLeft(1))
+    lu.assertIsFalse(course({ rowNumber = 1, rightSideBlockBoundary = true, leftSideWorked = true },
+            headland, false):shouldPlowBeOnTheLeft(1))
+    -- Preserve the existing left-side preference when a single-row block has both boundaries.
+    lu.assertIsTrue(course({ rowNumber = 1, leftSideBlockBoundary = true, rightSideBlockBoundary = true },
+            headland, true):shouldPlowBeOnTheLeft(1))
+end
+
+function testHeadlandWindingTakesPrecedenceOverRowMetadata()
+    local field = course({ headlandPassNumber = 1, rowNumber = 1, leftSideBlockBoundary = true })
+    field.isOnClockwiseHeadland = function() return true end
+    lu.assertIsFalse(field:shouldPlowBeOnTheLeft(1))
+end
+
 function testCentreRowsStillAlternateUsingNextTurn()
     for _, row in ipairs({ 1, 2 }) do
         lu.assertIsFalse(course({ rowNumber = row }, nil, true):shouldPlowBeOnTheLeft(1))
@@ -113,6 +130,15 @@ function testRotationMustFinishOnRequestedSide()
         local plough = controller(sample[1], false)
         lu.assertEquals(plough:isRotatedToSide(true), sample[2])
         lu.assertEquals(plough:isRotatedToSide(false), sample[3])
+    end
+end
+
+function testFullyRotatedUsesTheSameEndpointTolerance()
+    for _, sample in ipairs({ { 0, true }, { 0.0009, true }, { 0.001, false },
+            { 0.5, false }, { 0.999, false }, { 0.9991, true }, { 1, true } }) do
+        local plough = controller(sample[1], false)
+        lu.assertEquals(plough:isFullyRotated(), sample[2])
+        lu.assertEquals(plough:isFullyRotated(), plough:isRotatedToSide(false) or plough:isRotatedToSide(true))
     end
 end
 

@@ -26,7 +26,10 @@ class BuildModTest(unittest.TestCase):
             "img/hud.dds": "image",
             "translations/en.xml": "<texts/>",
             "scripts/test/Example.lua": "-- test",
+            "scripts/test/PlowRotationTest.lua": "-- plough regression tests",
             "scripts/courseGenerator/test/Example.lua": "-- nested test",
+            "tools/turnbench/bridge.lua": "-- offline engine mocks",
+            "tools/turnbench/web/app.js": "// development UI",
             "scripts/reloadAI.bat": "development helper",
             ".github/workflows/build.yml": "workflow",
             "README.md": "readme",
@@ -78,7 +81,8 @@ class BuildModTest(unittest.TestCase):
 
     def test_development_files_excluded_at_every_depth(self):
         for name in ["scripts/test/a.lua", "scripts/pathfinder/test/a.lua",
-                     "scripts/.secret", "scripts/__pycache__/a.pyc", "scripts/tool.ps1"]:
+                     "scripts/test/PlowRotationTest.lua", "tools/turnbench/bridge.lua",
+                     "tools/turnbench/web/app.js", "scripts/.secret", "scripts/__pycache__/a.pyc", "scripts/tool.ps1"]:
             with self.subTest(name=name):
                 self.assertFalse(is_runtime_file(name))
 

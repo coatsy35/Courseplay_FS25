@@ -293,6 +293,7 @@ function Waypoint:getUseTightTurnOffset()
 	return self.useTightTurnOffset
 end
 
+--- Restore shared row metadata, including the boundaries needed for first-row plough orientation.
 function Waypoint:copyRowData(other)
 	self.attributes.rowNumber = other.attributes.rowNumber
 	self.attributes.leftSideWorked = other.attributes.leftSideWorked

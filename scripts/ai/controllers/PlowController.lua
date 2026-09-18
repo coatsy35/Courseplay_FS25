@@ -3,6 +3,10 @@
 ---@class PlowController : ImplementController
 PlowController = CpObject(ImplementController)
 
+-- GIANTS animations use normalised time; allow a small tolerance at either working position.
+local ROTATION_RIGHT_THRESHOLD = 0.001
+local ROTATION_LEFT_THRESHOLD = 0.999
+
 function PlowController:init(vehicle, implement)
     ImplementController.init(self, vehicle, implement)
     self.plowSpec = self.implement.spec_plow
@@ -79,19 +83,23 @@ function PlowController:getIsPlowRotationAllowed()
 end
 
 function PlowController:isFullyRotated()
+    -- Offset calculation only needs a completed working position, regardless of which side it is on.
     local rotationAnimationTime = self.implement:getAnimationTime(self.plowSpec.rotationPart.turnAnimation)
-    return rotationAnimationTime < 0.001 or rotationAnimationTime > 0.999
+    return rotationAnimationTime < ROTATION_RIGHT_THRESHOLD or rotationAnimationTime > ROTATION_LEFT_THRESHOLD
 end
 
+--- Unlike the offset check, turn completion must distinguish the requested side from the opposite endpoint.
+---@param shouldBeOnTheLeft boolean
+---@return boolean
 function PlowController:isRotatedToSide(shouldBeOnTheLeft)
     if not self:isRotatablePlow() then
         return true
     end
     local rotationAnimationTime = self.implement:getAnimationTime(self.plowSpec.rotationPart.turnAnimation)
     if shouldBeOnTheLeft then
-        return rotationAnimationTime > 0.999
+        return rotationAnimationTime > ROTATION_LEFT_THRESHOLD
     else
-        return rotationAnimationTime < 0.001
+        return rotationAnimationTime < ROTATION_RIGHT_THRESHOLD
     end
 end
 
@@ -147,6 +155,7 @@ end
 ---@param shouldBeOnTheLeft boolean should the plow be turned to the left to be in the good position after the turn?
 function PlowController:onTurnEndProgress(workStartNode, reversing, shouldLower, shouldBeOnTheLeft)
     self.lastPlowSide:set(shouldBeOnTheLeft or false, 2000)
+    -- Correct a fully rotated plough on the wrong side, without restarting an animation in progress.
     if self:isRotatablePlow() and not self:isRotatedToSide(shouldBeOnTheLeft) and not self:isRotationActive() then
         -- more or less aligned with the first waypoint of the row, start rotating to working position
         if CpMathUtil.isSameDirection(self.implement.rootNode, workStartNode, 30) or shouldLower then
