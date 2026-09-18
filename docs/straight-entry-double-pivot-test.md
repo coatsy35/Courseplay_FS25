@@ -1,8 +1,8 @@
-# Straight Entry + Loop Test v0.19
+# Straight Entry + Loop Test v0.20
 
 ZIP identity: `FS25_Courseplay_StraightEntryTest.zip`.
-In-game title: `CoursePlay - Straight Entry + Loop Test v0.19`.
-Manifest version: `8.1.0.307`.
+In-game title: `CoursePlay - Straight Entry + Loop Test v0.20`.
+Manifest version: `8.1.0.308`.
 
 This local test merges straight-entry v0.13 at `7aad509b` with the main-based
 double-pivot headland-loop work. It lives on
@@ -25,11 +25,33 @@ CP's configured driving speeds are retained. This is a planar planning test,
 not proof of physical drill/cart clearance. Keep collision detection enabled and
 inspect the actual hitch motion during the first turn.
 
-The release gate runs 49 straight-entry regressions, 17 loop regressions, six
+The release gate runs 51 straight-entry regressions, 17 loop regressions, six
 packaging tests, runtime Lua compilation, deterministic source packaging and
 both suites again against the extracted ZIP. The numbered archive and stable
 copy are written only under `dist/straight-entry-double-pivot`; existing test
 build folders and the live `FS25_Courseplay.zip` are untouched.
+
+## Plough drawbar alignment before turnover (v0.20)
+
+The v0.19 PW100 recovery at waypoint 4796 started turnover at 16:37:31 on
+18 September, then lowered at 16:37:38. The tractor-to-row check allowed this
+without checking drawbar articulation. The user observed contact during rotation.
+
+Forward towed-plough turnover now also requires less than 10 degrees between
+the components across each yaw pivot in the input-to-root chain, and between
+the input component and tractor direction. Single-component tools use the
+steering axle direction. The PW100 working-frame angle is deliberately not
+used as its drawbar articulation: those are separate components. The existing
+tractor-to-row check, mounted-plough behaviour and reverse-entry rules remain.
+
+The tractor keeps moving at CP's configured speed while aligning, then pauses
+for the rotation animation as before. Sparse logging reports the angle when
+rotation is delayed. Tests use the real component-chain traversal and cover
+both sides, normal/recovery entry, multiple speeds, an already-reached lowering
+marker, the coupling angle and a single-component fallback. Existing world-
+heading tests include the drawbar frame. This is an alignment gate, not a
+collision-envelope measurement; actual clearance still needs in-game validation.
+No course regeneration is needed for this controller change.
 
 ## Multi-vehicle final-row connection (v0.19)
 

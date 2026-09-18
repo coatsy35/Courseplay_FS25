@@ -809,7 +809,7 @@ class EntryTests(unittest.TestCase):
                     local f=preparationFixture(20,side<0,true)
                     local target=f.turn:getLowerImplementNode()
                     local angle=math.rad(heading)
-                    for _,node in ipairs({target,f.vehicle:getAIDirectionNode(),f.tool.rootNode,
+                    for _,node in ipairs({target,f.vehicle:getAIDirectionNode(),f.tool.rootNode,f.tool.drawbarNode,
                             f.tool.left,f.tool.right,f.tool.back}) do
                         local x,z=node.x,node.z
                         node.x=x*math.cos(angle)+z*math.sin(angle)
@@ -825,6 +825,60 @@ class EntryTests(unittest.TestCase):
                     assert(f:drive()==20 and f.tool.lowerCount==0)
                 end
             end
+        """)
+
+    def test_towed_turnover_waits_for_drawbar_alignment_without_stopping(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/preparation-fixture.lua').read_text())
+        self.lua.execute("""
+        for _, speed in ipairs({6,20,35}) do
+        for _, side in ipairs({-1,1}) do
+        for _, recovery in ipairs({false,true}) do
+            local f=preparationFixture(speed,side<0,not recovery)
+            f.handler.recoveryTurn=recovery
+            -- Use the real component-chain traversal, including a fixed joint
+            -- between the angled working frame and the drawbar component.
+            f.tool.componentJoints[2]={jointNode=f.tool.rootNode,componentIndices={1,2},rotLimit={0,0,0}}
+            getParent=function(node) return node.parent end
+            dofile(ROOT..'/scripts/ai/util/ImplementUtil.lua')
+            f.tool.rootNode.t=side*math.rad(25)
+            f.tool.drawbarNode.t=side*math.rad(35)
+            assert(f:drive()==speed and f.tool.rotateCount==0 and f.tool.lowerCount==0)
+            f:position(-.1) -- shouldLower must not override unsafe articulation
+            for _,angle in ipairs({25,15,10.1}) do
+                f.tool.drawbarNode.t=side*math.rad(angle)
+                for i=1,10 do
+                    assert(f:drive()==speed and f.tool.rotateCount==0 and f.tool.lowerCount==0)
+                end
+            end
+            -- An aligned internal pivot is insufficient if the coupling as a
+            -- whole is still angled relative to the tractor.
+            local hitch={x=0,z=-14,t=side*math.rad(20)}
+            f.tool.hitchNode=hitch; f.tool.components[3].node=hitch
+            f.tool.drawbarNode.t=hitch.t
+            assert(f:drive()==speed and f.tool.rotateCount==0)
+            hitch.t=0
+            f.tool.drawbarNode.t=side*math.rad(9.9)
+            assert(f:drive()==0 and f.tool.rotateCount==1 and f.tool.lowerCount==0)
+            assert(f.tool.wanted==(side<0))
+            assert(f:drive()==0 and f.tool.rotateCount==1)
+            f.tool.animation=side<0 and 0 or 1; f.tool.playing=false
+            assert(f:drive()==speed and f.tool.lowerCount==1)
+        end
+        end
+        end
+        """)
+
+    def test_single_component_plough_rotation_uses_axle_alignment(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/preparation-fixture.lua').read_text())
+        self.lua.execute("""
+        for _,side in ipairs({-1,1}) do
+            local f=preparationFixture(20,side<0,true)
+            f.tool.components=nil; f.tool.componentJoints=nil
+            f.tool.steeringAxleNode={x=0,z=-12,t=side*math.rad(20)}
+            assert(f:drive()==20 and f.tool.rotateCount==0)
+            f.tool.steeringAxleNode.t=side*math.rad(9)
+            assert(f:drive()==0 and f.tool.rotateCount==1)
+        end
         """)
 
     def test_bulb_gains_a_little_more_crossing_distance(self):

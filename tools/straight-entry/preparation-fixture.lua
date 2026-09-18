@@ -4,6 +4,7 @@ package.path = ROOT .. '/scripts/ai/controllers/?.lua;' .. package.path
 require('ImplementController')
 require('PlowController')
 CpUtil.debugImplement=function() end
+g_updateLoopIndex=0
 AIUtil.hasAIImplementWithSpecialization=function() return false end
 SowingMachine={}
 VehicleStateChange={AI_START_LINE=1}
@@ -24,6 +25,15 @@ function preparationFixture(speed, side, enabled)
     end
     function tool:aiImplementStartLine() self.lowerCount=self.lowerCount+1 end
     local directionNode={x=0,z=-14,t=0}
+    -- Separate the drawbar pivot frames from the angled working frame.
+    tool.drawbarNode={x=0,z=-15,t=0}
+    tool.hitchNode=directionNode
+    tool.components={{node=tool.rootNode},{node=tool.drawbarNode},{node=tool.hitchNode}}
+    tool.componentJoints={{jointNode=tool.drawbarNode,componentIndices={2,3},rotLimit={0,math.pi/2,0}}}
+    function tool:getActiveInputAttacherJoint() return {rootNode=self.hitchNode} end
+    ImplementUtil.findJointNodeConnectingToNode=function(object)
+        return object.drawbarNode,{object.drawbarNode},{{0,math.pi/2,0}}
+    end
     local vehicle={lastSpeed=speed/3600,getLastSpeed=function() return speed end,
         getAIDirectionNode=function() return directionNode end,
         getCpSettings=function() return settings end,getChildVehicles=function() return {tool} end,

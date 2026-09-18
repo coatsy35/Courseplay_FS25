@@ -145,6 +145,43 @@ function PlowController:onLowering()
     end
 end
 
+--- Check the steering pivot, not the working frame: multi-component ploughs
+--- can have a permanent frame angle on either working side.
+function PlowController:isDrawbarAlignedForRotation()
+    local tool = self.implement
+    local function aligned(a, b)
+        local x, _, z = localDirectionToLocal(a, b, 0, 0, 1)
+        local angle = math.abs(math.atan2(x, z))
+        if angle >= math.rad(10) then
+            self:debugSparse('Waiting for drawbar alignment before turnover: %.1f degrees (limit 10)', math.deg(angle))
+            return false
+        end
+        return true
+    end
+    local input = tool.getActiveInputAttacherJoint and tool:getActiveInputAttacherJoint()
+    if input and input.rootNode and tool.components and tool.componentJoints then
+        local _, nodes, limits = ImplementUtil.findJointNodeConnectingToNode(tool, input.rootNode, tool.rootNode)
+        local checked = false
+        for i, node in ipairs(nodes or {}) do
+            if limits and limits[i] and math.abs(limits[i][2] or 0) > math.rad(5) then
+                for _, joint in ipairs(tool.componentJoints) do
+                    if joint.jointNode == node then
+                        local a, b = tool.components[joint.componentIndices[1]], tool.components[joint.componentIndices[2]]
+                        if not a or not b or not aligned(a.node, b.node) then
+                            return false
+                        end
+                        checked = true
+                    end
+                end
+            end
+        end
+        if checked then return aligned(input.rootNode, self.vehicle:getAIDirectionNode()) end
+    end
+    -- Single-component trailers have their yaw pivot at the tractor coupling.
+    local node = tool.steeringAxleNode or tool.rootNode
+    return aligned(node, self.vehicle:getAIDirectionNode())
+end
+
 --- This is called in every loop when we approach the start of the row, the location where
 --- the plow must be lowered. Currently the WorkStarter takes care of the lowering,
 --- here we only make sure that the plow is rotated to the work position (from the center position)
@@ -161,14 +198,10 @@ function PlowController:onTurnEndProgress(workStartNode, reversing, shouldLower,
         if CpMathUtil.isSameDirection(self.implement.rootNode, workStartNode, 30) or shouldLower then
             if self.towed then
                 -- let towed plows remain in the center position while reversing to the start of the row
-                -- Finish steering onto the row before the animation pause.
-                -- The plough root can remain angled relative to the tractor
-                -- (especially on multi-component ploughs); requiring those two
-                -- frames to match consumes the straight approach on one side.
-                -- Retain CP's implement-to-row check above, and use the tractor
-                -- heading only to delay turnover until it leaves the bulb.
+                -- Keep moving to straighten the drawbar before the animation
+                -- pause; tractor-to-row alignment alone does not establish this.
                 if not reversing and CpMathUtil.isSameDirection(self.vehicle:getAIDirectionNode(),
-                        workStartNode, 5) then
+                        workStartNode, 5) and self:isDrawbarAlignedForRotation() then
                     self:debug('Rotating towed plow to working position on straight entry (left %s).', tostring(shouldBeOnTheLeft))
                     self.implement:setRotationMax(shouldBeOnTheLeft)
                 end
