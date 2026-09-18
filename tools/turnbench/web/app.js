@@ -142,6 +142,7 @@ $("show-clearance").onchange = () => {
   draw();
 };
 let configuring = false;
+let configurationStarted = 0;
 $("whole-field").onchange = () => { fit(); draw(); };
 function refreshConfiguration() {
   const dirty = JSON.stringify(scenario()) !== preparedConfiguration;
@@ -150,7 +151,7 @@ function refreshConfiguration() {
     $(id).disabled =
       !result || dirty || configuring || Boolean(selected()?.preview);
   $("configuration-status").textContent = configuring
-    ? "Preparing configuration…"
+    ? `Preparing the full simulation — ${Math.floor((performance.now() - configurationStarted) / 1000)} s elapsed. Full fields can take a minute or more; playback becomes available when ready.`
     : !result
       ? "Set your configuration to prepare a run."
       : dirty
@@ -164,7 +165,13 @@ function refreshConfiguration() {
           : selected()?.preview
             ? "Configuration set. This view is a static preview."
             : "Configuration ready — press Start run below the field.";
+  // Keep the reason beside playback as well as in the fixed sidebar footer.
+  // Otherwise a changed setting looks like a stalled run when Play is disabled.
+  $("playback-status").textContent = $("configuration-status").textContent;
+  $("apply-configuration").hidden = configuring || !dirty;
+  $("run").setAttribute("aria-busy", String(configuring));
 }
+$("apply-configuration").onclick = () => $("settings").requestSubmit();
 function icons() {
   lucide.createIcons({ attrs: { "stroke-width": 1.6 } });
 }
@@ -282,8 +289,11 @@ async function run(event) {
   }
   if (!$("settings").reportValidity()) return;
   const configuration = JSON.stringify(scenario());
+  if (configuring) return;
+  configurationStarted = performance.now();
   configuring = true;
   refreshConfiguration();
+  const progressTimer = setInterval(refreshConfiguration, 1000);
   setPlaying(false);
   $("run").disabled = true;
   $("error").hidden = true;
@@ -335,6 +345,7 @@ async function run(event) {
     $("error").hidden = false;
     $("state").textContent = "Run failed";
   } finally {
+    clearInterval(progressTimer);
     configuring = false;
     refreshConfiguration();
     $("run").disabled = false;

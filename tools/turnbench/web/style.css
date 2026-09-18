@@ -71,6 +71,16 @@ button:disabled {
 #run:disabled {
   cursor: wait;
 }
+.playback-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 12px;
+  font-size: 12px;
+}
+.playback-notice button {
+  flex-shrink: 0;
+}
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
