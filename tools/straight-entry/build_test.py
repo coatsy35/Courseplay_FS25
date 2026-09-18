@@ -11,8 +11,8 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 NAME = 'FS25_Courseplay_StraightEntryTest.zip'
-VERSION = '8.1.0.304'
-TITLE = 'CoursePlay - Straight Entry + Loop Test v0.16'
+VERSION = '8.1.0.305'
+TITLE = 'CoursePlay - Straight Entry + Loop Test v0.17'
 sys.dont_write_bytecode = True
 
 
@@ -44,6 +44,7 @@ def build(output):
                       'scripts/ai/turns/HeadlandLoopGeometry.lua',
                       'scripts/ai/strategies/AIDriveStrategyDriveToFieldWorkStart.lua',
                       'scripts/ai/util/FieldworkBoundary.lua',
+                      'scripts/courseGenerator/FieldworkCourse.lua', 'scripts/courseGenerator/HeadlandConnector.lua',
                       'scripts/pathfinder/PathfinderConstraints.lua', 'scripts/pathfinder/PathfinderUtil.lua'})
     unexpected = [n for n in changed if (n.startswith(('scripts/', 'config/')) or n == 'Courseplay.lua') and n not in permitted]
     if unexpected:

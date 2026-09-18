@@ -172,6 +172,124 @@ class EntryTests(unittest.TestCase):
                 self.assertAlmostEqual(end.x,coords[2][0])
                 self.assertAlmostEqual(end.z,coords[2][1])
 
+    def test_full_center_first_generator_connects_final_row_forward(self):
+        self.lua.execute("""
+        package.path=ROOT..'/scripts/courseGenerator/geometry/?.lua;'..
+            ROOT..'/scripts/courseGenerator/genetic/?.lua;'..ROOT..'/scripts/test/?.lua;'..package.path
+        local attributes=CourseGenerator.WaypointAttributes
+        require('CourseGenerator')
+        CourseGenerator.WaypointAttributes=attributes
+        dofile(ROOT..'/scripts/courseGenerator/test/require.lua')
+        Logger.debug=function() end; Logger.info=function() end; Logger.warning=function() end
+        for _, clockwise in ipairs({false,true}) do
+        for _, count in ipairs({1,3,6}) do
+            local boundary=Polygon({{x=0,y=0},{x=250,y=0},{x=250,y=300},{x=0,y=300}})
+            local field=CourseGenerator.Field('test',1,boundary)
+            local context=CourseGenerator.FieldworkContext(field,4,9,count)
+            context:setHeadlandFirst(false)
+            context.headlandClockwise=clockwise
+            context:setBypassIslands(false)
+            context.autoRowAngle=false; context.rowAngle=math.rad(20)
+            local course=CourseGenerator.FieldworkCourse(context)
+            local blocks=course.center:getBlocks()
+            local row=blocks[#blocks]:getLastRow()
+            local a,b=row[#row-1],row[#row]
+            local p=course:getHeadlandPath()[1]
+            local dx,dy=b.x-a.x,b.y-a.y
+            local ex,ey=p.x-b.x,p.y-b.y
+            assert(math.abs(dx*ey-dy*ex)<0.001, 'headland connection is not collinear')
+            assert(dx*ex+dy*ey>=-0.001, 'headland connection goes backwards')
+            assert(course.center.path==nil, 'headland connection prematurely cached the centre path')
+            assert(#course:getPath()>#row)
+        end
+        end
+        """)
+
+    def load_headland_connector(self):
+        self.lua.execute("""
+        package.path=ROOT..'/scripts/courseGenerator/geometry/?.lua;'..package.path
+        require('WrapAroundIndex'); require('Vertex'); require('LineSegment'); require('Polyline'); require('Polygon')
+        require('HeadlandConnector')
+        function connectRow(poly, row, directed)
+            local polygon=Polygon(poly)
+            local originalLength=polygon:getLength()
+            local headland={polygon=polygon,getPolygon=function(self) return self.polygon end,
+                getPath=function(self) return self.polygon end}
+            local result=CourseGenerator.HeadlandConnector.connectHeadlandsFromInside(
+                {headland},Vector(row[#row].x,row[#row].y),4,9,directed and row or nil)
+            return result, originalLength
+        end
+        """)
+
+    def test_row_headland_intersection_replaces_nearest_vertex_without_changing_coverage(self):
+        self.load_headland_connector()
+        for side in [-1, 1]:
+            for angle in [0, .7, math.pi/2, 3.4]:
+                def points(coords):
+                    return self.lua.table_from([self.lua.table_from(dict(
+                        x=side*x*math.cos(angle)-y*math.sin(angle),
+                        y=side*x*math.sin(angle)+y*math.cos(angle))) for x,y in coords])
+                polygon=points([(-10,-20),(10,-20),(10,5),(-10,15)])
+                row=points([(0,-5),(0,0)])
+                path,length=self.lua.globals().connectRow(polygon,row,True)
+                expected=points([(0,10)])[1]
+                self.assertAlmostEqual(path[1].x,expected.x)
+                self.assertAlmostEqual(path[1].y,expected.y)
+                self.assertEqual(len(path),6) # split edge, then close the single headland
+                self.assertAlmostEqual(path.getLength(path),length)
+                self.assertAlmostEqual(path[len(path)].x,path[1].x)
+                self.assertAlmostEqual(path[len(path)].y,path[1].y)
+                old,_=self.lua.globals().connectRow(polygon,row,False)
+                self.assertGreater(math.hypot(old[1].x-path[1].x,old[1].y-path[1].y),1)
+
+    def test_headland_projection_uses_first_exit_and_keeps_fallbacks(self):
+        self.load_headland_connector()
+        self.lua.execute("""
+        local C=CourseGenerator.HeadlandConnector
+        local square=function() return Polygon({{x=-10,y=-10},{x=10,y=-10},{x=10,y=10},{x=-10,y=10}}) end
+        local p=square()
+        assert(C.getForwardRowIntersection(p,{{x=0,y=0},{x=5,y=5}})==3)
+        assert(#p==4) -- exact vertex, no duplicates
+        p=square()
+        local ix=C.getForwardRowIntersection(p,{{x=0,y=0},{x=0,y=-1}})
+        assert(p[ix].x==0 and p[ix].y==-10) -- closing/lower edge
+        assert(C.getForwardRowIntersection(square(),{{x=0,y=12},{x=0,y=13}})==nil)
+        assert(C.getForwardRowIntersection(square(),{{x=0,y=12},{x=0,y=11}})==nil)
+        assert(C.getForwardRowIntersection(square(),{{x=0,y=0},{x=0,y=0}})==nil)
+        assert(C.getForwardRowIntersection(square(),{{x=0,y=0}})==nil)
+        p=Polygon({{x=-10,y=-10},{x=10,y=-10},{x=10,y=20},{x=2,y=20},
+            {x=2,y=5},{x=-2,y=5},{x=-2,y=20},{x=-10,y=20}})
+        ix=C.getForwardRowIntersection(p,{{x=0,y=-5},{x=0,y=0}})
+        assert(p[ix].x==0 and p[ix].y==5) -- first exit, not a distant lobe
+        p=square()
+        p[3]:getAttributes():setIslandBypass(true)
+        assert(C.getForwardRowIntersection(p,{{x=0,y=-1},{x=0,y=0}})==nil)
+        assert(#p==4)
+        p=square()
+        local origin=Vertex(0,0)
+        origin.getAttributes=function() return {_getAtIsland=function() return {} end} end
+        assert(C.getForwardRowIntersection(p,{{x=0,y=-1},origin})==nil)
+        assert(#p==4)
+
+        """)
+
+    def test_saved_jd_transition_has_forward_collinear_connection(self):
+        self.load_headland_connector()
+        # Saved JD row end and adjacent headland edge from savegame18.
+        self.lua.execute("""
+        local row={{x=-42.74,y=-324.25},{x=-63.14,y=-208.59}}
+        local polygon=Polygon({{x=-61.4,y=-207.51},{x=-65.71,y=-206.82},
+            {x=-64.69,y=-213.18},{x=-40,y=-330},{x=-20,y=-330}})
+        local ix=CourseGenerator.HeadlandConnector.getForwardRowIntersection(polygon,row)
+        assert(ix)
+        local p=polygon[ix]
+        local dx,dy=row[2].x-row[1].x,row[2].y-row[1].y
+        local ex,ey=p.x-row[2].x,p.y-row[2].y
+        assert(math.abs(dx*ey-dy*ex)<0.0001)
+        assert(dx*ex+dy*ey>0)
+        assert(p.x < -61.4 and p.x > -65.71)
+        """)
+
     def course(self, **overrides):
         p = dict(side=1, pike=.8, length=12.5, duration=1000,
                  speed=20, room=24, enabled=True)

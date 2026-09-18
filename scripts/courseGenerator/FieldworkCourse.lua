@@ -37,9 +37,11 @@ function FieldworkCourse:init(context)
         -- here, make the center first as we want to start on the headlands where the center was finished
         self.logger:debug('### Generating up/down rows ###')
         local endOfLastRow = self:generateCenter()
+        local blocks = self.center:getBlocks()
+        local lastRow = #blocks > 0 and blocks[#blocks]:getLastRow() or nil
         self.logger:debug('### Connecting headlands (%d) from the inside towards the outside ###', #self.headlands)
         self.headlandPath = CourseGenerator.HeadlandConnector.connectHeadlandsFromInside(self.headlands,
-                endOfLastRow, self:_getHeadlandWorkingWidth(), self.context.turningRadius)
+                endOfLastRow, self:_getHeadlandWorkingWidth(), self.context.turningRadius, lastRow)
         self:routeHeadlandsAroundSmallIslands(self.headlandPath)
     end
 
