@@ -72,6 +72,7 @@ function FieldworkCourseMultiVehicle:init(context)
         self:routeHeadlandsAroundBigIslands()
     end
 
+    local endOfLastRow
     if self.context.headlandFirst then
         -- connect the headlands first as the center needs to start where the headlands finish
         self.logger:debug('### Connecting headlands (%d) from the outside towards the inside ###', #self.headlands)
@@ -87,15 +88,7 @@ function FieldworkCourseMultiVehicle:init(context)
     else
         -- here, make the center first as we want to start on the headlands where the center was finished
         self.logger:debug('### Generating up/down rows ###')
-        local endOfLastRow = self:generateCenter()
-        self.logger:debug('### Connecting headlands (%d) from the inside towards the outside ###', #self.headlands)
-        for v = 1, self.context.nVehicles do
-            -- create a headland path for each vehicle
-            self.headlandPaths[v] = CourseGenerator.HeadlandConnector.connectHeadlandsFromInside(self.headlandsForVehicle[v],
-            -- TODO is this really the headland working width? Not the combined width?
-                    endOfLastRow, self:_getHeadlandWorkingWidth(), self.context.turningRadius)
-            self:routeHeadlandsAroundSmallIslands(self.headlandPaths[v])
-        end
+        endOfLastRow = self:generateCenter()
     end
 
     if self.context.bypassIslands then
@@ -103,6 +96,19 @@ function FieldworkCourseMultiVehicle:init(context)
     end
 
     self:_generateCenterForAllVehicles()
+
+    if not self.context.headlandFirst then
+        self.logger:debug('### Connecting headlands (%d) from the inside towards the outside ###', #self.headlands)
+        for v = 1, self.context.nVehicles do
+            -- Use the actual offset lane after row adjustments and island bypasses.
+            -- Headland order reverses relative to centre lanes when counter-clockwise.
+            local centerIx = self.context.headlandClockwise and v or self.context.nVehicles - v + 1
+            local approach = self.centerPaths[centerIx]
+            self.headlandPaths[v] = CourseGenerator.HeadlandConnector.connectHeadlandsFromInside(self.headlandsForVehicle[v],
+                    endOfLastRow, self:_getHeadlandWorkingWidth(), self.context.turningRadius, approach)
+            self:routeHeadlandsAroundSmallIslands(self.headlandPaths[v])
+        end
+    end
 
     if self.context.bypassIslands then
         self.logger:debug('### Bypassing big islands in the center: create path around them ###')

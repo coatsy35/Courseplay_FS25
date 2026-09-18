@@ -56,6 +56,7 @@ PathfinderConstraints = CpObject(PathfinderConstraintInterface)
 function PathfinderConstraints:init(context)
     self.logger = Logger('PathfinderConstraints', Logger.level.debug, CpDebug.DBG_PATHFINDER)
     self.vehicle = context._vehicle
+    self.fieldworkBoundary = context._fieldworkBoundary
     self.turnRadius = AIUtil.getTurningRadius(context._vehicle) or 10
     self.vehicleData = PathfinderUtil.VehicleData(context._vehicle, true, 0.25)
     self.trailerHitchLength = AIUtil.getTowBarLength(context._vehicle) or 3
@@ -195,6 +196,9 @@ end
 ---@param ignoreTrailer boolean don't check the trailer
 ---@param offFieldValid boolean consider nodes well off the field valid even in strict mode
 function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid)
+    if not FieldworkBoundary.contains(self.fieldworkBoundary, node.x, -node.y) then
+        return false
+    end
     if not offFieldValid and self.strictMode then
         if not CpFieldUtil.isOnField(node.x, -node.y) then
             return false

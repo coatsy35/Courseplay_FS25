@@ -3,6 +3,49 @@
 ---@class HeadlandConnector
 local HeadlandConnector = {}
 
+--- Split the first headland edge met by the final row's forward ray. Choosing
+--- a vertex by distance can pull the connection sideways before the row ends.
+--- Return nil for ambiguous/outward approaches and retain the stock fallback.
+function HeadlandConnector.getForwardRowIntersection(polygon, approach)
+    if not approach or #approach < 2 or #polygon < 3 then return nil end
+    local a, origin = approach[#approach - 1], approach[#approach]
+    if origin.getAttributes and origin:getAttributes():_getAtIsland() then return nil end
+    local dx, dy = origin.x - a.x, origin.y - a.y
+    local length = math.sqrt(dx * dx + dy * dy)
+    if length < 0.001 then return nil end
+    dx, dy = dx / length, dy / length
+    local best, bestDistance, bestU = nil, math.huge, nil
+    local tolerance = 0.0001
+    for i = 1, #polygon do
+        local p, q = polygon[i], polygon:at(i + 1)
+        local ex, ey = q.x - p.x, q.y - p.y
+        local denominator = dx * ey - dy * ex
+        if math.abs(denominator) > tolerance then
+            local px, py = p.x - origin.x, p.y - origin.y
+            local distance = (px * ey - py * ex) / denominator
+            local u = (px * dy - py * dx) / denominator
+            if distance >= -tolerance and u >= -tolerance and u <= 1 + tolerance and distance < bestDistance then
+                best, bestDistance, bestU = i, math.max(0, distance), math.max(0, math.min(1, u))
+            end
+        end
+    end
+    if not best then return nil end
+    -- Never cross a concavity to reach another part of the headland when the
+    -- adjusted row end has already passed outside this polygon.
+    if bestDistance > tolerance and not polygon:isVectorInside(origin) then return nil end
+    local p, q = polygon[best], polygon:at(best + 1)
+    if p:getAttributes():isIslandBypass() or q:getAttributes():isIslandBypass() then return nil end
+    local edgeLength = math.sqrt((q.x-p.x)^2 + (q.y-p.y)^2)
+    if bestU * edgeLength <= tolerance then return best end
+    if (1-bestU) * edgeLength <= tolerance then return polygon:getRawIndex(best + 1) end
+    local vertex = Vertex(origin.x + dx * bestDistance, origin.y + dy * bestDistance)
+    vertex:setAttributes(p:getAttributes())
+    vertex:getAttributes():setHeadlandTurn(false)
+    table.insert(polygon, best + 1, vertex)
+    polygon:calculateProperties()
+    return best + 1
+end
+
 ---@param headlands CourseGenerator.Headland[] array of headland passes, the first being the closest to the boundary (so for a field,
 --- index 1 is the outermost headland pass, for an island, index 1 is the innermost)
 ---@param startLocation Vector|number will start working on the outermost headland as close as possible to
@@ -44,14 +87,18 @@ end
 ---@param workingWidth
 ---@param turningRadius
 ---@return Polyline a continuous path covering all headland passes, starting with the innermost (fields)/outermost (islands)
-function HeadlandConnector.connectHeadlandsFromInside(headlands, startLocation, workingWidth, turningRadius)
+---@param approach Polyline|nil final row in working direction; omitted for stock nearest-vertex selection
+function HeadlandConnector.connectHeadlandsFromInside(headlands, startLocation, workingWidth, turningRadius, approach)
     local headlandPath = Polyline()
     if #headlands < 1 then
         return headlandPath
     end
-    local startIx = type(startLocation) == 'table' and
-            headlands[#headlands]:getPolygon():findClosestVertexToPoint(startLocation).ix or
-            startLocation
+    local startIx = HeadlandConnector.getForwardRowIntersection(headlands[#headlands]:getPolygon(), approach)
+    if not startIx then
+        startIx = type(startLocation) == 'table' and
+                headlands[#headlands]:getPolygon():findClosestVertexToPoint(startLocation).ix or
+                startLocation
+    end
     -- make life easy: make headland polygons always start where the transition to the next headland is.
     -- In _setContext() we already took care of the direction, so the headland is always worked in the
     -- increasing indices

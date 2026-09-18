@@ -53,6 +53,7 @@ TurnContext = CpObject()
 function TurnContext:init(vehicle, course, turnStartIx, turnEndIx, turnNodes, workWidth,
                           frontMarkerDistance, backMarkerDistance, turnEndSideOffset, turnEndForwardOffset)
     self.debugChannel = CpDebug.DBG_TURN
+    self.fieldWorkCourse = course
     self.workWidth = workWidth
     self.vehicle = vehicle
     --- Setting up turn waypoints
@@ -376,6 +377,52 @@ end
 ---@param extraLength number add so many meters to the calculated course (for example to allow towed implements to align
 --- before reversing)
 ---@return number length added to the course in meters
+function TurnContext:appendPathfinderEndingTurnCourse(course, extraLength)
+    -- A forward pathfinder approach ends on the corner tangent. Continue along
+    -- the real headland once that tangent reaches the turn-end waypoint.
+    if self.fieldWorkCourse and self:isHeadlandCorner() and course:isForwardOnly() then
+        local source = self.fieldWorkCourse
+        local x, _, z = source:getWaypointPosition(self.turnEndWpIx)
+        local dx, _, dz = course:getWaypointLocalPosition(self.turnEndWpNode.node, course:getNumberOfWaypoints())
+        if dz <= 0 and math.abs(dx) < self.workWidth / 2 then
+            local points = {}
+            local lx, _, lz = course:getWaypointPosition(course:getNumberOfWaypoints())
+            local distance = MathUtil.vector2Length(x - lx, z - lz)
+            for d = 1, math.ceil(distance) do
+                local t = math.min(1, d / distance)
+                points[#points + 1] = {x=lx + (x-lx)*t, z=lz + (z-lz)*t}
+            end
+            local wanted = math.max(1, self.frontMarkerDistance - self.backMarkerDistance + (extraLength or 0))
+            local stopAtJoin = source:isTurnStartAtIx(self.turnEndWpIx) or
+                    self.turnEndWpIx == source:getNumberOfWaypoints()
+            local travelled, curved = 0, stopAtJoin
+            local _, heading = getWorldRotation(self.turnEndWpNode.node)
+            for i = self.turnEndWpIx + 1, source:getNumberOfWaypoints() do
+                if stopAtJoin then break end
+                local nx, _, nz = source:getWaypointPosition(i)
+                points[#points + 1] = {x=nx, z=nz}
+                travelled = travelled + MathUtil.vector2Length(nx-x, nz-z)
+                if math.abs(CpMathUtil.getDeltaAngle(heading, math.atan2(nx-x, nz-z))) > math.rad(1) then
+                    curved = true
+                end
+                x, z = nx, nz
+                -- Preserve the next corner for the fieldwork strategy, even
+                -- when the implement is longer than this headland section.
+                if source:isTurnStartAtIx(i) then curved = true; break end
+                if travelled >= wanted then break end
+            end
+            if curved and #points > 0 then
+                local before = course:getLength()
+                course:appendWaypoints(points)
+                self:debug('Ending forward headland turn on actual course after waypoint %d', self.turnEndWpIx)
+                return course:getLength() - before
+            end
+        end
+    end
+
+    return self:appendEndingTurnCourse(course, extraLength)
+end
+
 function TurnContext:appendEndingTurnCourse(course, extraLength)
     -- make sure course reaches the front marker node so end it well behind that node
     local _, _, dzFrontMarker = course:getWaypointLocalPosition(self.vehicleAtTurnEndNode, course:getNumberOfWaypoints())
@@ -419,6 +466,27 @@ function TurnContext:createFinishingRowCourse(vehicle, workEndNode)
     return Course(vehicle, waypoints, true)
 end
 
+--- Limit only the part of a headland approach needed to lift the selected
+--- marker. The unused reserve at the end of the finishing course is irrelevant.
+---@return number|nil last safe distance along workEndNode, or nil when unrestricted
+function TurnContext:getHeadlandFinishLimit(vehicle, workEndNode, raiseLate)
+    if not self:isHeadlandCorner() then return nil end
+    local boundary = FieldworkBoundary.forVehicle(vehicle, self.workWidth)
+    if not boundary then return nil end
+    local marker = raiseLate and self.backMarkerDistance or self.frontMarkerDistance
+    local _, _, current = localToLocal(vehicle:getAIDirectionNode(), workEndNode, 0, 0, 0)
+    if current >= -marker then return nil end
+    local lastSafe = current
+    local steps = math.ceil((-marker - current) / 0.5)
+    for i = 0, steps do
+        local distance = math.min(-marker, current + i * 0.5)
+        local x, _, z = localToWorld(workEndNode, 0, 0, distance)
+        if not FieldworkBoundary.contains(boundary, x, z) then return lastSafe end
+        lastSafe = distance
+    end
+    return nil
+end
+
 --- How much space we have from node to the field edge (in the direction of the node)?
 ---@return number
 function TurnContext:getDistanceToFieldEdge(node)
@@ -451,7 +519,7 @@ end
 --- Assuming a vehicle just finished a row, provide parameters for calculating a path to the start
 --- of the next row, making sure that the vehicle and the implement arrives there aligned with the row direction
 ---@return number, number the node where the turn ends, z offset to use with the end node
-function TurnContext:getTurnEndNodeAndOffsets(steeringLength)
+function TurnContext:getTurnEndNodeAndOffsets(steeringLength, useStraightEntry)
     local turnEndNode, goalOffset
     if self.frontMarkerDistance > 0 then
         -- implement in front of vehicle. Turn should end with the implement at the work start position, this is where
@@ -476,7 +544,54 @@ function TurnContext:getTurnEndNodeAndOffsets(steeringLength)
             goalOffset = self.frontMarkerDistance + self.turnEndForwardOffset
         end
     end
+    if useStraightEntry ~= false and self.straightEntryDistance then
+        -- The target is the start of the straight, not the position where work begins.
+        -- Keep the stock marker/offset target if it already provides more room.
+        local vehicleAtWorkStart = turnEndNode == self.vehicleAtTurnEndNode and 0 or self.turnEndForwardOffset
+        goalOffset = math.min(goalOffset, vehicleAtWorkStart - self.straightEntryDistance)
+    end
+    if self.straightEntryDistance then
+        local boundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
+        if boundary then
+            local x, _, z = getWorldTranslation(turnEndNode)
+            goalOffset = FieldworkBoundary.fitOffset(boundary, x, z, CpMathUtil.getNodeDirection(turnEndNode), goalOffset)
+        end
+    end
     return turnEndNode, goalOffset
+end
+
+--- Reserve room for a trailed implement to settle before the normal lowering point.
+--- This is an approach allowance, not a prediction or a live alignment gate. Retain
+--- stock field fitting, reverse controls and lowering; do not apply it to startup
+--- waypoint selection or headland corners, which have their own coverage rules.
+function TurnContext:setStraightEntryDistance(steeringLength, loweringDurationMs, turnSpeed)
+    self.straightEntryDistance = nil
+    self.mountedStraightEntry = nil
+    self.entryLoweringDistance = nil
+    if self:isHeadlandCorner() then
+        return
+    end
+    local settlingDistance, loweringDistance = TurnContext.getStraightEntryAllowance(steeringLength, loweringDurationMs,
+            turnSpeed, steeringLength <= 0 and AIUtil.getTurningRadius(self.vehicle) or nil)
+    self.straightEntryDistance = settlingDistance + loweringDistance
+    self.entryLoweringDistance = loweringDistance
+    if steeringLength <= 0 then
+        self.mountedStraightEntry = true
+    end
+    self:debug('Straight entry: steering length %.1f, settling allowance %.1f, lowering allowance %.1f',
+            steeringLength, settlingDistance, loweringDistance)
+end
+
+--- Shared by row turns and initial approaches; does not select a course waypoint.
+function TurnContext.getStraightEntryAllowance(steeringLength, loweringDurationMs, turnSpeed, turningRadius)
+    -- A passive trailer pulled straight from 90 degrees to stock CP's 5-degree
+    -- alignment tolerance needs L * log(tan(45) / tan(2.5)). Use this as a
+    -- conservative allowance with CP's measured steering length, not a new
+    -- vehicle dynamics model. Actual field space is still handled by stock CP.
+    local settlingDistance = steeringLength > 0 and steeringLength * math.log(1 / math.tan(math.rad(2.5)))
+            or (turningRadius or 0) / 2
+    local loweringDistance = math.max(0, turnSpeed) / 3600 * math.max(0, loweringDurationMs) + 0.5
+    return settlingDistance, loweringDistance
 end
 
 ---@return string|nil id of the boundary for this turn

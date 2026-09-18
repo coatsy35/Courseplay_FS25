@@ -108,6 +108,9 @@ end
 local function controller(animationTime, rotating, towed)
     local requests = {}
     local result = setmetatable({
+        -- Planar engine boundary: the coupling and tractor are aligned here;
+        -- drawbar articulation itself is covered by the straight-entry suite.
+        vehicle = { getAIDirectionNode = function() return 0 end },
         plowSpec = { rotationPart = { turnAnimation = 'turn' } },
         implement = {
             getAnimationTime = function() return animationTime end,
@@ -119,6 +122,7 @@ local function controller(animationTime, rotating, towed)
         towed = towed,
         debug = function() end
     }, PlowController)
+    localDirectionToLocal = function() return 0, 0, 1 end
     return result, requests
 end
 
