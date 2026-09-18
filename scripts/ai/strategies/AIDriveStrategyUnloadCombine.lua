@@ -92,7 +92,7 @@ AIDriveStrategyUnloadCombine.maxDirectionDifferenceDeg = 35 -- under this angle 
 AIDriveStrategyUnloadCombine.driveToCombineCourseExtensionLength = 10
 AIDriveStrategyUnloadCombine.targetDistanceBehindChopper = 1
 -- Keep the unloader's nearest edge clear of the chopper header when driving alongside it.
-AIDriveStrategyUnloadCombine.chopperHeaderClearance = 2
+AIDriveStrategyUnloadCombine.chopperHeaderClearance = 1.5
 
 -- Developer hack: to check the class of an object one should use the is_a() defined in CpObject.lua.
 -- However, when we reload classes on the fly during the development, the is_a() calls in other modules still
