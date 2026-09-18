@@ -126,5 +126,3 @@ function fixture(p)
     context.debug=function() end
     return vehicle,context,drill,cart
 end
-
-
