@@ -218,3 +218,32 @@ changes; that is not an in-game timing guarantee. The runtime search budget is
 
 All source and extracted-ZIP checks are required for this combined release.
 Keep the same StraightEntryTest mod identity in its separate numbered folder.
+
+
+## Checked fieldwork handover - combined test 8.1.0.314
+
+The 21:54:03 log of 8.1.0.313 shows a successful live alignment followed by
+"implements lowered, resume fieldwork". The stop came afterwards: the merged
+straight-entry guard searched only ten waypoints beyond 476 and could not find
+one ahead. This is a separate fault from the earlier cart-alignment stop.
+Search time in that run was about 11 seconds, versus 21.5 seconds in 8.1.0.312.
+
+The loop now supplies a continuation waypoint found by physical distance within
+its checked return, rather than relying on ten waypoint indices. It does not
+search across another corner, reversal, backwards progress or a departing row.
+The saved outgoing headland reproduces the old failure and verifies the new
+continuation beyond the ten-waypoint window.
+
+Once the drill is aligned and has finished lowering, the turn can hand back
+without waiting for the cart to reach five degrees if the outgoing fieldwork
+course covers the settling reserve. Before doing so it checks live body
+positions, independent hitch angles, clearance and boundary, then simulates the
+actual outgoing course from those headings. This matters because the saved
+headland bends gently away from the temporary straight. Another regression
+checks earlier continuation with a four-degree drill and a trailing cart, and
+rejects unaligned working tools, excessive articulation and an intervening corner.
+
+This removes unnecessary temporary-course travel after the drill is ready.
+It does not relocate the loop or its work-start line, and does not fix the
+remaining late-lowering coverage gap. The inward loop and five-degree drill
+lowering gate remain. Live performance and crop coverage still need testing.

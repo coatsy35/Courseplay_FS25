@@ -341,6 +341,9 @@ end
 
 --- Give back control the the drive strategy
 function AITurn:resumeFieldworkAfterTurn(ix)
+    if self.turnCourse and self.turnCourse.chainReturn and not self.callbackFunction then
+        ix = HeadlandLoopGeometry.getContinuation(self.vehicle, self.driveStrategy.fieldWorkCourse, ix, self.turnCourse) or ix
+    end
     -- just in case, raise this event so plows are rotated to the working position. Should really never end up
     -- here though, as the course should be long enough for the normal turn end processing to be triggered.
     self.driveStrategy:raiseControllerEvent(AIDriveStrategyCourse.onTurnEndProgressEvent,
@@ -643,9 +646,11 @@ function CourseTurn:endTurn(dt)
             if dz and dz > -implementCheckDistance then
                 if self.driveStrategy:getCanContinueWork() then
                     if self.turnCourse and self.turnCourse.chainReturn and
-                            not HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode) then
-                        -- Keep moving along the checked straight after the
-                        -- drill has finished lowering, until the cart settles.
+                            not HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode) and
+                            not HeadlandLoopGeometry.canContinueOnCheckedRow(self.vehicle, self.driveStrategy.fieldWorkCourse,
+                                self.turnContext.turnEndWpIx, self.turnCourse) then
+                        -- Keep the temporary return only when the fieldwork
+                        -- course cannot safely continue the same straight.
                         return true
                     end
                     self:debug("implements lowered, resume fieldwork")

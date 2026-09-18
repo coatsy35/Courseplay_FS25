@@ -174,7 +174,7 @@ function G.detect(vehicle)
             local drawbarBody = {left = 0.75, right = -0.75,
                 front = drawbarLength + 0.25, back = -0.25, virtual = true}
             addLink(model, {length = drawbarLength, hitch = hitch,
-                heading = heading(joint.rootNode), node = joint.rootNode, internal = true,
+                heading = heading(joint.rootNode), node = joint.rootNode, positionNode = pivot, internal = true,
                 maxArticulation = hitchLimit}, drawbarBody, false)
             addLink(model, {length = axleLength, hitch = 0,
                 heading = heading(axle), node = axle, internal = true,
@@ -549,6 +549,77 @@ function G.isAligned(vehicle, targetNode)
     return true
 end
 
+--- Resolve the continuation by physical distance along the checked return,
+--- not a fixed number of fieldwork waypoints. Never search across another turn.
+--- The second result says the fieldwork line covers the entire settling reserve.
+function G.getContinuation(vehicle, course, ix, turnCourse)
+    if not course or not turnCourse or not turnCourse.chainReturn then return nil, false end
+    local r = turnCourse.chainReturn
+    local ex, _, ez = turnCourse:getWaypointPosition(turnCourse:getNumberOfWaypoints())
+    local endDistance = (ex - r.x) * math.sin(r.t) + (ez - r.z) * math.cos(r.t)
+    local node, nextIx = vehicle:getAIDirectionNode(), nil
+    local tolerance = r.model and r.model.width / 4 or .5
+    local previousAlong = -math.huge
+    for i = ix, course:getNumberOfWaypoints() do
+        if course:isTurnStartAtIx(i) or course:isReverseAt(i) then return nextIx, false end
+        local x, _, z = course:getWaypointPosition(i)
+        local side = (x - r.x) * math.cos(r.t) - (z - r.z) * math.sin(r.t)
+        local along = (x - r.x) * math.sin(r.t) + (z - r.z) * math.cos(r.t)
+        if along < previousAlong or math.abs(side) > tolerance or math.abs(delta(course:getWaypointYRotation(i), r.t)) > math.rad(15) then
+            return nextIx, false
+        end
+        previousAlong = along
+        local dx, _, dz = worldToLocal(node, x, 0, z)
+        if not nextIx and dz > 1 and math.abs(dx) < tolerance and along <= endDistance + .5 then nextIx = i end
+        if along >= endDistance then return nextIx, nextIx ~= nil, i end
+    end
+    return nextIx, false
+end
+
+--- Cart alignment need not delay working on the very same validated straight.
+--- Require its full reserve to exist on the fieldwork course, and verify actual
+--- physical positions, hitch limits and working-body headings before handover.
+function G.canContinueOnCheckedRow(vehicle, course, ix, turnCourse)
+    local r = turnCourse and turnCourse.chainReturn
+    if not r or not r.model or not r.boundary then return false, 'missing model' end
+    local nextIx, covered, lastIx = G.getContinuation(vehicle, course, ix, turnCourse)
+    if not nextIx or not covered or not G.isOnReturn(vehicle, r) then return false, 'continuation corridor' end
+    local model, poses = r.model, {}
+    local node = vehicle:getAIDirectionNode()
+    local x, _, z = getWorldTranslation(node)
+    poses[1] = {x = x, z = z, t = heading(node)}
+    for i, link in ipairs(model.links) do
+        local x, _, z = getWorldTranslation(link.positionNode or link.node)
+        poses[i + 1] = {x = x, z = z, t = heading(link.node)}
+    end
+    for i, pose in ipairs(poses) do
+        local body = model.bodies[i]
+        if body.working and math.abs(delta(pose.t, r.t)) > G.alignmentTolerance then return false, 'working body heading' end
+        if i > 1 and math.abs(delta(pose.t, poses[i - 1].t)) >
+                (model.links[i - 1].maxArticulation or G.maxArticulation) then return false, 'live articulation' end
+        if not G.bodyFits(body, pose, r.boundary) then return false, 'live field boundary' end
+        for j = 1, i - 1 do
+            if G.bodiesOverlap(model.bodies[j], poses[j], body, pose) then return false, 'live clearance' end
+        end
+    end
+    -- The real headland can bend slightly within that corridor. Validate its
+    -- actual points from the measured current pose, rather than assuming it is
+    -- identical to the temporary straight. The distance is bounded by the
+    -- reserved return and the search above cannot cross another corner.
+    local live = {root = poses[1], bodies = model.bodies, links = {}}
+    for i, link in ipairs(model.links) do
+        live.links[i] = table.clone(link)
+        live.links[i].heading = poses[i + 1].t
+    end
+    local path = {}
+    for i = nextIx, lastIx do
+        local x, _, z = course:getWaypointPosition(i)
+        path[#path + 1] = {x = x, y = -z}
+    end
+    local continuation = G.createCandidate(node, .5, path)
+    return G.validate(live, continuation, r.boundary, 1, node, 0)
+end
+
 function G.validate(model, course, boundary, entryIx, alignmentNode, loweringDistance)
     local validator = G.createValidator(model, course, boundary, entryIx, alignmentNode, loweringDistance)
     while true do
@@ -743,7 +814,7 @@ function G.createSearch(maneuver, model, loweringDistance)
                 end
                 local x, _, z = self.pending:getWaypointPosition(self.entryIx)
                 self.pending.chainReturn = {x = x, z = z, t = heading(maneuver.turnContext.vehicleAtTurnEndNode),
-                    lateralTolerance = (returnData and returnData.entryLateral or 0) + .5}
+                    lateralTolerance = (returnData and returnData.entryLateral or 0) + .5, model = model, boundary = boundary}
                 -- Descriptors are ordered by route length, so stop at the first
                 -- validated solution. This is a bounded search, not a global optimum.
                 self.course = self.pending

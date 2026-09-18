@@ -338,6 +338,78 @@ class LoopTests(unittest.TestCase):
             end
         """)
 
+    def test_checked_row_handover_uses_distance_and_validates_live_cart(self):
+        self.lua.execute("""
+            local G=HeadlandLoopGeometry
+            local field={{x=-100,z=-100},{x=100,z=-100},{x=100,z=150},{x=-100,z=150}}
+            local v,c,d,cart=fixture({internal=true,field=field})
+            local model=assert(G.detect(v))
+            local turn=Course.createFromNode(v,v.rootNode,0,0,60,1,false)
+            turn.chainReturn={x=0,z=0,t=0,model=model,boundary=G.getBoundary(v)}
+            local row=Course.createFromNode(v,v.rootNode,0,-30,70,.5,false)
+            local ix,covered=G.getContinuation(v,row,1,turn)
+            assert(ix>10 and covered, 'dense waypoints blocked a valid forward continuation')
+            local resumed
+            AIDriveStrategyCourse={onTurnEndProgressEvent=1}
+            local strategy={fieldWorkCourse=row,raiseControllerEvent=function() end,
+                resumeFieldworkAfterTurn=function(_,startIx)
+                    local actual,found=row:getNextFwdWaypointIxFromVehiclePosition(startIx,v.rootNode,12.8,10)
+                    assert(found and actual==ix, 'merged ten-waypoint search still stopped')
+                    resumed=actual
+                end}
+            local t=setmetatable({vehicle=v,turnContext=c,turnCourse=turn,driveStrategy=strategy,
+                ppc={isReversing=function() return false end,restorePreviouslyRegisteredListeners=function() end}},CourseTurn)
+            t.getLowerImplementNode=function() return c.workStartNode end
+            t:resumeFieldworkAfterTurn(1)
+            assert(resumed==ix, 'turn did not supply its checked continuation index')
+            cart.rootNode.t=math.rad(12);cart.joint.rootNode.t=math.rad(8)
+            assert(not G.isAligned(v,v.rootNode))
+            assert(G.canContinueOnCheckedRow(v,row,1,turn), 'safe straight work waited for the trailing cart')
+            d.rootNode.t=math.rad(9)
+            assert(not G.canContinueOnCheckedRow(v,row,1,turn), 'working drill was not aligned')
+            d.rootNode.t=0;cart.rootNode.t=math.rad(80)
+            assert(not G.canContinueOnCheckedRow(v,row,1,turn), 'excessive cart articulation was accepted')
+            cart.rootNode.t=math.rad(12)
+            row.isTurnStartAtIx=function(_,i) return i==ix+5 end
+            assert(not G.canContinueOnCheckedRow(v,row,1,turn), 'handover crossed the next corner')
+            row.isTurnStartAtIx=function() return false end
+            row.waypoints[ix+20].x=80
+            assert(not G.canContinueOnCheckedRow(v,row,1,turn), 'unmatched continuation was accepted')
+        """)
+
+    def test_saved_return_resolves_late_handover_and_checks_earlier_continuation(self):
+        self.lua.execute((SOURCE / 'tools/double-pivot/saxlingham-corner.lua').read_text())
+        self.lua.execute("""
+            local G=HeadlandLoopGeometry
+            local v,c,m=saxlinghamCorner()
+            local turn=assert(G.plan({vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=25.6,steeringLength=9.8},m,1.68))
+            local row=saxlinghamReturn(v)
+            local target=c.workStartNode
+            v.rootNode.x=target.x+49*math.sin(target.t)
+            v.rootNode.z=target.z+49*math.cos(target.t);v.rootNode.t=target.t
+            local _,oldFound=row:getNextFwdWaypointIxFromVehiclePosition(1,v.rootNode,12.8,10)
+            assert(not oldFound, 'did not reproduce the live ten-waypoint handover failure')
+            local ix,covered=G.getContinuation(v,row,1,turn)
+            assert(ix and ix>10 and covered, 'actual headland continuation was not found')
+            -- Earlier return: drill aligned, cart still lagging. Reconstruct
+            -- measured-link poses and validate the real slightly curved row.
+            v.rootNode.x=target.x+30*math.sin(target.t)
+            v.rootNode.z=target.z+30*math.cos(target.t)
+            local parent={x=v.rootNode.x,z=v.rootNode.z,t=target.t}
+            for i,link in ipairs(m.links) do
+                local angle=target.t+math.rad(({4,15,12})[i])
+                local x=parent.x+link.hitch*math.sin(parent.t)-link.length*math.sin(angle)
+                local z=parent.z+link.hitch*math.cos(parent.t)-link.length*math.cos(angle)
+                local node=link.positionNode or link.node
+                node.x=x;node.z=z;node.t=angle;link.node.t=angle
+                parent={x=x,z=z,t=angle}
+            end
+            assert(not G.isAligned(v,c.vehicleAtTurnEndNode))
+            local ok,why=G.canContinueOnCheckedRow(v,row,1,turn)
+            assert(ok, 'safe earlier handover still waited for the cart: '..tostring(why))
+        """)
+
     def test_all_runtime_lua_compiles(self):
         check = self.lua.eval('function(code,name) local f,e=load(code,name); assert(f,e) end')
         for file in ROOT.rglob('*.lua'):
