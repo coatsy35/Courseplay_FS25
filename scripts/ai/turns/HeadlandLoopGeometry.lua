@@ -419,6 +419,31 @@ function G.validate(model, course, boundary, entryIx, alignmentNode, loweringDis
     return alignedAtWork, alignedAtWork and peak or 'missing work entry'
 end
 
+--- Cheaply reject a tractor path which crosses the field edge before running
+--- the articulated-chain integration. This is especially useful when several
+--- alternative Dubins words are being compared at a tight field corner.
+function G.rootCourseFits(model, course, boundary)
+    if not boundary then return true end
+    local body = model.bodies[1].collision or model.bodies[1]
+    local previous = {x = model.root.x, z = model.root.z, t = model.root.t}
+    if not G.bodyFits(body, previous, boundary) then return false end
+    for i = 1, course:getNumberOfWaypoints() do
+        local x, _, z = course:getWaypointPosition(i)
+        local pose = {x = x, z = z, t = course:getWaypointYRotation(i)}
+        local distance = math.sqrt((x - previous.x)^2 + (z - previous.z)^2)
+        local count = math.max(1, math.ceil(distance / G.step),
+            math.ceil(math.abs(delta(pose.t, previous.t)) / math.rad(2)))
+        for j = 1, count do
+            local sample = {x = previous.x + (x - previous.x) * j / count,
+                z = previous.z + (z - previous.z) * j / count,
+                t = previous.t + delta(pose.t, previous.t) * j / count}
+            if not G.bodyFits(body, sample, boundary) then return false end
+        end
+        previous = pose
+    end
+    return true
+end
+
 --- Search a bounded set; shortest accepted candidate, not a global optimum.
 function G.plan(maneuver, model, loweringDistance)
     local radius = G.minimumRadius(model, maneuver.turningRadius)
@@ -432,27 +457,40 @@ function G.plan(maneuver, model, loweringDistance)
     for _, link in ipairs(model.links) do scale = scale + link.length end
     local best, bestLength, result = nil, math.huge, 'no candidate'
     local turnEndNode = maneuver.turnContext:getTurnEndNodeAndOffsets(maneuver.steeringLength)
+    -- The unrestricted solver returns only its shortest Dubins word. At a
+    -- headland corner that word can put the tractor outside the field even
+    -- though a longer forward-only word turns into the field and fits. Check
+    -- every word independently; validation still chooses the shortest route
+    -- which fits the complete articulated combination.
+    local solvers = {}
+    for pathType = DubinsSolver.PathType.LSL, DubinsSolver.PathType.LRL do
+        solvers[#solvers + 1] = {solver = DubinsSolver({pathType}), name = tostring(pathType)}
+    end
     for _, radiusFactor in ipairs({1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6}) do
         for _, entryFactor in ipairs({1, 2, 3}) do
             for _, pull in ipairs({0, width / 2, width}) do
                 local entry = scale * entryFactor + loweringDistance
-                local candidate = Course.createFromNode(maneuver.vehicle, maneuver.vehicleDirectionNode, 0, 0, math.max(0.5, pull), 1, false)
-                local path = PathfinderUtil.findAnalyticPath(PathfinderUtil.dubinsSolver,
-                    maneuver.vehicleDirectionNode, 0, math.max(0.5, pull) + 0.5, turnEndNode, 0, -entry, radius * radiusFactor)
-                if path and #path > 1 then
-                    candidate:append(Course.createFromAnalyticPath(maneuver.vehicle, path, true))
-                    local entryIx = candidate:getNumberOfWaypoints()
-                    local ending = maneuver.turnContext:appendEndingTurnCourse(candidate, maneuver.steeringLength)
-                    if candidate:getLength() < bestLength then
-                        local ok, detail = G.validate(model, candidate, boundary, entryIx,
-                            maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance)
-                        if ok then
-                            TurnManeuver.setLowerImplements(candidate, ending, true)
-                            best, bestLength = candidate, candidate:getLength()
-                            result = string.format('%d pivots (%d internal), width %.1f m, radius %.1f m, entry %.1f m, peak angle %.1f deg, articulation clearance checked, boundary %s',
-                                #model.links, model.internalPivots or 0, width, radius * radiusFactor, entry,
-                                math.deg(detail), boundary and boundary.source or 'unavailable')
-                        elseif not best then result = detail end
+                for _, pathSolver in ipairs(solvers) do
+                    local candidate = Course.createFromNode(maneuver.vehicle, maneuver.vehicleDirectionNode,
+                        0, 0, math.max(0.5, pull), 1, false)
+                    local path = PathfinderUtil.findAnalyticPath(pathSolver.solver,
+                        maneuver.vehicleDirectionNode, 0, math.max(0.5, pull) + 0.5,
+                        turnEndNode, 0, -entry, radius * radiusFactor)
+                    if path and #path > 1 then
+                        candidate:append(Course.createFromAnalyticPath(maneuver.vehicle, path, true))
+                        local entryIx = candidate:getNumberOfWaypoints()
+                        local ending = maneuver.turnContext:appendEndingTurnCourse(candidate, maneuver.steeringLength)
+                        if candidate:getLength() < bestLength and G.rootCourseFits(model, candidate, boundary) then
+                            local ok, detail = G.validate(model, candidate, boundary, entryIx,
+                                maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance)
+                            if ok then
+                                TurnManeuver.setLowerImplements(candidate, ending, true)
+                                best, bestLength = candidate, candidate:getLength()
+                                result = string.format('%d pivots (%d internal), width %.1f m, radius %.1f m, entry %.1f m, Dubins %s, peak angle %.1f deg, articulation clearance checked, boundary %s',
+                                    #model.links, model.internalPivots or 0, width, radius * radiusFactor, entry,
+                                    pathSolver.name, math.deg(detail), boundary and boundary.source or 'unavailable')
+                            elseif not best then result = detail end
+                        end
                     end
                 end
             end

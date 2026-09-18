@@ -128,6 +128,26 @@ class LoopTests(unittest.TestCase):
             assert(m.chainPlanned and not m.course)
         ''')
 
+    def test_planner_checks_non_shortest_dubins_words(self):
+        self.lua.execute('''
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,field=field})
+            local model=assert(HeadlandLoopGeometry.detect(v))
+            local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local validate,rootFits=HeadlandLoopGeometry.validate,HeadlandLoopGeometry.rootCourseFits
+            local calls=0
+            HeadlandLoopGeometry.rootCourseFits=function() return true end
+            HeadlandLoopGeometry.validate=function()
+                calls=calls+1
+                return calls==2, calls==2 and math.rad(10) or 'synthetic rejection'
+            end
+            local course,reason=HeadlandLoopGeometry.plan(maneuver,model,.5)
+            HeadlandLoopGeometry.validate,HeadlandLoopGeometry.rootCourseFits=validate,rootFits
+            assert(course and calls>1, 'planner did not try another Dubins word')
+            assert(string.find(reason,'Dubins 3'), tostring(reason))
+        ''')
+
     def test_internal_pivot_uses_chain_planner_and_detected_width(self):
         self.lua.execute('''
             local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
