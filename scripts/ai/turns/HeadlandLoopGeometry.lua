@@ -4,6 +4,7 @@
 HeadlandLoopGeometry = {}
 local G = HeadlandLoopGeometry
 G.maxArticulation = math.rad(45)
+G.internalArticulation = math.rad(25)
 G.alignmentTolerance = math.rad(5)
 G.step = 0.5
 
@@ -32,15 +33,17 @@ function G.getBody(object, node)
     if not size or not finite(size.width) or not finite(size.length) or
             size.width <= 0 or size.length <= 0 or not object.rootNode then return nil end
     local body = {left = -math.huge, right = math.huge, front = -math.huge, back = math.huge}
-    local function include(x, z)
-        body.left, body.right = math.max(body.left, x), math.min(body.right, x)
-        body.front, body.back = math.max(body.front, z), math.min(body.back, z)
+    local declared = {left = -math.huge, right = math.huge, front = -math.huge, back = math.huge}
+    local function include(target, x, z)
+        target.left, target.right = math.max(target.left, x), math.min(target.right, x)
+        target.front, target.back = math.max(target.front, z), math.min(target.back, z)
     end
     for _, x in ipairs({-size.width / 2, size.width / 2}) do
         for _, z in ipairs({-size.length / 2, size.length / 2}) do
             local bx, _, bz = localToLocal(object.rootNode, node,
                 x + (size.widthOffset or 0), 0, z + (size.lengthOffset or 0))
-            include(bx, bz)
+            include(body, bx, bz)
+            include(declared, bx, bz)
         end
     end
     if object.getAIMarkers then
@@ -48,17 +51,53 @@ function G.getBody(object, node)
         for _, marker in pairs({left, right, back}) do
             if marker and marker ~= 0 then
                 local x, _, z = localToLocal(marker, node, 0, 0, 0)
-                include(x, z)
+                include(body, x, z)
             end
         end
     end
-    for _, v in pairs(body) do if not finite(v) then return nil end end
+    for _, key in ipairs({'left', 'right', 'front', 'back'}) do
+        if not finite(body[key]) or not finite(declared[key]) then return nil end
+    end
+    -- Working markers protect the field boundary, while declared dimensions
+    -- provide the less misleading solid-body rectangle for implement clearance.
+    body.collision = declared
     return body
 end
 
---- Detect a serial chain only. Never silently omit a branch, mounted adapter,
---- missing axle, active steering or an internal yaw pivot: those need another
---- motion model. A useful width-only allowance remains available in that case.
+local function addLink(model, link, body, includeWidth)
+    model.links[#model.links + 1] = link
+    model.bodies[#model.bodies + 1] = body
+    if includeWidth ~= false then model.width = math.max(model.width, body.left - body.right) end
+end
+
+--- Model one internal drawbar yaw joint as two independent links. The drawbar
+--- has no axle, so its pose is a conservative kinematic approximation rather
+--- than a GIANTS physics simulation. Keeping it separate still exposes both
+--- articulation angles and the cart body to the route checks.
+local function getInternalDrawbar(object, joint, axle)
+    if not object.components or not joint.rootNode or
+            not ImplementUtil.findJointNodeConnectingToNode then return nil end
+    local _, nodes, limits = ImplementUtil.findJointNodeConnectingToNode(
+        object, joint.rootNode, object.rootNode)
+    local pivot
+    for i, limit in ipairs(limits or {}) do
+        if math.abs(limit[2] or 0) > math.rad(5) then
+            if pivot then return nil end
+            pivot = nodes and nodes[i]
+        end
+    end
+    if not pivot or pivot == 0 then return nil end
+    local hx, _, hz = localToLocal(joint.node, joint.rootNode, 0, 0, 0)
+    local px, _, pz = localToLocal(pivot, joint.rootNode, 0, 0, 0)
+    local drawbarLength = hz - pz
+    local ax, _, axleLength = localToLocal(pivot, axle, 0, 0, 0)
+    if not finite(drawbarLength) or not finite(axleLength) or drawbarLength < 0.5 or
+            axleLength < 0.5 or math.abs(hx - px) > 0.25 or math.abs(ax) > 0.25 then return nil end
+    return pivot, drawbarLength, axleLength
+end
+
+--- Detect a serial chain. One unsteered internal yaw joint in an implement's
+--- input drawbar is represented explicitly; ambiguous joints still fall back.
 function G.detect(vehicle)
     local node = vehicle:getAIDirectionNode()
     local rootBody = G.getBody(vehicle, node)
@@ -71,7 +110,7 @@ function G.detect(vehicle)
         if #attachments == 0 then break end
         if #attachments ~= 1 then return nil, 'branched attachment chain' end
         local object = attachments[1].object
-        if not object or seen[object] or #model.links >= 4 then return nil, 'unsupported attachment chain' end
+        if not object or seen[object] or #model.links >= 6 then return nil, 'unsupported attachment chain' end
         seen[object] = true
         if not ImplementUtil.isWheeledImplement(object) then return nil, 'mounted or unsupported attachment' end
         local joint = object.getActiveInputAttacherJoint and object:getActiveInputAttacherJoint()
@@ -79,11 +118,13 @@ function G.detect(vehicle)
         if not joint or not joint.node or joint.node == 0 or not axle or axle == 0 then
             return nil, 'missing hitch or steering axle'
         end
+        local yawJoints = 0
         for _, componentJoint in ipairs(object.componentJoints or {}) do
             if componentJoint.rotLimit and math.abs(componentJoint.rotLimit[2] or 0) > math.rad(5) then
-                return nil, 'internal yaw pivot needs a separate motion model'
+                yawJoints = yawJoints + 1
             end
         end
+        if yawJoints > 1 then return nil, 'multiple internal yaw joints' end
         for _, wheel in ipairs(object.spec_wheels and object.spec_wheels.wheels or {}) do
             local steering = wheel.steering or wheel
             if math.abs(steering.steeringAxleScale or 0) > 0.01 then
@@ -91,19 +132,62 @@ function G.detect(vehicle)
             end
         end
         local hx, _, hitch = localToLocal(joint.node, parentNode, 0, 0, 0)
-        local lx, _, length = localToLocal(joint.node, axle, 0, 0, 0)
         local body = G.getBody(object, axle)
-        if not body or not finite(length) or not finite(hitch) or length < 0.5 or
-                math.abs(hx) > 0.25 or math.abs(lx) > 0.25 or hitch > 0.25 then
+        if not body or not finite(hitch) or math.abs(hx) > 0.25 or hitch > 0.25 then
             return nil, 'off-centre, front-mounted or invalid hitch geometry'
         end
-        model.links[#model.links + 1] = {length = length, hitch = hitch, heading = heading(axle)}
-        model.bodies[#model.bodies + 1] = body
-        model.width = math.max(model.width, body.left - body.right)
+        if yawJoints == 1 then
+            local pivot, drawbarLength, axleLength = getInternalDrawbar(object, joint, axle)
+            if not pivot then return nil, 'unsupported internal yaw geometry' end
+            local drawbarBody = {left = 0.75, right = -0.75,
+                front = drawbarLength + 0.25, back = -0.25, virtual = true}
+            addLink(model, {length = drawbarLength, hitch = hitch,
+                heading = heading(joint.rootNode), internal = true,
+                maxArticulation = G.internalArticulation}, drawbarBody, false)
+            addLink(model, {length = axleLength, hitch = 0,
+                heading = heading(axle), internal = true,
+                maxArticulation = G.internalArticulation}, body)
+            model.internalPivots = (model.internalPivots or 0) + 1
+        else
+            local lx, _, length = localToLocal(joint.node, axle, 0, 0, 0)
+            if not finite(length) or length < 0.5 or math.abs(lx) > 0.25 then
+                return nil, 'off-centre, front-mounted or invalid hitch geometry'
+            end
+            addLink(model, {length = length, hitch = hitch, heading = heading(axle)}, body)
+        end
         parent, parentNode = object, axle
     end
     if #model.links < 2 then return nil, 'fewer than two supported towing pivots' end
     return model
+end
+
+--- Separating-axis rectangle test. Two metres are removed from each longitudinal
+--- end because declared vehicle boxes commonly overlap at a normal coupling.
+--- Substantial drill/cart overlap during jack-knifing remains detectable.
+function G.bodiesOverlap(a, pa, b, pb)
+    if a.virtual or b.virtual then return false end
+    a, b = a.collision or a, b.collision or b
+    local function corners(body, pose)
+        local front, back = body.front - 2, body.back + 2
+        if front <= back then front, back = body.front, body.back end
+        local result = {}
+        for _, x in ipairs({body.left, body.right}) do
+            for _, z in ipairs({front, back}) do
+                local wx, wz = position(pose, x, z)
+                result[#result + 1] = {x = wx, z = wz}
+            end
+        end
+        return result
+    end
+    local ac, bc = corners(a, pa), corners(b, pb)
+    for _, angle in ipairs({pa.t, pa.t + math.pi / 2, pb.t, pb.t + math.pi / 2}) do
+        local ux, uz = math.cos(angle), -math.sin(angle)
+        local amin, amax, bmin, bmax = math.huge, -math.huge, math.huge, -math.huge
+        for _, p in ipairs(ac) do local q = p.x * ux + p.z * uz; amin, amax = math.min(amin, q), math.max(amax, q) end
+        for _, p in ipairs(bc) do local q = p.x * ux + p.z * uz; bmin, bmax = math.min(bmin, q), math.max(bmax, q) end
+        if amax <= bmin or bmax <= amin then return false end
+    end
+    return true
 end
 
 --- Steady-circle lower bound, separately propagating each off-axle hitch.
@@ -117,7 +201,8 @@ function G.minimumRadius(model, minimum)
             local nextRadius = math.sqrt(squared)
             local body = model.bodies[i + 1]
             if nextRadius < math.max(math.abs(body.left), math.abs(body.right)) + 0.5 or
-                    math.atan2(link.length, nextRadius) - math.atan2(link.hitch, radius) > G.maxArticulation then
+                    math.atan2(link.length, nextRadius) - math.atan2(link.hitch, radius) >
+                        (link.maxArticulation or G.maxArticulation) then
                 return false
             end
             radius = nextRadius
@@ -270,7 +355,17 @@ function G.validate(model, course, boundary, entryIx, alignmentNode, loweringDis
             if i > 1 then
                 local angle = math.abs(delta(poses[i - 1].t, pose.t))
                 peak = math.max(peak, angle)
-                if angle > G.maxArticulation then return false, 'articulation' end
+                if angle > (model.links[i - 1].maxArticulation or G.maxArticulation) then
+                    return false, 'articulation'
+                end
+            end
+            -- Consecutive rectangles intentionally meet at their coupling. An
+            -- internal drawbar inserts a virtual body, so drill/cart clearance
+            -- is checked as a non-consecutive physical pair.
+            for j = 1, i - 2 do
+                if G.bodiesOverlap(model.bodies[j], poses[j], model.bodies[i], pose) then
+                    return false, 'implement clearance'
+                end
             end
         end
         if ix > entryIx and not alignedAtWork then
@@ -309,12 +404,15 @@ function G.plan(maneuver, model, loweringDistance)
     local radius = G.minimumRadius(model, maneuver.turningRadius)
     if not radius then return nil, 'radius exceeds search limit' end
     local boundary = G.getBoundary(maneuver.vehicle)
+    if (model.internalPivots or 0) > 0 and not boundary then
+        return nil, 'field boundary unavailable for internal-pivot loop'
+    end
     local width = math.max(maneuver.workWidth, model.width)
     local scale = 0
     for _, link in ipairs(model.links) do scale = scale + link.length end
     local best, bestLength, result = nil, math.huge, 'no candidate'
     local turnEndNode = maneuver.turnContext:getTurnEndNodeAndOffsets(maneuver.steeringLength)
-    for _, radiusFactor in ipairs({1, 1.25, 1.5}) do
+    for _, radiusFactor in ipairs({1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6}) do
         for _, entryFactor in ipairs({1, 2, 3}) do
             for _, pull in ipairs({0, width / 2, width}) do
                 local entry = scale * entryFactor + loweringDistance
@@ -331,8 +429,9 @@ function G.plan(maneuver, model, loweringDistance)
                         if ok then
                             TurnManeuver.setLowerImplements(candidate, ending, true)
                             best, bestLength = candidate, candidate:getLength()
-                            result = string.format('%d pivots, width %.1f m, radius %.1f m, entry %.1f m, peak angle %.1f deg, boundary %s',
-                                #model.links, width, radius * radiusFactor, entry, math.deg(detail), boundary and 'checked' or 'unavailable')
+                            result = string.format('%d pivots (%d internal), width %.1f m, radius %.1f m, entry %.1f m, peak angle %.1f deg, articulation clearance checked, boundary %s',
+                                #model.links, model.internalPivots or 0, width, radius * radiusFactor, entry,
+                                math.deg(detail), boundary and 'checked' or 'unavailable')
                         elseif not best then result = detail end
                     end
                 end

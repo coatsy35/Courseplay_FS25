@@ -27,10 +27,20 @@ class LoopTests(unittest.TestCase):
             assert(not HeadlandLoopGeometry.minimumRadius(m,0))
         ''')
 
+    def test_internal_drawbar_is_split_into_two_pivots(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local v,c,d,cart=fixture({internal=true,width=30})
+            local m=assert(G.detect(v))
+            assert(#m.links==3 and m.internalPivots==1)
+            assert(math.abs(m.links[2].length-3.78)<.02 and m.links[2].internal)
+            assert(math.abs(m.links[3].length-4.30)<.02 and m.links[3].internal)
+            assert(math.abs(m.width-30)<1e-6)
+        ''')
+
     def test_unsupported_geometry_is_not_silently_modelled(self):
         self.lua.execute('''
             local G=HeadlandLoopGeometry
-            local v,c,d,cart=fixture({internal=true}); assert(not G.detect(v))
             v,c,d,cart=fixture({single=true}); assert(not G.detect(v))
             v,c,d,cart=fixture(); cart.steeringAxleNode=nil; assert(not G.detect(v))
             v,c,d,cart=fixture(); cart.joint.node.x=2; assert(not G.detect(v))
@@ -107,18 +117,27 @@ class LoopTests(unittest.TestCase):
             assert(m.chainPlanned and not m.course)
         ''')
 
-    def test_internal_pivot_fallback_uses_detected_width(self):
+    def test_internal_pivot_uses_chain_planner_and_detected_width(self):
         self.lua.execute('''
-            local v,c=fixture({internal=true,width=30})
-            local original=PathfinderUtil.findAnalyticPath
-            local radius
-            PathfinderUtil.findAnalyticPath=function(...)
-                radius=select(8,...)
-                return original(...)
-            end
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,width=30,field=field})
+            local model=assert(HeadlandLoopGeometry.detect(v))
+            local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=8,steeringLength=9.8}
+            local course,reason=HeadlandLoopGeometry.plan(maneuver,model,.5)
+            assert(course, tostring(reason))
+            assert(string.find(reason,'3 pivots %(1 internal%)'))
+            local plannedRadius=tonumber(string.match(reason,'radius ([%d.]+)'))
+            assert(plannedRadius>15.5 and plannedRadius<50, tostring(reason))
             local m=LoopTurnManeuver(v,c,v.rootNode,10,8,9.8,.5)
-            assert(not m.chainPlanned and m.course)
-            assert(radius==15.5)
+            assert(m.chainPlanned and m.course, tostring(reason))
+        ''')
+
+    def test_internal_pivot_refuses_an_unchecked_field_boundary(self):
+        self.lua.execute('''
+            local v,c=fixture({internal=true})
+            local m=LoopTurnManeuver(v,c,v.rootNode,10,25.6,9.8,.5)
+            assert(m.chainPlanned and not m.course)
         ''')
 
     def test_width_fallback_rejects_a_field_crossing(self):
@@ -127,6 +146,17 @@ class LoopTests(unittest.TestCase):
             local v,c=fixture({internal=true,field=field})
             local m=LoopTurnManeuver(v,c,v.rootNode,10,25.6,9.8,.5)
             assert(not m.course)
+        ''')
+
+    def test_clearance_rejects_jack_knifed_physical_bodies(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local a={left=5,right=-5,front=5,back=-5}
+            local b={left=4,right=-4,front=6,back=-6}
+            assert(not G.bodiesOverlap(a,{x=0,z=0,t=0},b,{x=0,z=-12,t=0}))
+            assert(G.bodiesOverlap(a,{x=0,z=0,t=0},b,{x=0,z=-5,t=math.pi/2}))
+            b.virtual=true
+            assert(not G.bodiesOverlap(a,{x=0,z=0,t=0},b,{x=0,z=-5,t=math.pi/2}))
         ''')
 
     def test_boundary_success_and_world_rotation(self):
@@ -192,7 +222,7 @@ class LoopTests(unittest.TestCase):
             local ix=course:getNumberOfWaypoints()
             c:appendEndingTurnCourse(course,9.8)
             local ok,reason=HeadlandLoopGeometry.validate(model,course,nil,ix,c.vehicleAtTurnEndNode,.5)
-            assert(not ok and reason=='articulation', tostring(reason))
+            assert(not ok and (reason=='articulation' or reason=='implement clearance'), tostring(reason))
         ''')
 
     def test_all_runtime_lua_compiles(self):

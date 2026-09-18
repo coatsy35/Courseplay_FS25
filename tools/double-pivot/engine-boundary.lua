@@ -84,7 +84,14 @@ require('WorkEndHandler')
 
 g_vehicleConfigurations = {getRecursively = function() end}
 Logging = {info = function() end}
-ImplementUtil = {isWheeledImplement = function(o) return o.wheeled end}
+ImplementUtil = {
+    isWheeledImplement = function(o) return o.wheeled end,
+    findJointNodeConnectingToNode = function(o)
+        if o.internalPivotNode then
+            return o.internalPivotNode, {o.internalPivotNode}, {{0,math.pi/3,0}}
+        end
+    end
+}
 WorkWidthUtil = {getAutomaticWorkWidthAndOffset = function(v) return v.detectedWidth or 0 end}
 AIUtil.hasArticulatedAxis = function() return false end
 
@@ -112,7 +119,12 @@ function fixture(p)
     cart.getActiveInputAttacherJoint=function(self) return self.joint end
     vehicle.children={{object=drill}}; drill.children={{object=cart}}
     if p.single then drill.children={} end
-    if p.internal then cart.componentJoints={{rotLimit={0,math.pi/3,0}}} end
+    if p.internal then
+        cart.internalPivotNode={x=0,z=-18.05,t=0}
+        cart.joint.rootNode={x=0,z=-16.27,t=0}
+        cart.components={{node=cart.rootNode},{node=cart.joint.rootNode}}
+        cart.componentJoints={{jointNode=cart.internalPivotNode,componentIndices={1,2},rotLimit={0,math.pi/3,0}}}
+    end
     if p.field then
         vehicle.cpGetFieldPolygon=function() return p.field end
         vehicle.cpGetIslandPolygons=function() return p.islands or {} end
