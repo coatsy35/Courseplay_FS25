@@ -1,4 +1,4 @@
-# Headland loop test 8.1.0.303
+# Headland loop test 8.1.0.304
 
 Branch: `codex/double-pivot-loop-turns`, based on main `9b915b07`.
 This build contains no envelope planner, straight-entry experiment or implement
@@ -44,9 +44,11 @@ Each body's predicted working rectangle is checked
 against the boundary and islands, including polygon edges and enclosed islands.
 An edge grid limits repeated polygon work. These are sampled planar footprint
 checks, not continuous swept-volume or game-physics guarantees. An internal-pivot
-loop is refused when CP has no field polygon, so this case cannot silently take
-the tractor or implements outside an unchecked field. Boundary availability and
-the selected geometry are logged.
+loop first uses the job's detected field polygon. If that cache is empty after a
+save reload, it uses the saved custom-field boundary or the map field polygon.
+The loop is refused only when none of those boundaries is available, so it cannot
+silently take the tractor or implements outside an unchecked field. The selected
+boundary source and geometry are logged.
 
 Accepted chain routes disable the old moving single-trailer tracking offset,
 because changing the route afterwards would invalidate the prediction. CP's
@@ -97,7 +99,7 @@ The source manifest retains its release title. The packaged title is
 `CoursePlay - Implement Profiles Test`, and the filename stays
 `FS25_Courseplay_ImplementProfilesTest.zip`, as requested by the project rules.
 The builder writes the numbered archive and commit/checksum receipt under
-`history/8.1.0.303/` and a stable filename beside `history/`. Use a separate
+`history/8.1.0.304/` and a stable filename beside `history/`. Use a separate
 `dist/double-pivot-loop-turns` output directory so other branches' test archives
 are not overwritten. It never writes to the installed mods folder or the live
 `FS25_Courseplay.zip`.
@@ -106,7 +108,7 @@ The regressions use real CP Dubins, Course, TurnContext and turn integration wit
 planar GIANTS adapters. They include independent constant-circle kinematics,
 separate link lengths, unfolded widths, internal drawbar geometry, mirrored loops,
 settling allowances, field/island checks, rejection without course installation,
-preserved configured speeds, mandatory internal-pivot boundary checks and the
+preserved configured speeds, cached and map field-boundary checks and the
 width-only fallback. They do not claim
 successful live driving.
 

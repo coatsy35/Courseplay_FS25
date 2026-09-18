@@ -93,9 +93,14 @@ ImplementUtil = {
 }
 WorkWidthUtil = {getAutomaticWorkWidthAndOffset = function(v) return v.detectedWidth or 0 end}
 AIUtil.hasArticulatedAxis = function() return false end
+CpFieldUtil = {
+    getFieldAtWorldPosition = function() return mockMapFieldPolygon and {} or nil end,
+    getFieldPolygon = function() return mockMapFieldPolygon end
+}
 
 function fixture(p)
     p = p or {}
+    mockMapFieldPolygon = p.mapField
     local function body(z, width, length)
         local node = {x=0,z=z,t=0}
         local o = {rootNode=node,steeringAxleNode=node,wheeled=true,

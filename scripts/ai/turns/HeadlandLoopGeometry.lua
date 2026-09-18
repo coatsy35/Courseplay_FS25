@@ -272,9 +272,25 @@ end
 
 function G.getBoundary(vehicle)
     local polygon = vehicle.cpGetFieldPolygon and vehicle:cpGetFieldPolygon()
+    local source = 'job field'
+    if not polygon or #polygon < 3 then
+        local node = vehicle:getAIDirectionNode()
+        local x, _, z = getWorldTranslation(node)
+        local custom = g_customFieldManager and g_customFieldManager:getCustomField(x, z)
+        if custom then
+            polygon = custom:getVertices()
+            source = 'custom field'
+        elseif CpFieldUtil and CpFieldUtil.getFieldAtWorldPosition and CpFieldUtil.getFieldPolygon then
+            local field = CpFieldUtil.getFieldAtWorldPosition(x, z)
+            if field then
+                polygon = CpFieldUtil.getFieldPolygon(field)
+                source = 'map field'
+            end
+        end
+    end
     if not polygon or #polygon < 3 then return nil end
     local islands = vehicle.cpGetIslandPolygons and vehicle:cpGetIslandPolygons() or {}
-    local boundary = {polygon = polygon, islands = islands, grid = {}, cells = {}}
+    local boundary = {polygon = polygon, islands = islands, grid = {}, cells = {}, source = source}
     local polygons = {polygon}
     for _, island in ipairs(islands) do polygons[#polygons + 1] = island end
     for _, points in ipairs(polygons) do
@@ -431,7 +447,7 @@ function G.plan(maneuver, model, loweringDistance)
                             best, bestLength = candidate, candidate:getLength()
                             result = string.format('%d pivots (%d internal), width %.1f m, radius %.1f m, entry %.1f m, peak angle %.1f deg, articulation clearance checked, boundary %s',
                                 #model.links, model.internalPivots or 0, width, radius * radiusFactor, entry,
-                                math.deg(detail), boundary and 'checked' or 'unavailable')
+                                math.deg(detail), boundary and boundary.source or 'unavailable')
                         elseif not best then result = detail end
                     end
                 end

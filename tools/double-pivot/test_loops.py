@@ -140,6 +140,17 @@ class LoopTests(unittest.TestCase):
             assert(m.chainPlanned and not m.course)
         ''')
 
+    def test_internal_pivot_uses_map_boundary_when_job_cache_is_empty(self):
+        self.lua.execute('''
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,mapField=field})
+            assert(v.cpGetFieldPolygon==nil)
+            local boundary=assert(HeadlandLoopGeometry.getBoundary(v))
+            assert(boundary.source=='map field')
+            local m=LoopTurnManeuver(v,c,v.rootNode,10,25.6,9.8,.5)
+            assert(m.chainPlanned and m.course)
+        ''')
+
     def test_width_fallback_rejects_a_field_crossing(self):
         self.lua.execute('''
             local field={{x=-2,z=-2},{x=2,z=-2},{x=2,z=2},{x=-2,z=2}}
