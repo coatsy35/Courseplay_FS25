@@ -420,6 +420,60 @@ class LoopTests(unittest.TestCase):
             assert(ok, 'safe earlier handover still waited for the cart: '..tostring(why))
         """)
 
+    def test_third_corner_return_follows_actual_curved_headland(self):
+        self.lua.execute((SOURCE / 'tools/double-pivot/saxlingham-corner.lua').read_text())
+        self.lua.execute("""
+            local G=HeadlandLoopGeometry
+            local v,c,m=saxlinghamThirdCorner()
+            local q={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local course,reason=G.plan(q,m,1.68)
+            assert(course,tostring(reason))
+            assert(course.followsFieldwork and course.chainReturn.fieldCourse==c.loopFieldWorkCourse)
+            local ix=course.chainReturn.fieldEndIx
+            local x,_,z=course:getWaypointPosition(course:getNumberOfWaypoints())
+            local fx,_,fz=c.loopFieldWorkCourse:getWaypointPosition(ix)
+            assert(math.abs(x-fx)<.001 and math.abs(z-fz)<.001, 'return continued on the original tangent')
+            G.step=.2
+            local ok,why=G.validate(m,course,G.getBoundary(v),1,c.vehicleAtTurnEndNode,1.68)
+            assert(ok,tostring(why))
+            local speedTurn=setmetatable({turnCourse=course,settings={turnSpeed={getValue=function() return 8 end},
+                fieldSpeed={getValue=function() return 20 end}}},CourseTurn)
+            assert(speedTurn:getForwardSpeed()==8, 'loop promoted itself to field speed')
+            local previous=math.max(1,ix-3)
+            v.rootNode.x,_,v.rootNode.z=c.loopFieldWorkCourse:getWaypointPosition(previous)
+            local nx,_,nz=c.loopFieldWorkCourse:getWaypointPosition(previous+1)
+            v.rootNode.t=math.atan2(nx-v.rootNode.x,nz-v.rootNode.z)
+            local nextIx,covered=G.getContinuation(v,c.loopFieldWorkCourse,1,course)
+            assert(nextIx and nextIx>previous and covered, 'curved continuation was not found')
+            local resumed
+            local turn=setmetatable({state=1,states={ENDING_TURN=1},debug=function() end,
+                resumeFieldworkAfterTurn=function(_,i) resumed=i end},AITurn)
+            turn:onWaypointPassed(course:getNumberOfWaypoints(),course)
+            assert(resumed==ix, 'endpoint resumed at the old corner index')
+        """)
+
+    def test_actual_fieldwork_return_preserves_first_corner_and_stops_at_next_turn(self):
+        self.lua.execute((SOURCE / 'tools/double-pivot/saxlingham-corner.lua').read_text())
+        self.lua.execute("""
+            local G=HeadlandLoopGeometry
+            local v,c,m=saxlinghamCorner()
+            c.loopFieldWorkCourse=saxlinghamReturn(v);c.turnEndWpIx=1
+            local q={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local course,why=G.plan(q,m,1.68)
+            assert(course,tostring(why))
+            G.step=.2
+            local ok,detail=G.validate(m,course,G.getBoundary(v),1,c.vehicleAtTurnEndNode,1.68)
+            assert(ok,tostring(detail))
+            local row=Course(v,{{x=0,z=0},{x=0,z=5},{x=0,z=10},{x=0,z=20}},false)
+            row.isTurnStartAtIx=function(_,i) return i==2 end
+            local candidate=G.createCandidate({x=0,z=-2,t=0},.5,{})
+            assert(not G.appendFieldworkReturn(candidate,row,1,15), 'return crossed another corner')
+            row.isTurnStartAtIx=function() return false end
+            row.isReverseAt=function(_,i) return i==2 end
+            candidate=G.createCandidate({x=0,z=-2,t=0},.5,{})
+            assert(not G.appendFieldworkReturn(candidate,row,1,15), 'return crossed a reversal')
+        """)
+
     def test_all_runtime_lua_compiles(self):
         check = self.lua.eval('function(code,name) local f,e=load(code,name); assert(f,e) end')
         for file in ROOT.rglob('*.lua'):
@@ -535,6 +589,9 @@ class LoopTests(unittest.TestCase):
             assert(lower and math.abs(dz+.2)<.001, 'shifted the work-start plane')
             d.rootNode.t=math.rad(12)
             assert(not h:shouldLowerThisImplement(d,line,false), 'lowered the crooked drill')
+            c.chainReturnFollowsFieldwork=true
+            assert(h:shouldLowerThisImplement(d,line,false), 'delayed work past its entry line')
+            c.chainReturnFollowsFieldwork=nil
             d.rootNode.t=math.rad(4)
             assert(h:shouldLowerThisImplement(d,line,false), 'blocked the aligned drill')
             d.rootNode.t=0

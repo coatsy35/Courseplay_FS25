@@ -130,13 +130,15 @@ function WorkStartHandler:shouldLowerThisImplement(object, workStartNode, revers
         local normalLoweringDistance = self.driveStrategy:getLoweringDurationMs() * self.settings.turnSpeed:getValue() / 3600
         local lateralTolerance = normalLoweringDistance * 1.5
         if self.turnContext.chainReturnLateralTolerance then
-            -- Only enabled after the tractor reaches the validated straight
+            -- Only enabled after the tractor reaches the validated
             -- return. The prediction bounds the drill's remaining lateral lag;
             -- do not miss the unchanged work-start line while waiting for it.
             lateralTolerance = math.max(lateralTolerance, self.turnContext.chainReturnLateralTolerance)
-            -- Keep moving while straightening; stopping cannot align a towed
-            -- drill. Cart settling is a separate handover condition.
-            if not CpMathUtil.isSameDirection(object.rootNode, workStartNode, 5) then
+            -- Legacy straight returns still need heading alignment. A checked
+            -- fieldwork return follows the outgoing course itself; do not delay
+            -- its work-start plane while it bends away from the first tangent.
+            if not self.turnContext.chainReturnFollowsFieldwork and
+                    not CpMathUtil.isSameDirection(object.rootNode, workStartNode, 5) then
                 return false, dz
             end
         end

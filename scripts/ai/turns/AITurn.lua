@@ -134,6 +134,13 @@ end
 function AITurn:onWaypointPassed(ix, course)
     self:debug('onWaypointPassed %d', ix)
     if ix == course:getNumberOfWaypoints() and self.state == self.states.ENDING_TURN then
+        if course.chainReturn and course.chainReturn.fieldCourse then
+            -- This endpoint belongs to the original course. Its heading may
+            -- differ from the corner's first tangent on a curved headland.
+            self:debug('Checked fieldwork return reached waypoint %d', course.chainReturn.fieldEndIx)
+            self:resumeFieldworkAfterTurn(course.chainReturn.fieldEndIx)
+            return
+        end
         local aligned, alignmentDetail = true, nil
         if course.chainReturn then
             aligned, alignmentDetail = HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode)
@@ -471,6 +478,9 @@ function CourseTurn:init(vehicle, driveStrategy, ppc, proximityController, turnC
 end
 
 function CourseTurn:getForwardSpeed()
+    if self.turnCourse and self.turnCourse.chainReturn then
+        return AITurn.getForwardSpeed(self)
+    end
     if self.turnCourse then
         local currentWpIx = self.turnCourse:getCurrentWaypointIx()
         if self.turnCourse:getDistanceFromFirstWaypoint(currentWpIx) > 10 and
@@ -585,6 +595,7 @@ function CourseTurn:updateLoopSearch()
         self.loopManeuver = nil
     end
     if not self.loopManeuver then
+        self.turnContext.loopFieldWorkCourse = self.fieldWorkCourse
         self.loopManeuver = LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
             self.turningRadius, self.workWidth, self.steeringLength,
             self.driveStrategy:getLoweringDurationMs() * self.settings.turnSpeed:getValue() / 3600 + 0.5, true)
@@ -622,6 +633,7 @@ function CourseTurn:turn()
                 return gx, gz, moveForwards, maxSpeed
             end
             self.turnContext.chainReturnLateralTolerance = self.turnCourse.chainReturn.lateralTolerance
+            self.turnContext.chainReturnFollowsFieldwork = self.turnCourse.chainReturn.fieldCourse ~= nil
         end
         self.state = self.states.ENDING_TURN
         self:debug('About to end turn')
@@ -646,11 +658,12 @@ function CourseTurn:endTurn(dt)
             if dz and dz > -implementCheckDistance then
                 if self.driveStrategy:getCanContinueWork() then
                     if self.turnCourse and self.turnCourse.chainReturn and
-                            not HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode) and
+                            (self.turnCourse.chainReturn.fieldCourse or
+                                not HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode)) and
                             not HeadlandLoopGeometry.canContinueOnCheckedRow(self.vehicle, self.driveStrategy.fieldWorkCourse,
                                 self.turnContext.turnEndWpIx, self.turnCourse) then
                         -- Keep the temporary return only when the fieldwork
-                        -- course cannot safely continue the same straight.
+                        -- course cannot safely continue from the live pose.
                         return true
                     end
                     self:debug("implements lowered, resume fieldwork")

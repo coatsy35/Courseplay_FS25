@@ -441,7 +441,7 @@ function G.createValidator(model, course, boundary, entryIx, alignmentNode, lowe
         for _ = 1, budget do
             if rootOnly and i > entryIx then return true, true, 0 end
             if i > course:getNumberOfWaypoints() then
-                if not rootOnly then
+                if not rootOnly and not course.followsFieldwork then
                     for _, pose in ipairs(poses) do
                         if math.abs(delta(pose.t, targetHeading)) > G.alignmentTolerance then
                             return true, false, 'cart still settling at end of straight'
@@ -555,6 +555,16 @@ end
 function G.getContinuation(vehicle, course, ix, turnCourse)
     if not course or not turnCourse or not turnCourse.chainReturn then return nil, false end
     local r = turnCourse.chainReturn
+    if r.fieldCourse == course then
+        local node = vehicle:getAIDirectionNode()
+        for i = ix, r.fieldEndIx do
+            if course:isTurnStartAtIx(i) or course:isReverseAt(i) then return nil, false end
+            local x, y, z = course:getWaypointPosition(i)
+            local dx, _, dz = worldToLocal(node, x, y, z)
+            if dz > 1 and math.abs(dx) < r.model.width / 4 then return i, true, r.fieldEndIx end
+        end
+        return nil, false
+    end
     local ex, _, ez = turnCourse:getWaypointPosition(turnCourse:getNumberOfWaypoints())
     local endDistance = (ex - r.x) * math.sin(r.t) + (ez - r.z) * math.cos(r.t)
     local node, nextIx = vehicle:getAIDirectionNode(), nil
@@ -583,7 +593,7 @@ function G.canContinueOnCheckedRow(vehicle, course, ix, turnCourse)
     local r = turnCourse and turnCourse.chainReturn
     if not r or not r.model or not r.boundary then return false, 'missing model' end
     local nextIx, covered, lastIx = G.getContinuation(vehicle, course, ix, turnCourse)
-    if not nextIx or not covered or not G.isOnReturn(vehicle, r) then return false, 'continuation corridor' end
+    if not nextIx or not covered or (not r.fieldCourse and not G.isOnReturn(vehicle, r)) then return false, 'continuation corridor' end
     local model, poses = r.model, {}
     local node = vehicle:getAIDirectionNode()
     local x, _, z = getWorldTranslation(node)
@@ -594,7 +604,7 @@ function G.canContinueOnCheckedRow(vehicle, course, ix, turnCourse)
     end
     for i, pose in ipairs(poses) do
         local body = model.bodies[i]
-        if body.working and math.abs(delta(pose.t, r.t)) > G.alignmentTolerance then return false, 'working body heading' end
+        if not r.fieldCourse and body.working and math.abs(delta(pose.t, r.t)) > G.alignmentTolerance then return false, 'working body heading' end
         if i > 1 and math.abs(delta(pose.t, poses[i - 1].t)) >
                 (model.links[i - 1].maxArticulation or G.maxArticulation) then return false, 'live articulation' end
         if not G.bodyFits(body, pose, r.boundary) then return false, 'live field boundary' end
@@ -617,6 +627,7 @@ function G.canContinueOnCheckedRow(vehicle, course, ix, turnCourse)
         path[#path + 1] = {x = x, y = -z}
     end
     local continuation = G.createCandidate(node, .5, path)
+    continuation.followsFieldwork = r.fieldCourse ~= nil
     return G.validate(live, continuation, r.boundary, 1, node, 0)
 end
 
@@ -693,6 +704,30 @@ function G.createCandidate(node, pull, path)
         for _, p in ipairs(waypoints) do self.waypoints[#self.waypoints + 1] = p end
     end
     return candidate
+end
+
+--- Continue on the real outgoing headland instead of extending its initial
+--- tangent across later bends. Every appended point is validated with the chain.
+function G.appendFieldworkReturn(candidate, fieldCourse, startIx, length)
+    local travelled = 0
+    local px, _, pz = candidate:getWaypointPosition(candidate:getNumberOfWaypoints())
+    for ix = startIx, fieldCourse:getNumberOfWaypoints() do
+        if fieldCourse:isReverseAt(ix) then return nil end
+        local x, _, z = fieldCourse:getWaypointPosition(ix)
+        local distance = math.sqrt((x - px)^2 + (z - pz)^2)
+        local count = math.max(1, math.ceil(distance))
+        for j = 1, count do
+            candidate:appendWaypoints({{x=px+(x-px)*j/count,z=pz+(z-pz)*j/count}})
+        end
+        travelled = travelled + distance
+        if travelled >= length then
+            candidate.followsFieldwork = true
+            return ix
+        end
+        if fieldCourse:isTurnStartAtIx(ix) then return nil end
+        px, pz = x, z
+    end
+    return nil
 end
 
 --- Incremental search. GIANTS does not provide Lua coroutines: retain explicit
@@ -809,12 +844,14 @@ function G.createSearch(maneuver, model, loweringDistance)
                 end
                 self.pending = Course(maneuver.vehicle, points, true)
                 self.pending.temporary = true
+                self.pending.followsFieldwork = maneuver.turnContext.loopFieldWorkCourse ~= nil
                 for ix = self.entryIx, self.pending:getNumberOfWaypoints() do
                     TurnManeuver.addTurnControlToWaypoint(self.pending.waypoints[ix], TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END, true)
                 end
                 local x, _, z = self.pending:getWaypointPosition(self.entryIx)
                 self.pending.chainReturn = {x = x, z = z, t = heading(maneuver.turnContext.vehicleAtTurnEndNode),
-                    lateralTolerance = (returnData and returnData.entryLateral or 0) + .5, model = model, boundary = boundary}
+                    lateralTolerance = (returnData and returnData.entryLateral or 0) + .5, model = model, boundary = boundary,
+                    fieldCourse = maneuver.turnContext.loopFieldWorkCourse, fieldEndIx = self.fieldEndIx}
                 -- Descriptors are ordered by route length, so stop at the first
                 -- validated solution. This is a bounded search, not a global optimum.
                 self.course = self.pending
@@ -859,7 +896,14 @@ function G.createSearch(maneuver, model, loweringDistance)
         end
         local candidate = G.createCandidate(maneuver.vehicleDirectionNode, option.pull, path)
         self.entryIx = candidate:getNumberOfWaypoints()
-        self.ending = maneuver.turnContext:appendEndingTurnCourse(candidate, 2 * chainLength)
+        local fieldCourse = maneuver.turnContext.loopFieldWorkCourse
+        if fieldCourse then
+            self.fieldEndIx = G.appendFieldworkReturn(candidate, fieldCourse, maneuver.turnContext.turnEndWpIx,
+                2 * chainLength + math.abs(maneuver.turnContext.frontMarkerDistance or 0))
+            if not self.fieldEndIx then reject('insufficient outgoing fieldwork course'); return false end
+        else
+            self.ending = maneuver.turnContext:appendEndingTurnCourse(candidate, 2 * chainLength)
+        end
         self.pending = candidate
         self.validator = G.createValidator(model, candidate, boundary, self.entryIx,
             maneuver.turnContext.vehicleAtTurnEndNode, loweringDistance, false, maneuver.turnContext.workStartNode, false)

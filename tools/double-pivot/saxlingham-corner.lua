@@ -118,3 +118,58 @@ function saxlinghamReturn(vehicle)
         {x=-494.31,z=-415.68},
     }, false)
 end
+
+-- Third live corner, failed at handover from waypoint 625.
+function saxlinghamThirdCorner()
+    local v,c,m=saxlinghamCorner()
+    v.rootNode.x=-759.89;v.rootNode.z=-328.53;v.rootNode.t=math.rad(-92.8)
+    m.root={x=v.rootNode.x,z=v.rootNode.z,t=v.rootNode.t}
+    for i,a in ipairs({-92.97,-92.98,-92.94}) do m.links[i].heading=math.rad(a) end
+    local t=math.rad(-168.8)
+    c.workStartNode={x=-757.6,z=-312.87,t=t}
+    c.vehicleAtTurnEndNode={x=-760.71+8.3*math.sin(t),z=-328.57+8.3*math.cos(t),t=t}
+    c.turnEndWpIx=1
+    c.loopFieldWorkCourse=Course(v,{
+        {x=-760.71,z=-328.57},
+        {x=-761.32,z=-331.65},
+        {x=-761.93,z=-334.74},
+        {x=-762.82,z=-338.23},
+        {x=-764.08,z=-341.62},
+        {x=-765.21,z=-344.23},
+        {x=-766.6,z=-346.73},
+        {x=-767.5,z=-348.52},
+        {x=-768.75,z=-351.44},
+        {x=-770.82,z=-355.37},
+        {x=-772.28,z=-357.87},
+        {x=-773.95,z=-360.24},
+        {x=-776.66,z=-363.6},
+        {x=-778.06,z=-365.44},
+        {x=-779.72,z=-367.63},
+        {x=-781.38,z=-369.82},
+        {x=-782.6,z=-371.44},
+        {x=-783.2,z=-372.67},
+        {x=-784.19,z=-375.02},
+        {x=-784.55,z=-375.9},
+        {x=-784.58,z=-376.7},
+        {x=-784.65,z=-380.11},
+        {x=-784.68,z=-382.49},
+        {x=-784.65,z=-385.04},
+        {x=-784.63,z=-388},
+        {x=-784.65,z=-390.82},
+        {x=-784.65,z=-392.26},
+        {x=-784.51,z=-397.27},
+        {x=-784.44,z=-400.02},
+        {x=-784.37,z=-402.77},
+        {x=-784.22,z=-408.27},
+        {x=-784.14,z=-411.02},
+        {x=-784.07,z=-413.77},
+        {x=-784,z=-416.52},
+        {x=-783.92,z=-419.26},
+        {x=-783.78,z=-424.76},
+        {x=-783.63,z=-430.26},
+        {x=-783.56,z=-433.01},
+        {x=-783.48,z=-435.76},
+        {x=-783.41,z=-438.51},
+    },false)
+    return v,c,m
+end

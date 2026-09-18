@@ -247,3 +247,34 @@ This removes unnecessary temporary-course travel after the drill is ready.
 It does not relocate the loop or its work-start line, and does not fix the
 remaining late-lowering coverage gap. The inward loop and five-degree drill
 lowering gate remain. Live performance and crop coverage still need testing.
+
+## Curved return and work-start line - combined test 8.1.0.315
+
+The 22:36-22:41 test of 8.1.0.314 completed the first two corners. The third
+lowered and then stopped at the handover from waypoint 625: the real outgoing
+headland curved away from the temporary straight and its original tangent.
+
+The planner now appends the actual outgoing fieldwork waypoints and checks the
+whole combination along that return. It retains the original course index at
+its endpoint, so handover does not restart its search at the old corner. An
+earlier handover checks the live chain and the remaining outgoing course.
+The return cannot run through another corner or a reversing section.
+
+For this checked fieldwork return, lowering uses the original work-start plane
+and implement markers again, without the added five-degree heading gate that
+kept the drill raised beyond the intended entry. The user's yellow line means
+start sowing as the working bar reaches that line. The screenshot is not a
+surveyed world coordinate: live crop coverage still needs verification.
+Normal sowing-machine lowering stops and configured early/late marker selection
+remain. The complete return follows the configured turn speed; it no longer
+promotes itself to field speed in the middle of a chain-planned loop.
+
+Regressions replay the first and failed third corners against their saved
+outgoing courses, including finer 0.2-metre chain validation, mapped endpoint
+handover, work-start lowering, configured speed, and next-corner/reversal bounds.
+The previous planar geometry and release checks remain mandatory. These tests
+do not establish GIANTS tracking accuracy, exact sowing coverage or live search
+time; the inward loop and its planning pause are still present.
+
+The local combined build includes aad9736b and 7aad509b and retains the exact
+FS25_Courseplay_StraightEntryTest.zip name in its separate numbered folder.
