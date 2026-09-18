@@ -562,14 +562,14 @@ function G.getContinuation(vehicle, course, ix, turnCourse)
     local previousAlong = -math.huge
     for i = ix, course:getNumberOfWaypoints() do
         if course:isTurnStartAtIx(i) or course:isReverseAt(i) then return nextIx, false end
-        local x, _, z = course:getWaypointPosition(i)
+        local x, y, z = course:getWaypointPosition(i)
         local side = (x - r.x) * math.cos(r.t) - (z - r.z) * math.sin(r.t)
         local along = (x - r.x) * math.sin(r.t) + (z - r.z) * math.cos(r.t)
         if along < previousAlong or math.abs(side) > tolerance or math.abs(delta(course:getWaypointYRotation(i), r.t)) > math.rad(15) then
             return nextIx, false
         end
         previousAlong = along
-        local dx, _, dz = worldToLocal(node, x, 0, z)
+        local dx, _, dz = worldToLocal(node, x, y, z)
         if not nextIx and dz > 1 and math.abs(dx) < tolerance and along <= endDistance + .5 then nextIx = i end
         if along >= endDistance then return nextIx, nextIx ~= nil, i end
     end

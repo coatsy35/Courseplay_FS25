@@ -349,6 +349,16 @@ class LoopTests(unittest.TestCase):
             local row=Course.createFromNode(v,v.rootNode,0,-30,70,.5,false)
             local ix,covered=G.getContinuation(v,row,1,turn)
             assert(ix>10 and covered, 'dense waypoints blocked a valid forward continuation')
+            -- Terrain is above world zero and the tractor is pitched. The
+            -- forward test must use each field waypoint's actual height.
+            local position,transform=row.getWaypointPosition,worldToLocal
+            row.getWaypointPosition=function(self,i) local x,_,z=position(self,i);return x,30,z end
+            worldToLocal=function(node,x,y,z)
+                local dx,_,dz=transform(node,x,y,z)
+                return dx,0,dz+(y-30)*.2
+            end
+            assert(G.getContinuation(v,row,1,turn)==ix, 'world-zero height changed the continuation')
+            row.getWaypointPosition=position;worldToLocal=transform
             local resumed
             AIDriveStrategyCourse={onTurnEndProgressEvent=1}
             local strategy={fieldWorkCourse=row,raiseControllerEvent=function() end,
