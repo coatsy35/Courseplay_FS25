@@ -15,10 +15,11 @@ NAME = 'FS25_Courseplay_ImplementProfilesTest.zip'
 VERSION = '8.1.0.301'
 TITLE = 'CoursePlay - Implement Profiles Test'
 BASE = '9b915b07'
+sys.dont_write_bytecode = True
 
 
 def run(*args):
-    subprocess.run([sys.executable, *map(str, args)], cwd=ROOT, check=True)
+    subprocess.run([sys.executable, '-B', *map(str, args)], cwd=ROOT, check=True)
 
 
 def revision():
