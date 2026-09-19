@@ -145,7 +145,8 @@ function CpAIBaleFinder:startCpAtFirstWp(superFunc)
             --- Applies the bale wrap type set in the hud, so ad can start with the correct type.
             --- TODO: This should only be applied, if the driver was started for the first time by ad and not every time.
             spec.cpJobStartAtLastWp:getCpJobParameters().baleWrapType:setValue(spec.cpJob:getCpJobParameters().baleWrapType:getValue())
-            spec.cpJob:applyCurrentState(self, g_currentMission, g_currentMission.playerSystem:getLocalPlayer().farmId, true)
+            --- AutoDrive has reached a new field, so detect the boundary near the current position.
+            spec.cpJob:applyCurrentState(self, g_currentMission, g_currentMission.playerSystem:getLocalPlayer().farmId, true, true)
             spec.cpJob:setValues()
             local success = spec.cpJob:validate(false)
             if success then
@@ -163,7 +164,9 @@ function CpAIBaleFinder:startCpAtLastWp(superFunc)
     if not superFunc(self) then 
         if self:getCanStartCpBaleFinder() then 
             local spec = self.spec_cpAIBaleFinder
-            spec.cpJobStartAtLastWp:applyCurrentState(self, g_currentMission, g_currentMission.playerSystem:getLocalPlayer().farmId, true)
+            local resetFieldPosition = CpAIWorker.getShouldResetFieldPositionAfterAutoDriveHandover(self)
+            spec.cpJobStartAtLastWp:applyCurrentState(self, g_currentMission,
+                    g_currentMission.playerSystem:getLocalPlayer().farmId, true, resetFieldPosition)
             spec.cpJobStartAtLastWp:setValues()
             local success = spec.cpJobStartAtLastWp:validate(false)
             if success then

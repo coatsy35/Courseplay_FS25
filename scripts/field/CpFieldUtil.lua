@@ -30,6 +30,53 @@ function CpFieldUtil.isOnField(x, z, fieldId)
     return isOnField
 end
 
+--- Find a field position close to a point which may be just outside the field boundary.
+---@param x number world X coordinate
+---@param z number world Z coordinate
+---@param maxDistance number maximum search distance in metres
+---@param probeSpacing number|nil approximate distance between probes, defaults to 2 metres
+---@return number|nil, number|nil, number|nil field X, field Z and distance from the original point
+function CpFieldUtil.findNearbyFieldPosition(x, z, maxDistance, probeSpacing)
+    probeSpacing = probeSpacing or 2
+    if maxDistance < 0 or probeSpacing <= 0 then
+        return nil, nil, nil
+    end
+
+    local function isFieldPosition(px, pz)
+        if CpFieldUtil.isOnField(px, pz) then
+            return true
+        end
+        -- Custom fields have no Giants density-map field data.
+        return g_customFieldManager and g_customFieldManager:getCustomField(px, pz) ~= nil
+    end
+
+    if isFieldPosition(x, z) then
+        return x, z, 0
+    end
+
+    -- Search outwards so the first match is the closest field. Scale the probe
+    -- count with each ring to keep approximately probeSpacing metres between probes.
+    for radius = probeSpacing, maxDistance, probeSpacing do
+        local probeCount = math.max(8, math.ceil(2 * math.pi * radius / probeSpacing))
+        for probe = 0, probeCount - 1 do
+            local angle = 2 * math.pi * probe / probeCount
+            local dx, dz = math.cos(angle), math.sin(angle)
+            local px, pz = x + dx * radius, z + dz * radius
+            if isFieldPosition(px, pz) then
+                -- Prefer a point one probe step farther into the field so boundary
+                -- detection does not start on a marginal density-map pixel.
+                local insetRadius = math.min(radius + probeSpacing, maxDistance)
+                local insetX, insetZ = x + dx * insetRadius, z + dz * insetRadius
+                if insetRadius > radius and isFieldPosition(insetX, insetZ) then
+                    return insetX, insetZ, insetRadius
+                end
+                return px, pz, radius
+            end
+        end
+    end
+    return nil, nil, nil
+end
+
 function CpFieldUtil.initFieldMod()
     local groundTypeMapId, groundTypeFirstChannel, groundTypeNumChannels = g_currentMission.fieldGroundSystem:getDensityMapData(FieldDensityMap.GROUND_TYPE)
     CpFieldUtil.groundTypeModifier = DensityMapModifier.new(groundTypeMapId, groundTypeFirstChannel, groundTypeNumChannels,

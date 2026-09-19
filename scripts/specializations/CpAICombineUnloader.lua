@@ -258,7 +258,8 @@ function CpAICombineUnloader:startCpAtFirstWp(superFunc)
     if not superFunc(self) then 
         if self:getCanStartCpCombineUnloader() then
             local spec = self.spec_cpAICombineUnloader
-            spec.cpJob:applyCurrentState(self, g_currentMission, g_currentMission.playerSystem:getLocalPlayer().farmId, true)
+            --- AutoDrive has reached a new field, so detect the boundary near the current position.
+            spec.cpJob:applyCurrentState(self, g_currentMission, g_currentMission.playerSystem:getLocalPlayer().farmId, true, true)
             spec.cpJob:setValues()
             local success = spec.cpJob:validate(false)
             if success then
@@ -276,7 +277,9 @@ function CpAICombineUnloader:startCpAtLastWp(superFunc)
     if not superFunc(self) then 
         if self:getCanStartCpCombineUnloader() then
             local spec = self.spec_cpAICombineUnloader
-            spec.cpJob:applyCurrentState(self, g_currentMission, g_currentMission.playerSystem:getLocalPlayer().farmId, true)
+            local resetFieldPosition = CpAIWorker.getShouldResetFieldPositionAfterAutoDriveHandover(self)
+            spec.cpJob:applyCurrentState(self, g_currentMission,
+                    g_currentMission.playerSystem:getLocalPlayer().farmId, true, resetFieldPosition)
             spec.cpJob:setValues()
             local success = spec.cpJob:validate(false)
             if success then

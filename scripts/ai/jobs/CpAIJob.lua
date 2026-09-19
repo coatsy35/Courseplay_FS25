@@ -201,6 +201,27 @@ function CpAIJob:applyCurrentState(vehicle, mission, farmId, isDirectStart)
 
 end
 
+--- Sets the job field position from the vehicle, preferring a nearby point inside a field.
+---@param vehicle table
+---@param maxDistance number maximum nearby-field search distance in metres
+function CpAIJob:setFieldPositionFromVehicle(vehicle, maxDistance)
+	local vehicleX, _, vehicleZ = getWorldTranslation(vehicle.rootNode)
+	local fieldX, fieldZ, distance = CpFieldUtil.findNearbyFieldPosition(
+			vehicleX, vehicleZ, maxDistance)
+	if fieldX then
+		vehicleX, vehicleZ = fieldX, fieldZ
+		if distance > 0 then
+			self:debug('Using nearby field position %.1f/%.1f, %.1f m from vehicle',
+					vehicleX, vehicleZ, distance)
+		end
+	else
+		-- Retain the original vehicle position so normal validation reports that
+		-- no field could be detected within the permitted starting distance.
+		self:debug('No field found within %.1f m of vehicle', maxDistance)
+	end
+	self.cpJobParameters.fieldPosition:setPosition(vehicleX, vehicleZ)
+end
+
 --- Can the vehicle be used for this job?
 function CpAIJob:getIsAvailableForVehicle(vehicle, cpJobsAllowed)
 	return cpJobsAllowed

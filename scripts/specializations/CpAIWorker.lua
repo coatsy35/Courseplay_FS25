@@ -193,6 +193,17 @@ function CpAIWorker:onPreDelete()
 
 end
 
+--- AutoDrive currently uses the last-waypoint entry point for both fresh deliveries and restarts.
+---@param vehicle table
+---@return boolean true when Courseplay should locate the field near the vehicle
+function CpAIWorker.getShouldResetFieldPositionAfterAutoDriveHandover(vehicle)
+    local resetFieldPosition = vehicle.ad == nil or not vehicle.ad.restartCP
+    CpUtil.debugVehicle(CpDebug.DBG_FIELDWORK, vehicle,
+            "AutoDrive handover: %s",
+            resetFieldPosition and "resetting field position near vehicle" or "preserving existing field position")
+    return resetFieldPosition
+end
+
 -----------------------------------------------
 --- Action input events
 -----------------------------------------------
