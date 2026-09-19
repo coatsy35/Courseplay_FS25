@@ -215,6 +215,8 @@ function CpAIJob:setFieldPositionFromVehicle(vehicle, maxDistance)
 					vehicleX, vehicleZ, distance)
 		end
 	else
+		-- Retain the original vehicle position so normal validation reports that
+		-- no field could be detected within the permitted starting distance.
 		self:debug('No field found within %.1f m of vehicle', maxDistance)
 	end
 	self.cpJobParameters.fieldPosition:setPosition(vehicleX, vehicleZ)

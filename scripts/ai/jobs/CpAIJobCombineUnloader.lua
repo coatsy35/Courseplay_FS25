@@ -69,8 +69,8 @@ function CpAIJobCombineUnloader:applyCurrentState(vehicle, mission, farmId, isDi
 	self:copyFrom(vehicle:getCpCombineUnloaderJob())
 
 	local x, z = self.cpJobParameters.fieldPosition:getPosition()
-	-- A direct reset must use the field at the vehicle instead of retaining the
-	-- boundary from the previous job.
+	-- A direct reset must locate the field near the vehicle instead of retaining
+	-- the boundary from the previous job.
 	if resetFieldPosition or x == nil or z == nil then
 		self:setFieldPositionFromVehicle(vehicle, self.minStartDistanceToField)
 	end

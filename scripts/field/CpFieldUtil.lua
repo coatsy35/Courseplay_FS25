@@ -46,6 +46,7 @@ function CpFieldUtil.findNearbyFieldPosition(x, z, maxDistance, probeSpacing)
         if CpFieldUtil.isOnField(px, pz) then
             return true
         end
+        -- Custom fields have no Giants density-map field data.
         return g_customFieldManager and g_customFieldManager:getCustomField(px, pz) ~= nil
     end
 
@@ -53,6 +54,8 @@ function CpFieldUtil.findNearbyFieldPosition(x, z, maxDistance, probeSpacing)
         return x, z, 0
     end
 
+    -- Search outwards so the first match is the closest field. Scale the probe
+    -- count with each ring to keep approximately probeSpacing metres between probes.
     for radius = probeSpacing, maxDistance, probeSpacing do
         local probeCount = math.max(8, math.ceil(2 * math.pi * radius / probeSpacing))
         for probe = 0, probeCount - 1 do
