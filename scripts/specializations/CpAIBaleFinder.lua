@@ -164,7 +164,13 @@ function CpAIBaleFinder:startCpAtLastWp(superFunc)
     if not superFunc(self) then 
         if self:getCanStartCpBaleFinder() then 
             local spec = self.spec_cpAIBaleFinder
-            spec.cpJobStartAtLastWp:applyCurrentState(self, g_currentMission, g_currentMission.playerSystem:getLocalPlayer().farmId, true)
+            --- AutoDrive currently uses this entry point for both a fresh delivery and a restart.
+            local resetFieldPosition = self.ad == nil or not self.ad.restartCP
+            CpUtil.debugVehicle(CpDebug.DBG_FIELDWORK, self,
+                    "AutoDrive handover: %s",
+                    resetFieldPosition and "resetting field position at vehicle" or "preserving existing field position")
+            spec.cpJobStartAtLastWp:applyCurrentState(self, g_currentMission,
+                    g_currentMission.playerSystem:getLocalPlayer().farmId, true, resetFieldPosition)
             spec.cpJobStartAtLastWp:setValues()
             local success = spec.cpJobStartAtLastWp:validate(false)
             if success then

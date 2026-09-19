@@ -277,7 +277,13 @@ function CpAICombineUnloader:startCpAtLastWp(superFunc)
     if not superFunc(self) then 
         if self:getCanStartCpCombineUnloader() then
             local spec = self.spec_cpAICombineUnloader
-            spec.cpJob:applyCurrentState(self, g_currentMission, g_currentMission.playerSystem:getLocalPlayer().farmId, true)
+            --- AutoDrive currently uses this entry point for both a fresh delivery and a restart.
+            local resetFieldPosition = self.ad == nil or not self.ad.restartCP
+            CpUtil.debugVehicle(CpDebug.DBG_FIELDWORK, self,
+                    "AutoDrive handover: %s",
+                    resetFieldPosition and "resetting field position at vehicle" or "preserving existing field position")
+            spec.cpJob:applyCurrentState(self, g_currentMission,
+                    g_currentMission.playerSystem:getLocalPlayer().farmId, true, resetFieldPosition)
             spec.cpJob:setValues()
             local success = spec.cpJob:validate(false)
             if success then
