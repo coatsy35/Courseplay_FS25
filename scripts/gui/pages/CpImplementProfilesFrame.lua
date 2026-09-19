@@ -68,8 +68,14 @@ function CpImplementProfilesFrame:buildGroups()
             table.sort(models)
             local modelKey = table.concat(models, '|')
             local categories = {}
-            if #profile.equipment > 1 then categories.combinations = true end
             for _, item in ipairs(profile.equipment) do categories[item.group] = true end
+            -- Keep harvesting setups together, without duplicate header or combination entries.
+            -- This affects browsing only; matching still uses every saved equipment item.
+            if categories.harvesters or categories.headers then
+                categories = {harvesters = true}
+            elseif #profile.equipment > 1 then
+                categories.combinations = true
+            end
             -- Multiple directory links refer to the same profile ID, never duplicate saved data.
             for group in pairs(categories) do
                 groups[group] = groups[group] or {title = g_i18n:getText('CP_implementProfiles_group_' .. group), models = {}, count = 0}
