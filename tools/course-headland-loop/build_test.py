@@ -15,8 +15,8 @@ from zipfile import ZipFile
 ROOT = Path(__file__).resolve().parents[2]
 NAME = 'FS25_Courseplay_ImplementProfilesTest.zip'
 TITLE = 'CoursePlay - Implement Profiles Test'
-VERSION = '8.1.0.318'
-BUILD = '001'
+VERSION = '8.1.0.319'
+BUILD = '002'
 BASE = '00a5216b'
 
 

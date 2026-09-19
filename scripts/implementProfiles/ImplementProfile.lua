@@ -211,7 +211,13 @@ function ImplementProfile.validateSettings(vehicle, values)
         count = count + 1
         local setting = ImplementProfile.setting(vehicle, key)
         if not setting then return false, key end
-        if setting:getIsDisabled() and setting:getValue() ~= value then return false, key end
+        if setting:getIsDisabled() and setting:getValue() ~= value then
+            -- A profile may enable the prerequisite in the same transaction. Validation
+            -- must use the complete target state rather than table iteration order.
+            local enablesRoundedHeadland = key == 'vehicle.loopTurnsOnHeadland' and value == true and
+                (values['generator.headlandsWithRoundCorners'] or 0) >= 1
+            if not enablesRoundedHeadland then return false, key end
+        end
         local valid = false
         for _, option in ipairs(setting.values) do
             if option == value or (type(option) == 'number' and type(value) == 'number' and
@@ -229,6 +235,10 @@ function ImplementProfile.setSettings(vehicle, values)
             if type(value) == 'boolean' then setting:setValue(value, true)
             else setting:setFloatValue(value, 0.002, true) end
         end
+    end
+    local generator = vehicle:getCourseGeneratorSettings()
+    if generator.headlandsWithRoundCorners and generator.headlandsWithRoundCorners:getValue() < 1 then
+        vehicle:getCpSettings().loopTurnsOnHeadland:setValue(false, true)
     end
 end
 

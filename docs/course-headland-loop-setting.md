@@ -5,6 +5,10 @@ Branch: `codex/course-headland-loop-setting`, based on main `00a5216b`.
 **Loop turn on headland** is now under **Course generation > Fieldwork Settings > Headland**,
 beside the rounded-corner setting. It is available without expert mode and removed from the
 vehicle page. This selects driving behaviour; it does not regenerate or alter course waypoints.
+Its on-screen note explains that it is intended for large trailed combinations, works best with
+two curved headland rows and may not provide full coverage with one.
+The option is enabled only when **Headlands with round corners** is at least one. Reducing that
+setting to zero also switches loop turns off for the loaded working course.
 
 Implement profiles still supply the working preference. Generate a course using that preference,
 or adjust it with a course loaded. Saving the course records the choice. Loading a saved course
@@ -27,7 +31,7 @@ Lupa and lxml installed. The release gate runs packaging/translation checks, imp
 tests, course preference tests, straight-entry and headland-loop regressions. It builds twice for
 reproducibility, checks the packaged bytes and tests the extracted runtime before publishing.
 
-Test build 001 uses version `8.1.0.318`, filename `FS25_Courseplay_ImplementProfilesTest.zip` and
+Test build 002 uses version `8.1.0.319`, filename `FS25_Courseplay_ImplementProfilesTest.zip` and
 title `CoursePlay - Implement Profiles Test`. The live manifest and live ZIP remain separate.
 
 In FS25, check the visible row and controller navigation; save two courses with opposite choices,

@@ -15,6 +15,15 @@ class CourseHeadlandSettingTests(unittest.TestCase):
         self.lua.globals().ROOT = ROOT.as_posix()
         setting = ET.parse(ROOT / 'config/VehicleSettingsSetup.xml').find(".//Setting[@name='loopTurnsOnHeadland']")
         self.lua.globals().SETTING_CALLBACK = setting.attrib['onChangeCallback']
+        self.assertEqual(setting.attrib['tooltip'], 'CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip')
+        self.assertEqual(setting.attrib['isDisabled'], 'isLoopTurnsOnHeadlandDisabled')
+        rounded = ET.parse(ROOT / 'config/CourseGeneratorSettingsSetup.xml').find(
+            ".//Setting[@name='headlandsWithRoundCorners']")
+        self.assertEqual(rounded.attrib['onChangeCallback'], 'onCpHeadlandsWithRoundCornersChanged')
+        master = ET.parse(ROOT / 'config/MasterTranslations.xml')
+        note = master.find(".//Translation[@name='CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip']/Text[@language='en']")
+        self.assertEqual(note.text, 'For large trailed combinations, instead of performing a normal corner turn on a headland, '
+                         'the vehicle will drive a loop. Best used with two curved headland rows; may not give full coverage with one.')
         self.lua.execute((SOURCE / 'tools/double-pivot/engine-boundary.lua').read_text(encoding='utf-8-sig'))
         self.lua.execute('''
             package.path = ROOT .. '/scripts/specializations/?.lua;' .. ROOT .. '/scripts/gui/pages/?.lua;'
@@ -23,7 +32,7 @@ class CourseHeadlandSettingTests(unittest.TestCase):
             g_currentModName = 'test'
             g_currentMission.missionDynamicInfo = {isMultiplayer=false}
             g_i18n = {getText=function(_, s) return s end}
-            g_server = {}
+            g_server = {broadcastEvent=function() end}
             AIParameterType = {SELECTOR=1}
             InputAction = {}
             Class = function(c, p) return {__index=c} end
@@ -54,7 +63,7 @@ class CourseHeadlandSettingTests(unittest.TestCase):
                 local v = {}
                 v['spec_' .. CpCourseManager.SPEC_NAME] = {courses={}}
                 v.getCpSettings = function(self) return self.settings end
-                v.getCourseGeneratorSettings = function() return {} end
+                v.getCourseGeneratorSettings = function(self) return self.generator or {} end
                 v.getFieldWorkCourse = CpCourseManager.getFieldWorkCourse
                 v.settings = {}
                 v.settings.loopTurnsOnHeadland = AIParameterBooleanSetting({
@@ -195,6 +204,23 @@ class CourseHeadlandSettingTests(unittest.TestCase):
             assert(not CpCourseGeneratorSettings.isHeadlandSectionVisible(v))
             selected=1
             assert(CpCourseGeneratorSettings.isHeadlandSectionVisible(v))
+        ''')
+
+    def test_loop_option_requires_a_rounded_headland_and_turns_off_at_zero(self):
+        self.lua.execute('''
+            local v = vehicle(true)
+            local rounded = 1
+            local roundedSetting = {getValue=function() return rounded end}
+            v.generator = {headlandsWithRoundCorners=roundedSetting}
+            local c = Course(nil, {}); c.loopTurnsOnHeadland=true; assign(v, c)
+            assert(not CpVehicleSettings.isLoopTurnsOnHeadlandDisabled(v))
+            rounded=0
+            assert(CpVehicleSettings.isLoopTurnsOnHeadlandDisabled(v))
+            CpCourseGeneratorSettings.onCpHeadlandsWithRoundCornersChanged(v, roundedSetting)
+            assert(not v.settings.loopTurnsOnHeadland:getValue())
+            assert(c.loopTurnsOnHeadland == false)
+            ImplementProfile.setSettings(v, {['vehicle.loopTurnsOnHeadland']=true})
+            assert(not v.settings.loopTurnsOnHeadland:getValue())
         ''')
 
 

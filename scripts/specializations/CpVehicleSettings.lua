@@ -249,6 +249,11 @@ function CpVehicleSettings:onCpLoopTurnsOnHeadlandChanged(setting)
     if course then course.loopTurnsOnHeadland = setting:getValue() end
 end
 
+function CpVehicleSettings:isLoopTurnsOnHeadlandDisabled()
+    local settings = self:getCourseGeneratorSettings()
+    return settings.headlandsWithRoundCorners:getValue() < 1
+end
+
 function CpVehicleSettings:loadSettings(savegame)
     if savegame == nil or savegame.resetVehicles then return end
     local spec = self.spec_cpVehicleSettings

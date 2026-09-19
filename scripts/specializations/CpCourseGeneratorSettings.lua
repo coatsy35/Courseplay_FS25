@@ -41,10 +41,11 @@ function CpCourseGeneratorSettings.prerequisitesPresent(specializations)
 end
 
 function CpCourseGeneratorSettings.registerEvents(vehicleType)
- --   SpecializationUtil.registerEvent(vehicleType,"cpUpdateGui")
+    SpecializationUtil.registerEvent(vehicleType, 'onCpHeadlandsWithRoundCornersChanged')
 end
 
 function CpCourseGeneratorSettings.registerEventListeners(vehicleType)	
+	SpecializationUtil.registerEventListener(vehicleType, 'onCpHeadlandsWithRoundCornersChanged', CpCourseGeneratorSettings)
 	SpecializationUtil.registerEventListener(vehicleType, "onLoad", CpCourseGeneratorSettings)
     SpecializationUtil.registerEventListener(vehicleType, "onUpdate", CpCourseGeneratorSettings)
     SpecializationUtil.registerEventListener(vehicleType, "onLoadFinished",CpCourseGeneratorSettings)
@@ -294,6 +295,14 @@ function CpCourseGeneratorSettings:isHeadlandSectionVisible()
     if CpCourseGeneratorSettings.hasHeadlandsSelected(self) then return true end
     local course = self.getFieldWorkCourse and self:getFieldWorkCourse()
     return course ~= nil and (course:getNumberOfHeadlands() or 0) > 0
+end
+
+--- A loop needs at least one rounded headland pass. Keep the active course and
+-- networked working value consistent when the prerequisite is removed.
+function CpCourseGeneratorSettings:onCpHeadlandsWithRoundCornersChanged(setting)
+    if setting:getValue() < 1 then
+        self:getCpSettings().loopTurnsOnHeadland:setValue(false)
+    end
 end
 
 function CpCourseGeneratorSettings:isNarrowFieldEnabled()
