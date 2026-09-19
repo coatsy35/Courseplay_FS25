@@ -1092,9 +1092,37 @@ function TestImplementProfiles:testCombinationAppearsUnderItsComponentTypes()
     lu.assertEquals(links, 3)
 end
 
+-- Harvester/header profiles share one directory section without changing equipment identity.
+function TestImplementProfiles:testHarvestersAndHeadersAreListedOnlyUnderHarvesters()
+    local setups = {
+        vehicle('combine', {{object = implement('header', 'spec_cutter')}}),
+        vehicle('tractor', {{object = implement('header', 'spec_cutter')}, {object = implement('trailer', 'spec_trailer')}}),
+        vehicle('integratedHarvester', {})
+    }
+    setups[1].spec_combine, setups[3].spec_combine = {}, {}
+    local manager = g_Courseplay.implementProfiles
+    local frame = CpImplementProfilesFrame.new()
+    frame.attachedOnly = false
+    for i, v in ipairs(setups) do
+        local profile = manager:save(v, 'Harvest setup ' .. i)
+        frame.equipment = ImplementProfile.describe(v)
+        local groups = frame:buildGroups()
+        lu.assertNil(groups.combinations)
+        lu.assertNotNil(groups.harvesters)
+        lu.assertNil(groups.headers)
+        lu.assertNil(groups.other)
+        lu.assertEquals(groups.harvesters.count, i)
+        lu.assertEquals(ImplementProfile.match(profile, frame.equipment), 'exact')
+    end
+    -- Ordinary multi-implement setups must still appear alongside their component categories.
+    local tractor = vehicle(nil, {{object = implement('plough')}, {object = implement('drill', 'spec_sowingMachine')}})
+    manager:save(tractor, 'Fieldwork combination')
+    lu.assertEquals(frame:buildGroups().combinations.count, 1)
+end
+
 function TestImplementProfiles:testSaveFromFieldworkSettings()
     local v = vehicle()
-    local frame = setmetatable({}, {__index = CpCourseGeneratorFrame})
+    local frame = setmetatable({fieldworkSettingsVisible = true}, {__index = CpCourseGeneratorFrame})
     frame.cpMenu = {getCurrentVehicle = function() return v end}
     local callback
     local oldDialog = TextInputDialog
@@ -1114,6 +1142,36 @@ function TestImplementProfiles:testSaveFromFieldworkSettings()
     lu.assertEquals(frame.fieldworkProfiles[1].name, 'Fieldwork setup')
     lu.assertEquals(frame.fieldworkProfiles[1].settings, ImplementProfile.capture(v))
     lu.assertEquals(selected, 1)
+    TextInputDialog = oldDialog
+end
+
+-- Map saving uses the same library flow and must not jump to the fieldwork settings page.
+function TestImplementProfiles:testSaveProfileFromMapFooterKeepsMapOpen()
+    local current = vehicle()
+    local page = {setVisible = function() end, getDescendantByName = function() return nil end}
+    local frame = setmetatable({
+        cpMenu = {getCurrentVehicle = function() return current end, defaultMenuButtonInfo = {}},
+        subCategoryPages = {page}, subCategoryTabs = {{setSelected = function() end}},
+        settingsSliderBox = {setVisible = function() end}, ingameMap = {setVisible = function() end},
+        openMap = function() end, setMenuButtonInfoDirty = function() end
+    }, {__index = CpCourseGeneratorFrame})
+    frame:updateSubCategoryPages(frame.CATEGRORIES.IN_GAME_MAP)
+    lu.assertEquals(#frame.menuButtonInfo, 1)
+    lu.assertEquals(frame.menuButtonInfo[1].text, 'CP_implementProfiles_saveProfile')
+    local callback
+    local oldDialog = TextInputDialog
+    TextInputDialog = {show = function(fn) callback = fn end}
+    frame.menuButtonInfo[1].callback()
+    callback(nil, 'Map setup', true)
+    local profiles = g_Courseplay.implementProfiles:getMatchingProfiles(current)
+    lu.assertEquals(#profiles, 1)
+    lu.assertEquals(profiles[1].name, 'Map setup')
+    lu.assertEquals(profiles[1].settings, ImplementProfile.capture(current))
+    lu.assertFalse(frame.fieldworkSettingsVisible)
+    lu.assertNil(current.cpImplementProfile)
+    current = nil
+    frame:updateSubCategoryPages(frame.CATEGRORIES.IN_GAME_MAP)
+    lu.assertEquals(#frame.menuButtonInfo, 0)
     TextInputDialog = oldDialog
 end
 
