@@ -76,6 +76,10 @@ require('Corner')
 require('TurnContext')
 require('BulbTurnExtension')
 require('HeadlandLoopGeometry')
+require('HeadlandLoopModel')
+require('HeadlandLoopValidation')
+require('HeadlandLoopReturn')
+require('HeadlandLoopSearch')
 Logging = {info = function() end}
 ImplementUtil = {isWheeledImplement = function() return false end}
 WorkWidthUtil = {getAutomaticWorkWidthAndOffset = function(_, _, _) return 0, 0 end}

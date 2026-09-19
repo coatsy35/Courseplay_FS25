@@ -35,7 +35,18 @@ class LoopTests(unittest.TestCase):
             assert(#m.links==3 and m.internalPivots==1)
             assert(math.abs(m.links[2].length-3.78)<.02 and m.links[2].internal)
             assert(math.abs(m.links[3].length-4.30)<.02 and m.links[3].internal)
+            assert(math.abs(m.links[2].maxArticulation-G.maxArticulation)<1e-6)
+            assert(math.abs(m.links[3].maxArticulation-math.pi/3)<1e-6)
             assert(math.abs(m.width-30)<1e-6)
+        ''')
+
+    def test_working_width_does_not_inflate_axle_turning_radius(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local narrow=assert(G.detect(fixture({internal=true,width=8})))
+            local wide=assert(G.detect(fixture({internal=true,width=30})))
+            local nr,wr=assert(G.minimumRadius(narrow,10)),assert(G.minimumRadius(wide,10))
+            assert(math.abs(nr-wr)<.001, string.format('width changed radius %.2f -> %.2f',nr,wr))
         ''')
 
     def test_unsupported_geometry_is_not_silently_modelled(self):
@@ -48,13 +59,13 @@ class LoopTests(unittest.TestCase):
             v,c,d,cart=fixture(); v.children[2]={object=cart}; assert(not G.detect(v))
         ''')
 
-    def test_width_and_second_link_change_radius_independently(self):
+    def test_second_link_length_changes_radius_but_width_does_not(self):
         self.lua.execute('''
             local G=HeadlandLoopGeometry
             local narrow=G.detect(fixture({width=8,cartLength=5}))
             local wide=G.detect(fixture({width=40,cartLength=5}))
             local long=G.detect(fixture({width=8,cartLength=14}))
-            assert(G.minimumRadius(wide,10)>G.minimumRadius(narrow,10))
+            assert(math.abs(G.minimumRadius(wide,10)-G.minimumRadius(narrow,10))<.001)
             assert(G.minimumRadius(long,10)>G.minimumRadius(narrow,10))
         ''')
 
@@ -91,6 +102,17 @@ class LoopTests(unittest.TestCase):
             assert(not G.bodyFits(b,{x=48,z=0,t=0},G.getBoundary(v)))
         ''')
 
+    def test_declared_body_checks_boundary_without_treating_working_width_as_solid(self):
+        self.lua.execute('''
+            local field={{x=-10,z=-40},{x=10,z=-40},{x=10,z=20},{x=-10,z=20}}
+            local v=fixture({internal=true,width=30,field=field})
+            local m=assert(HeadlandLoopGeometry.detect(v))
+            local boundary=assert(HeadlandLoopGeometry.getBoundary(v))
+            local pose={x=0,z=-9.8,t=0}
+            assert(not HeadlandLoopGeometry.bodyFits(m.bodies[2],pose,boundary))
+            assert(HeadlandLoopGeometry.bodyFits(m.bodies[2].collision,pose,boundary))
+        ''')
+
     def test_real_loop_generation_both_sides_and_configured_speed_allowances(self):
         for side in [-1, 1]:
             for lead in [0.5, 8.0]:
@@ -117,6 +139,45 @@ class LoopTests(unittest.TestCase):
             assert(m.chainPlanned and not m.course)
         ''')
 
+    def test_planner_checks_non_shortest_dubins_words(self):
+        self.lua.execute('''
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,field=field})
+            local model=assert(HeadlandLoopGeometry.detect(v))
+            local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local search=HeadlandLoopGeometry.createSearch(maneuver,model,.5)
+            while search.phase=='preparing' do assert(not search:step()) end
+            local words={}
+            local last=-math.huge
+            for _,candidate in ipairs(search.candidates) do
+                words[candidate.name]=true
+                assert(candidate.score>=last)
+                last=candidate.score
+            end
+            local count=0
+            for _ in pairs(words) do count=count+1 end
+            assert(count==6, 'search omitted a Dubins word')
+        ''')
+
+    def test_transient_search_starts_at_configured_radius(self):
+        self.lua.execute('''
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,field=field})
+            local model=assert(HeadlandLoopGeometry.detect(v))
+            local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            HeadlandLoopGeometry.minimumRadius=function() return 20 end
+            local search=HeadlandLoopGeometry.createSearch(maneuver,model,.5)
+            while search.phase=='preparing' do assert(not search:step()) end
+            local configured,shortEntry=false,false
+            for _,candidate in ipairs(search.candidates) do
+                configured=configured or candidate.radius==10
+                shortEntry=shortEntry or candidate.entry<1
+            end
+            assert(configured and shortEntry, 'search discarded transient corner approaches')
+        ''')
+
     def test_internal_pivot_uses_chain_planner_and_detected_width(self):
         self.lua.execute('''
             local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
@@ -128,7 +189,7 @@ class LoopTests(unittest.TestCase):
             assert(course, tostring(reason))
             assert(string.find(reason,'3 pivots %(1 internal%)'))
             local plannedRadius=tonumber(string.match(reason,'radius ([%d.]+)'))
-            assert(plannedRadius>15.5 and plannedRadius<50, tostring(reason))
+            assert(plannedRadius>=10 and plannedRadius<50, tostring(reason))
             local m=LoopTurnManeuver(v,c,v.rootNode,10,8,9.8,.5)
             assert(m.chainPlanned and m.course, tostring(reason))
         ''')
@@ -138,6 +199,17 @@ class LoopTests(unittest.TestCase):
             local v,c=fixture({internal=true})
             local m=LoopTurnManeuver(v,c,v.rootNode,10,25.6,9.8,.5)
             assert(m.chainPlanned and not m.course)
+        ''')
+
+    def test_internal_pivot_uses_map_boundary_when_job_cache_is_empty(self):
+        self.lua.execute('''
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,mapField=field})
+            assert(v.cpGetFieldPolygon==nil)
+            local boundary=assert(HeadlandLoopGeometry.getBoundary(v))
+            assert(boundary.source=='map field')
+            local m=LoopTurnManeuver(v,c,v.rootNode,10,25.6,9.8,.5)
+            assert(m.chainPlanned and m.course)
         ''')
 
     def test_width_fallback_rejects_a_field_crossing(self):
@@ -192,7 +264,14 @@ class LoopTests(unittest.TestCase):
                     states={TURNING={}},ppc={setCourse=function() error('must not install rejected course') end}},CourseTurn)
                 t.debug=function() end
                 AITurn.canTurnOnField=function() return true end
+                v.getLastSpeed=function() return 0 end
+                openIntervalTimer=function() return 1 end
+                readIntervalTimerMs=function() return 5 end
+                closeIntervalTimer=function() end
                 t:startTurn()
+                assert(not stopped and t.state==t.states.WAITING_FOR_LOOP)
+                t:updateLoopSearch()
+                t:updateLoopSearch()
                 assert(stopped and not t.turnCourse)
             end
         ''')
@@ -225,12 +304,405 @@ class LoopTests(unittest.TestCase):
             assert(not ok and (reason=='articulation' or reason=='implement clearance'), tostring(reason))
         ''')
 
+    def test_optimised_clearance_matches_independent_corner_projection(self):
+        self.lua.execute("""
+            local function reference(a,pa,b,pb)
+                local function corners(body,pose)
+                    local front,back=body.front-2,body.back+2
+                    if front<=back then front,back=body.front,body.back end
+                    local out={}
+                    for _,x in ipairs({body.left,body.right}) do
+                        for _,z in ipairs({front,back}) do
+                            out[#out+1]={x=pose.x+x*math.cos(pose.t)+z*math.sin(pose.t),
+                                z=pose.z-x*math.sin(pose.t)+z*math.cos(pose.t)}
+                        end
+                    end
+                    return out
+                end
+                local ac,bc=corners(a,pa),corners(b,pb)
+                for _,t in ipairs({pa.t,pa.t+math.pi/2,pb.t,pb.t+math.pi/2}) do
+                    local amin,amax,bmin,bmax=math.huge,-math.huge,math.huge,-math.huge
+                    for _,p in ipairs(ac) do local q=p.x*math.cos(t)-p.z*math.sin(t);amin=math.min(amin,q);amax=math.max(amax,q) end
+                    for _,p in ipairs(bc) do local q=p.x*math.cos(t)-p.z*math.sin(t);bmin=math.min(bmin,q);bmax=math.max(bmax,q) end
+                    if amax<=bmin or bmax<=amin then return false end
+                end
+                return true
+            end
+            math.randomseed(312)
+            for i=1,2000 do
+                local a={left=math.random()*10,right=-math.random()*4,front=math.random()*10,back=-math.random()*10}
+                local b={left=math.random()*6,right=-math.random()*5,front=math.random()*9,back=-math.random()*12}
+                local pa={x=100,z=-200,t=math.random()*6.28}
+                local pb={x=85+math.random()*30,z=-215+math.random()*30,t=math.random()*6.28}
+                assert(HeadlandLoopGeometry.bodiesOverlap(a,pa,b,pb)==reference(a,pa,b,pb), 'rectangle SAT changed')
+            end
+        """)
+
+    def test_checked_row_handover_uses_distance_and_validates_live_cart(self):
+        self.lua.execute("""
+            local G=HeadlandLoopGeometry
+            local field={{x=-100,z=-100},{x=100,z=-100},{x=100,z=150},{x=-100,z=150}}
+            local v,c,d,cart=fixture({internal=true,field=field})
+            local model=assert(G.detect(v))
+            local turn=Course.createFromNode(v,v.rootNode,0,0,60,1,false)
+            turn.chainReturn={x=0,z=0,t=0,model=model,boundary=G.getBoundary(v)}
+            local row=Course.createFromNode(v,v.rootNode,0,-30,70,.5,false)
+            local ix,covered=G.getContinuation(v,row,1,turn)
+            assert(ix>10 and covered, 'dense waypoints blocked a valid forward continuation')
+            -- Terrain is above world zero and the tractor is pitched. The
+            -- forward test must use each field waypoint's actual height.
+            local position,transform=row.getWaypointPosition,worldToLocal
+            row.getWaypointPosition=function(self,i) local x,_,z=position(self,i);return x,30,z end
+            worldToLocal=function(node,x,y,z)
+                local dx,_,dz=transform(node,x,y,z)
+                return dx,0,dz+(y-30)*.2
+            end
+            assert(G.getContinuation(v,row,1,turn)==ix, 'world-zero height changed the continuation')
+            row.getWaypointPosition=position;worldToLocal=transform
+            local resumed
+            AIDriveStrategyCourse={onTurnEndProgressEvent=1}
+            local strategy={fieldWorkCourse=row,raiseControllerEvent=function() end,
+                resumeFieldworkAfterTurn=function(_,startIx)
+                    local actual,found=row:getNextFwdWaypointIxFromVehiclePosition(startIx,v.rootNode,12.8,10)
+                    assert(found and actual==ix, 'merged ten-waypoint search still stopped')
+                    resumed=actual
+                end}
+            local t=setmetatable({vehicle=v,turnContext=c,turnCourse=turn,driveStrategy=strategy,
+                ppc={isReversing=function() return false end,restorePreviouslyRegisteredListeners=function() end}},CourseTurn)
+            t.getLowerImplementNode=function() return c.workStartNode end
+            t:resumeFieldworkAfterTurn(1)
+            assert(resumed==ix, 'turn did not supply its checked continuation index')
+            cart.rootNode.t=math.rad(12);cart.joint.rootNode.t=math.rad(8)
+            assert(not G.isAligned(v,v.rootNode))
+            assert(G.canContinueOnCheckedRow(v,row,1,turn), 'safe straight work waited for the trailing cart')
+            d.rootNode.t=math.rad(9)
+            assert(not G.canContinueOnCheckedRow(v,row,1,turn), 'working drill was not aligned')
+            d.rootNode.t=0;cart.rootNode.t=math.rad(80)
+            assert(not G.canContinueOnCheckedRow(v,row,1,turn), 'excessive cart articulation was accepted')
+            cart.rootNode.t=math.rad(12)
+            row.isTurnStartAtIx=function(_,i) return i==ix+5 end
+            assert(not G.canContinueOnCheckedRow(v,row,1,turn), 'handover crossed the next corner')
+            row.isTurnStartAtIx=function() return false end
+            row.waypoints[ix+20].x=80
+            assert(not G.canContinueOnCheckedRow(v,row,1,turn), 'unmatched continuation was accepted')
+        """)
+
+    def test_saved_return_resolves_late_handover_and_checks_earlier_continuation(self):
+        self.lua.execute((SOURCE / 'tools/double-pivot/saxlingham-corner.lua').read_text())
+        self.lua.execute("""
+            local G=HeadlandLoopGeometry
+            local v,c,m=saxlinghamCorner()
+            local turn=assert(G.plan({vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=25.6,steeringLength=9.8},m,1.68))
+            local row=saxlinghamReturn(v)
+            local target=c.workStartNode
+            v.rootNode.x=target.x+49*math.sin(target.t)
+            v.rootNode.z=target.z+49*math.cos(target.t);v.rootNode.t=target.t
+            local _,oldFound=row:getNextFwdWaypointIxFromVehiclePosition(1,v.rootNode,12.8,10)
+            assert(not oldFound, 'did not reproduce the live ten-waypoint handover failure')
+            local ix,covered=G.getContinuation(v,row,1,turn)
+            assert(ix and ix>10 and covered, 'actual headland continuation was not found')
+            -- Earlier return: drill aligned, cart still lagging. Reconstruct
+            -- measured-link poses and validate the real slightly curved row.
+            v.rootNode.x=target.x+30*math.sin(target.t)
+            v.rootNode.z=target.z+30*math.cos(target.t)
+            local parent={x=v.rootNode.x,z=v.rootNode.z,t=target.t}
+            for i,link in ipairs(m.links) do
+                local angle=target.t+math.rad(({4,15,12})[i])
+                local x=parent.x+link.hitch*math.sin(parent.t)-link.length*math.sin(angle)
+                local z=parent.z+link.hitch*math.cos(parent.t)-link.length*math.cos(angle)
+                local node=link.positionNode or link.node
+                node.x=x;node.z=z;node.t=angle;link.node.t=angle
+                parent={x=x,z=z,t=angle}
+            end
+            assert(not G.isAligned(v,c.vehicleAtTurnEndNode))
+            local ok,why=G.canContinueOnCheckedRow(v,row,1,turn)
+            assert(ok, 'safe earlier handover still waited for the cart: '..tostring(why))
+        """)
+
+    def test_third_corner_return_follows_actual_curved_headland(self):
+        self.lua.execute((SOURCE / 'tools/double-pivot/saxlingham-corner.lua').read_text())
+        self.lua.execute("""
+            local G=HeadlandLoopGeometry
+            local v,c,m=saxlinghamThirdCorner()
+            local q={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local course,reason=G.plan(q,m,1.68)
+            assert(course,tostring(reason))
+            assert(course.followsFieldwork and course.chainReturn.fieldCourse==c.loopFieldWorkCourse)
+            local ix=course.chainReturn.fieldEndIx
+            local x,_,z=course:getWaypointPosition(course:getNumberOfWaypoints())
+            local fx,_,fz=c.loopFieldWorkCourse:getWaypointPosition(ix)
+            assert(math.abs(x-fx)<.001 and math.abs(z-fz)<.001, 'return continued on the original tangent')
+            G.step=.2
+            local ok,why=G.validate(m,course,G.getBoundary(v),1,c.vehicleAtTurnEndNode,1.68)
+            assert(ok,tostring(why))
+            local speedTurn=setmetatable({turnCourse=course,settings={turnSpeed={getValue=function() return 8 end},
+                fieldSpeed={getValue=function() return 20 end}}},CourseTurn)
+            assert(speedTurn:getForwardSpeed()==8, 'loop promoted itself to field speed')
+            local previous=math.max(1,ix-3)
+            v.rootNode.x,_,v.rootNode.z=c.loopFieldWorkCourse:getWaypointPosition(previous)
+            local nx,_,nz=c.loopFieldWorkCourse:getWaypointPosition(previous+1)
+            v.rootNode.t=math.atan2(nx-v.rootNode.x,nz-v.rootNode.z)
+            local nextIx,covered=G.getContinuation(v,c.loopFieldWorkCourse,1,course)
+            assert(nextIx and nextIx>previous and covered, 'curved continuation was not found')
+            local resumed
+            local turn=setmetatable({state=1,states={ENDING_TURN=1},debug=function() end,
+                resumeFieldworkAfterTurn=function(_,i) resumed=i end},AITurn)
+            turn:onWaypointPassed(course:getNumberOfWaypoints(),course)
+            assert(resumed==ix, 'endpoint resumed at the old corner index')
+        """)
+
+    def test_actual_fieldwork_return_preserves_first_corner_and_stops_at_next_turn(self):
+        self.lua.execute((SOURCE / 'tools/double-pivot/saxlingham-corner.lua').read_text())
+        self.lua.execute("""
+            local G=HeadlandLoopGeometry
+            local v,c,m=saxlinghamCorner()
+            c.loopFieldWorkCourse=saxlinghamReturn(v);c.turnEndWpIx=1
+            local q={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local course,why=G.plan(q,m,1.68)
+            assert(course,tostring(why))
+            G.step=.2
+            local ok,detail=G.validate(m,course,G.getBoundary(v),1,c.vehicleAtTurnEndNode,1.68)
+            assert(ok,tostring(detail))
+            local row=Course(v,{{x=0,z=0},{x=0,z=5},{x=0,z=10},{x=0,z=20}},false)
+            row.isTurnStartAtIx=function(_,i) return i==2 end
+            local candidate=G.createCandidate({x=0,z=-2,t=0},.5,{})
+            assert(not G.appendFieldworkReturn(candidate,row,1,15), 'return crossed another corner')
+            row.isTurnStartAtIx=function() return false end
+            row.isReverseAt=function(_,i) return i==2 end
+            candidate=G.createCandidate({x=0,z=-2,t=0},.5,{})
+            assert(not G.appendFieldworkReturn(candidate,row,1,15), 'return crossed a reversal')
+        """)
+
     def test_all_runtime_lua_compiles(self):
         check = self.lua.eval('function(code,name) local f,e=load(code,name); assert(f,e) end')
         for file in ROOT.rglob('*.lua'):
             if 'out' in file.relative_to(ROOT).parts or 'test' in file.relative_to(ROOT).parts:
                 continue
             check(file.read_text(encoding='utf-8-sig'), file.as_posix())
+
+    def test_boundary_cache_matches_independent_rotated_rectangle_corners(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local v=fixture({field={{x=-96,z=-64},{x=96,z=-64},{x=96,z=128},{x=-96,z=128}}})
+            local boundary=G.getBoundary(v)
+            local body={left=12.8,right=-12.8,front=6.6,back=-4.55}
+            -- Repeat in reverse order to exercise cached inside/outside cells
+            -- and shared edges after unrelated footprint queries.
+            for pass=1,2 do
+                for sample=1,2000 do
+                    local i=pass==1 and sample or 2001-sample
+                    local pose={x=(i*17%240)-120,z=(i*29%240)-88,t=i*.071}
+                    local expected=true
+                    for _,x in ipairs({body.left,body.right}) do
+                        for _,z in ipairs({body.front,body.back}) do
+                            local wx=pose.x+x*math.cos(pose.t)+z*math.sin(pose.t)
+                            local wz=pose.z-x*math.sin(pose.t)+z*math.cos(pose.t)
+                            expected=expected and wx>-96 and wx<96 and wz>-64 and wz<128
+                        end
+                    end
+                    assert(G.bodyFits(body,pose,boundary)==expected,'cached boundary classification changed')
+                end
+            end
+        ''')
+
+    def test_saved_saxlingham_corner_passes_chain_checks_and_mirrored_start_variations(self):
+        self.lua.execute((SOURCE / 'tools/double-pivot/saxlingham-corner.lua').read_text())
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            for _,case in ipairs({{0,1},{-1,1},{1,1},{0,-1}}) do
+                local v,c,m=saxlinghamCorner(case[1],case[2])
+                assert(math.abs(math.deg(m.links[1].maxArticulation)-78)<.001)
+                assert(math.abs(math.deg(m.links[2].maxArticulation)-40)<.001)
+                assert(math.abs(math.deg(m.links[3].maxArticulation)-60)<.001)
+                local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                    turningRadius=10,workWidth=25.6,steeringLength=9.8}
+                local constructions,init=0,Course.init
+                Course.init=function(self,...) constructions=constructions+1;return init(self,...) end
+                local course,reason=G.plan(maneuver,m,1.68)
+                Course.init=init
+                assert(constructions==1, 'built Course metadata for rejected routes')
+                assert(course, string.format('start %.1f mirror %d: %s',case[1],case[2],reason))
+                assert(course:isForwardOnly() and course.temporary and course.chainReturn)
+                local chainLength=0
+                for _,link in ipairs(m.links) do chainLength=chainLength+link.length-link.hitch end
+                local _,_,reserve=course:getWaypointLocalPosition(c.vehicleAtTurnEndNode,course:getNumberOfWaypoints())
+                assert(reserve>=2*chainLength+c.frontMarkerDistance-c.backMarkerDistance-1.01,
+                    'trimmed the live settling reserve to the prediction')
+                local entry
+                for i=1,course:getNumberOfWaypoints() do
+                    if TurnManeuver.hasTurnControl(course,i,TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then entry=entry or i end
+                end
+                assert(entry and entry>10)
+                local b=G.getBoundary(v)
+                -- Finer replay of the produced course: no early
+                -- exit when settling is first reached, all remaining points.
+                local old=G.step;G.step=.2
+                local ok,why=G.validate(m,course,b,entry,c.vehicleAtTurnEndNode,1.68)
+                G.step=old
+                assert(ok, tostring(why))
+                for i=entry,course:getNumberOfWaypoints() do
+                    local d=course:getWaypointYRotation(i)-c.vehicleAtTurnEndNode.t
+                    assert(math.abs(math.atan2(math.sin(d),math.cos(d)))<.02, 'lowering starts before the straight')
+                end
+                local firstHeading=course:getWaypointYRotation(10)
+                assert(case[2]*(firstHeading-m.root.t)<0, 'loop initially turns outwards')
+            end
+        ''')
+
+    def test_hitch_limits_use_each_coupling_not_the_cart_internal_joint(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local v,c,d,cart=fixture({internal=true})
+            local attachment=v.children[1]
+            attachment.lowerRotLimit={0,math.rad(70),0}
+            attachment.upperRotLimit={0,math.rad(65),0}
+            assert(math.abs(math.deg(G.getHitchLimit(v,attachment,d.joint))-70)<.001)
+            local m=assert(G.detect(v))
+            assert(math.abs(math.deg(m.links[1].maxArticulation)-70)<.001)
+            assert(math.abs(math.deg(m.links[2].maxArticulation)-45)<.001)
+            assert(math.abs(math.deg(m.links[3].maxArticulation)-60)<.001)
+            attachment.lowerRotLimit={0,0,0};attachment.upperRotLimit={0,0,0}
+            assert(not G.detect(v), 'locked hitch became a free pivot')
+        ''')
+
+    def test_live_chain_handover_waits_for_cart_but_preserves_lowering_stop(self):
+        self.lua.execute('''
+            local v,c,d,cart=fixture({internal=true})
+            c.vehicleAtTurnEndNode={x=0,z=0,t=0}
+            local ready,resumed,stopped=false,false,false
+            cart.rootNode.t=math.rad(12)
+            v.getLastSpeed=function() return 8 end
+            v.stopCurrentAIJob=function() stopped=true end
+            AIMessageCpErrorNoPathFound={new=function() return {} end}
+            local course=Course.createFromNode(v,v.rootNode,0,0,40,1,false)
+            course.chainReturn={x=0,z=0,t=0,lateralTolerance=4}
+            local t=setmetatable({vehicle=v,turnContext=c,turnCourse=course,
+                workStartHandler={lowerImplementsAsNeeded=function() return 1 end,allLowered=function() return true end},
+                driveStrategy={getCanContinueWork=function() return ready end},
+                ppc={isReversing=function() return false end},states={ENDING_TURN={}}},CourseTurn)
+            t.state=t.states.ENDING_TURN
+            t.debug=function() end
+            t.getLowerImplementNode=function() return c.workStartNode end
+            t.resumeFieldworkAfterTurn=function() resumed=true end
+            assert(t:endTurn(16)==false and not resumed, 'seeder drove while still lowering')
+            ready=true
+            assert(t:endTurn(16)==true and not resumed, 'handed back with unaligned cart')
+            t:onWaypointPassed(course:getNumberOfWaypoints(),course)
+            assert(stopped and not resumed, 'left the checked return with unaligned cart')
+            cart.rootNode.t=0;cart.joint.rootNode.t=math.rad(8)
+            assert(t:endTurn(16)==true and not resumed, 'ignored cart drawbar')
+            cart.joint.rootNode.t=0
+            assert(t:endTurn(16)==true and resumed)
+        ''')
+
+    def test_checked_return_lowers_at_existing_line_without_general_lateral_relaxation(self):
+        self.lua.execute('''
+            local v,c,d=fixture()
+            local line={x=0,z=0,t=0}
+            WorkWidthUtil.getAIMarkers=function()
+                return {x=9.8,z=-.2,t=0},{x=-15.8,z=-.2,t=0},{x=-3,z=-2,t=0}
+            end
+            AIUtil.hasAIImplementWithSpecialization=function() return true end
+            local h=setmetatable({vehicle=v,turnContext=c,
+                settings={turnSpeed={getValue=function() return 8 end}},
+                driveStrategy={getLoweringDurationMs=function() return 500 end,getImplementLowerEarly=function() return true end},
+                logger={debugSparse=function() end}},WorkStartHandler)
+            assert(not h:shouldLowerThisImplement(d,line,false))
+            c.chainReturnLateralTolerance=4
+            local lower,dz=h:shouldLowerThisImplement(d,line,false)
+            assert(lower and math.abs(dz+.2)<.001, 'shifted the work-start plane')
+            d.rootNode.t=math.rad(12)
+            assert(not h:shouldLowerThisImplement(d,line,false), 'lowered the crooked drill')
+            c.chainReturnFollowsFieldwork=true
+            assert(h:shouldLowerThisImplement(d,line,false), 'delayed work past its entry line')
+            c.chainReturnFollowsFieldwork=nil
+            d.rootNode.t=math.rad(4)
+            assert(h:shouldLowerThisImplement(d,line,false), 'blocked the aligned drill')
+            d.rootNode.t=0
+            c.chainReturnLateralTolerance=nil
+            assert(not h:shouldLowerThisImplement(d,line,false))
+            local pose={x=0,z=0,t=0}
+            v.rootNode={x=0,z=-3,t=0}
+            assert(not HeadlandLoopGeometry.isOnReturn(v,pose), 'PPC lookahead lowered on the curve')
+            v.rootNode.z=0;v.rootNode.t=math.rad(20)
+            assert(not HeadlandLoopGeometry.isOnReturn(v,pose))
+            v.rootNode.t=0
+            assert(HeadlandLoopGeometry.isOnReturn(v,pose))
+        ''')
+
+    def test_incremental_search_matches_offline_result_with_bounded_validation(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,field=field})
+            local m=assert(G.detect(v))
+            local maneuver={vehicle=v,vehicleDirectionNode=v.rootNode,turnContext=c,
+                turningRadius=10,workWidth=25.6,steeringLength=9.8}
+            local expected=assert(G.plan(maneuver,m,.5))
+            local search=G.createSearch(maneuver,m,.5)
+            local advances,updates=0,0
+            local advance=G.advance
+            G.advance=function(...) advances=advances+1; return advance(...) end
+            repeat
+                advances=0
+                search:step()
+                assert(advances<=32, 'validation blocked instead of yielding')
+                updates=updates+1
+                assert(updates<20000, 'search did not terminate')
+            until search.done
+            G.advance=advance
+            assert(updates>1 and search.course)
+            assert(math.abs(search.course:getLength()-expected:getLength())<.001)
+        ''')
+
+    def test_runtime_waits_for_braking_and_installs_only_completed_search(self):
+        self.lua.execute('''
+            local field={{x=-200,z=-200},{x=200,z=-200},{x=200,z=200},{x=-200,z=200}}
+            local v,c=fixture({internal=true,field=field})
+            c.isHeadlandCorner=function() return true end
+            local speed,installed,closed=12,0,0
+            v.getLastSpeed=function() return speed end
+            v.stopCurrentAIJob=function() error('valid loop unexpectedly rejected') end
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 5 end
+            closeIntervalTimer=function() closed=closed+1 end
+            AITurn.canTurnOnField=function() return true end
+            local t=setmetatable({vehicle=v,turnContext=c,workWidth=25.6,turningRadius=10,steeringLength=9.8,
+                settings={loopTurnsOnHeadland={getValue=function() return true end},turnSpeed={getValue=function() return 17 end}},
+                driveStrategy={getLoweringDurationMs=function() return 1500 end},states={TURNING={}},
+                ppc={setCourse=function(_,course) assert(course); installed=installed+1 end,initialize=function() end}},CourseTurn)
+            t.debug=function() end
+            t:startTurn()
+            local _,_,_,limit=t:getDriveData(16)
+            assert(limit==0 and not t.loopManeuver and installed==0)
+            t.startRecoveryTurn=function() error('waiting triggered blocked recovery') end
+            t:onBlocked()
+            speed=0
+            t:getDriveData(16)
+            assert(t.loopManeuver.search and installed==0)
+            local updates=0
+            while t.state==t.states.WAITING_FOR_LOOP do
+                local _,_,_,limit=t:getDriveData(16)
+                assert(limit==0)
+                updates=updates+1
+                assert(updates<20000)
+            end
+            assert(t.state==t.states.TURNING and installed==1 and closed==updates)
+            assert(t:getForwardSpeed()==17 and not t.enableTightTurnOffset)
+        ''')
+
+    def test_unfolded_work_area_boundary_and_narrow_chassis_are_both_checked(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local field={{x=-10,z=-50},{x=10,z=-50},{x=10,z=50},{x=-10,z=50}}
+            local v,c,drill=fixture({field=field})
+            local m=G.detect(v)
+            local b=G.getBoundary(v)
+            local pose={x=0,z=-9.8,t=0}
+            assert(G.bodyFits(m.bodies[2].collision,pose,b))
+            assert(not G.bodyFits(m.bodies[2],pose,b), 'wide working bar escaped boundary validation')
+        ''')
 
 
 if __name__ == '__main__':

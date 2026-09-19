@@ -521,6 +521,9 @@ end
 ---@param turnRadius number vehicle turning radius
 function PathfinderUtil.findAnalyticPathFromStartToGoal(solver, start, goal, turnRadius)
     local solution = solver:solve(start, goal, turnRadius)
+    if not solution then
+        return nil, math.huge
+    end
     local length, path = solution:getLength(turnRadius)
     -- a solution with math.huge length means no soulution found
     if length < 100000 then

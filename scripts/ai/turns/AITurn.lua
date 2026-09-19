@@ -119,6 +119,7 @@ function AITurn:startRecoveryTurn(...)
 end
 
 function AITurn:onBlocked()
+    if self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then return end
     self:startRecoveryTurn(1 * self.turningRadius)
 end
 
@@ -133,6 +134,22 @@ end
 function AITurn:onWaypointPassed(ix, course)
     self:debug('onWaypointPassed %d', ix)
     if ix == course:getNumberOfWaypoints() and self.state == self.states.ENDING_TURN then
+        if course.chainReturn and course.chainReturn.fieldCourse then
+            -- This endpoint belongs to the original course. Its heading may
+            -- differ from the corner's first tangent on a curved headland.
+            self:debug('Checked fieldwork return reached waypoint %d', course.chainReturn.fieldEndIx)
+            self:resumeFieldworkAfterTurn(course.chainReturn.fieldEndIx)
+            return
+        end
+        local aligned, alignmentDetail = true, nil
+        if course.chainReturn then
+            aligned, alignmentDetail = HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode)
+        end
+        if not aligned then
+            self:debug('Chain did not settle within the checked straight return: %s', alignmentDetail or 'unknown node')
+            self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+            return
+        end
         self:debug('Last waypoint reached, resuming fieldwork')
         self:resumeFieldworkAfterTurn(self.turnContext.turnEndWpIx)
     end
@@ -251,10 +268,15 @@ function AITurn:getDriveData(dt)
         end
     elseif self.state == self.states.WAITING_FOR_PATHFINDER then
         maxSpeed = 0
+    elseif self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then
+        self:updateLoopSearch()
+        maxSpeed = 0
     else
         -- Performing the actual turn
         gx, gz, moveForwards, maxSpeed = self:turn(dt)
     end
+    -- finishRow can enter the waiting state in this same update.
+    if self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then maxSpeed = 0 end
     return gx, gz, moveForwards, maxSpeed
 end
 
@@ -341,6 +363,9 @@ end
 
 --- Give back control the the drive strategy
 function AITurn:resumeFieldworkAfterTurn(ix)
+    if self.turnCourse and self.turnCourse.chainReturn and not self.callbackFunction then
+        ix = HeadlandLoopGeometry.getContinuation(self.vehicle, self.driveStrategy.fieldWorkCourse, ix, self.turnCourse) or ix
+    end
     -- just in case, raise this event so plows are rotated to the working position. Should really never end up
     -- here though, as the course should be long enough for the normal turn end processing to be triggered.
     -- Use the target working side, not the turn direction: headland transitions can require the opposite side.
@@ -472,6 +497,11 @@ function CourseTurn:init(vehicle, driveStrategy, ppc, proximityController, turnC
 end
 
 function CourseTurn:getForwardSpeed()
+    -- A chain-planned loop stays at the user's turn speed throughout. Switching
+    -- to field speed in its middle would change the behaviour of the tested turn.
+    if self.turnCourse and self.turnCourse.chainReturn then
+        return AITurn.getForwardSpeed(self)
+    end
     if self.turnCourse then
         local currentWpIx = self.turnCourse:getCurrentWaypointIx()
         if self.turnCourse:getDistanceFromFirstWaypoint(currentWpIx) > 10 and
@@ -523,6 +553,14 @@ end
 --      = if turn on field setting is off, use pathfinder turns if enabled in settings, calculated turns otherwise
 --
 function CourseTurn:startTurn()
+    if not self.loopSearchAttempted and self.turnContext:isHeadlandCorner() and
+            self.settings.loopTurnsOnHeadland:getValue() and HeadlandLoopGeometry.detect(self.vehicle) then
+        self.loopSearchAttempted = true
+        self:addState('WAITING_FOR_LOOP')
+        self.state = self.states.WAITING_FOR_LOOP
+        self:debug('Stopping before incremental headland loop search')
+        return
+    end
     local canTurnOnField = AITurn.canTurnOnField(self.turnContext, self.vehicle, self.workWidth, self.turningRadius)
     if self.turnContext:isHeadlandCorner() then
         self:debug('Starting a headland corner turn')
@@ -574,6 +612,37 @@ function CourseTurn:startTurn()
     end
 end
 
+function CourseTurn:updateLoopSearch()
+    -- Freeze the initial pose only after braking. No candidate may be generated
+    -- from a live node while the tractor is still moving along the finishing row.
+    if self.vehicle:getLastSpeed() > 0.1 then
+        self.loopManeuver = nil
+        return
+    end
+    if self.loopManeuver and self.loopManeuver.search and
+            not HeadlandLoopGeometry.matchesStart(self.vehicle, self.loopManeuver.search.model) then
+        self:debug('Chain moved while planning; recalculate from its new pose')
+        self.loopManeuver = nil
+    end
+    if not self.loopManeuver then
+        self.turnContext.loopFieldWorkCourse = self.fieldWorkCourse
+        self.loopManeuver = LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
+            self.turningRadius, self.workWidth, self.steeringLength,
+            self.driveStrategy:getLoweringDurationMs() * self.settings.turnSpeed:getValue() / 3600 + 0.5, true)
+        return
+    end
+    local timer = openIntervalTimer()
+    local done = false
+    -- Limit both elapsed time and step count so the search yields back to the
+    -- game. Faster geometry checks reduce total waiting without raising this budget.
+    for _ = 1, 64 do
+        done = self.loopManeuver:resumeSearch()
+        if done or readIntervalTimerMs(timer) >= 8 then break end
+    end
+    closeIntervalTimer(timer)
+    if done then self:startTurn() end
+end
+
 function CourseTurn:isForwardOnly()
     return self.turnCourse and self.turnCourse:isForwardOnly()
 end
@@ -591,6 +660,13 @@ function CourseTurn:turn()
 
     if TurnManeuver.hasTurnControl(self.turnCourse, self.turnCourse:getCurrentWaypointIx(),
             TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then
+        if self.turnCourse.chainReturn then
+            if not HeadlandLoopGeometry.isOnReturn(self.vehicle, self.turnCourse.chainReturn) then
+                return gx, gz, moveForwards, maxSpeed
+            end
+            self.turnContext.chainReturnLateralTolerance = self.turnCourse.chainReturn.lateralTolerance
+            self.turnContext.chainReturnFollowsFieldwork = self.turnCourse.chainReturn.fieldCourse ~= nil
+        end
         self.state = self.states.ENDING_TURN
         self:debug('About to end turn')
     end
@@ -618,6 +694,12 @@ function CourseTurn:endTurn(dt)
             local implementCheckDistance = math.max(1, 0.1 * self.vehicle:getLastSpeed())
             if dz and dz > -implementCheckDistance then
                 if self.driveStrategy:getCanContinueWork() then
+                    if not HeadlandLoopGeometry.canResumeFieldwork(self.vehicle,
+                            self.driveStrategy.fieldWorkCourse, self.turnContext, self.turnCourse) then
+                        -- Keep the temporary return only when the fieldwork
+                        -- course cannot safely continue from the live pose.
+                        return true
+                    end
                     self:debug("implements lowered, resume fieldwork")
                     self:resumeFieldworkAfterTurn(self.turnContext.turnEndWpIx)
                 else
@@ -764,7 +846,9 @@ function CourseTurn:generateCalculatedTurn()
                 loweringDistance = self.driveStrategy:getLoweringDurationMs() *
                     self.settings.turnSpeed:getValue() / 3600 + 0.5
             end
-            turnManeuver = LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
+            -- Reuse the completed incremental search. Starting a second search
+            -- here would block the game and could replace its checked route.
+            turnManeuver = self.loopManeuver or LoopTurnManeuver(self.vehicle, self.turnContext, self.vehicle:getAIDirectionNode(),
                     self.turningRadius, self.workWidth, self.steeringLength, loweringDistance)
             self.enableTightTurnOffset = not turnManeuver.chainPlanned
             -- Fully modelled chain routes have already passed body, pivot and

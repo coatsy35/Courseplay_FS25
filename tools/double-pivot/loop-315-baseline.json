@@ -1,0 +1,22 @@
+{
+  "first": {
+    "seconds": 4.415566399999989,
+    "fingerprint": "804f462e51e28288ddfe3b99462a1a7054d578025d58835e087c811adb346ec6",
+    "reason": "3 pivots (1 internal), width 25.6 m, radius 14.0 m, entry -5.0 m, Dubins 4, peak angle 41.7 deg, boundary job field, 640 candidates tested"
+  },
+  "third": {
+    "seconds": 3.266285999999127,
+    "fingerprint": "a04c75206e060e6d875443d75ab37ee3ab691d9fef35613a486f6f8a421422ac",
+    "reason": "3 pivots (1 internal), width 25.6 m, radius 14.0 m, entry -5.0 m, Dubins 4, peak angle 41.7 deg, boundary job field, 592 candidates tested"
+  },
+  "straight": {
+    "seconds": 4.426638299999468,
+    "fingerprint": "08e0847866b249bfdb320cef0dcdcebebc1ab50f39fb663c019b455d63ec7920",
+    "reason": "3 pivots (1 internal), width 25.6 m, radius 14.0 m, entry -5.0 m, Dubins 4, peak angle 41.7 deg, boundary job field, 640 candidates tested"
+  },
+  "mirrored": {
+    "seconds": 4.262555199999952,
+    "fingerprint": "b7fa82928583a1e6cc2846823986b225f712582e75180a4d7c7e6be688e3c898",
+    "reason": "3 pivots (1 internal), width 25.6 m, radius 14.0 m, entry -5.0 m, Dubins 1, peak angle 41.7 deg, boundary job field, 640 candidates tested"
+  }
+}

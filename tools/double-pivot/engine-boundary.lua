@@ -59,6 +59,10 @@ function setRotation(n,x,t,z) n.t=t+(n.parent and n.parent.t or 0) end
 require('CpMathUtil')
 require('FieldworkBoundary')
 require('HeadlandLoopGeometry')
+require('HeadlandLoopModel')
+require('HeadlandLoopValidation')
+require('HeadlandLoopReturn')
+require('HeadlandLoopSearch')
 require('Logger')
 Logger.debug = function() end
 Logger.debugSparse = function() end
@@ -94,9 +98,14 @@ ImplementUtil = {
 }
 WorkWidthUtil = {getAutomaticWorkWidthAndOffset = function(v) return v.detectedWidth or 0 end}
 AIUtil.hasArticulatedAxis = function() return false end
+CpFieldUtil = {
+    getFieldAtWorldPosition = function() return mockMapFieldPolygon and {} or nil end,
+    getFieldPolygon = function() return mockMapFieldPolygon end
+}
 
 function fixture(p)
     p = p or {}
+    mockMapFieldPolygon = p.mapField
     local function body(z, width, length)
         local node = {x=0,z=z,t=0}
         local o = {rootNode=node,steeringAxleNode=node,wheeled=true,

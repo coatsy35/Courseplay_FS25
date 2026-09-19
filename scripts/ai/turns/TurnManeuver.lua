@@ -484,18 +484,21 @@ end
 ---@class LoopTurnManeuver : TurnManeuver
 LoopTurnManeuver = CpObject(DubinsTurnManeuver)
 function LoopTurnManeuver:init(vehicle, turnContext, vehicleDirectionNode, turningRadius,
-                               workWidth, steeringLength, loweringDistance)
+                               workWidth, steeringLength, loweringDistance, deferred)
     self.debugPrefix = '(LoopTurn): '
     TurnManeuver.init(self, vehicle, turnContext, vehicleDirectionNode, turningRadius,
             workWidth, steeringLength)
     local model, reason = HeadlandLoopGeometry.detect(vehicle)
     if model then
-        self.course, reason = HeadlandLoopGeometry.plan(self, model, loweringDistance or 0.5)
         -- These are tractor paths already checked with each trailer. A moving
         -- single-trailer offset would invalidate the prediction.
         self.chainPlanned = true
-        self:debug('Chain loop: %s%s', self.course and '' or 'no fitting candidate: ', reason)
-        Logging.info('[CP headland loop] %s: %s%s', CpUtil.getName(vehicle), self.course and '' or 'no fitting candidate: ', reason)
+        if deferred then
+            self.search = HeadlandLoopGeometry.createSearch(self, model, loweringDistance or 0.5)
+        else
+            self.course, reason = HeadlandLoopGeometry.plan(self, model, loweringDistance or 0.5)
+            self:logChainResult(reason)
+        end
         return
     end
     local detectedWidth = WorkWidthUtil.getAutomaticWorkWidthAndOffset(vehicle)
@@ -530,6 +533,21 @@ function LoopTurnManeuver:init(vehicle, turnContext, vehicleDirectionNode, turni
         Logging.info('[CP headland loop] %s: width-only loop does not fit the field corridor', CpUtil.getName(vehicle))
         self.course = nil
     end
+end
+
+function LoopTurnManeuver:logChainResult(reason)
+    self:debug('Chain loop: %s', reason)
+    Logging.info('[CP headland loop] %s: %s', CpUtil.getName(self.vehicle), reason)
+end
+
+function LoopTurnManeuver:resumeSearch()
+    if not self.search then return true end
+    local done, course, reason = self.search:step()
+    if done then
+        self.course, self.search = course, nil
+        self:logChainResult(reason)
+    end
+    return done
 end
 
 -- This is an experiment to create turns with towed implements that better align with the next row.
