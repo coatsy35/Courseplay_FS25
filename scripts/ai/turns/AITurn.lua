@@ -478,6 +478,8 @@ function CourseTurn:init(vehicle, driveStrategy, ppc, proximityController, turnC
 end
 
 function CourseTurn:getForwardSpeed()
+    -- A chain-planned loop stays at the user's turn speed throughout. Switching
+    -- to field speed in its middle would change the behaviour of the tested turn.
     if self.turnCourse and self.turnCourse.chainReturn then
         return AITurn.getForwardSpeed(self)
     end
@@ -603,6 +605,8 @@ function CourseTurn:updateLoopSearch()
     end
     local timer = openIntervalTimer()
     local done = false
+    -- Limit both elapsed time and step count so the search yields back to the
+    -- game. Faster geometry checks reduce total waiting without raising this budget.
     for _ = 1, 64 do
         done = self.loopManeuver:resumeSearch()
         if done or readIntervalTimerMs(timer) >= 8 then break end
@@ -657,11 +661,8 @@ function CourseTurn:endTurn(dt)
             local implementCheckDistance = math.max(1, 0.1 * self.vehicle:getLastSpeed())
             if dz and dz > -implementCheckDistance then
                 if self.driveStrategy:getCanContinueWork() then
-                    if self.turnCourse and self.turnCourse.chainReturn and
-                            (self.turnCourse.chainReturn.fieldCourse or
-                                not HeadlandLoopGeometry.isAligned(self.vehicle, self.turnContext.vehicleAtTurnEndNode)) and
-                            not HeadlandLoopGeometry.canContinueOnCheckedRow(self.vehicle, self.driveStrategy.fieldWorkCourse,
-                                self.turnContext.turnEndWpIx, self.turnCourse) then
+                    if not HeadlandLoopGeometry.canResumeFieldwork(self.vehicle,
+                            self.driveStrategy.fieldWorkCourse, self.turnContext, self.turnCourse) then
                         -- Keep the temporary return only when the fieldwork
                         -- course cannot safely continue from the live pose.
                         return true

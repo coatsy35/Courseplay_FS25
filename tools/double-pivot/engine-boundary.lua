@@ -58,6 +58,10 @@ end
 function setRotation(n,x,t,z) n.t=t+(n.parent and n.parent.t or 0) end
 require('CpMathUtil')
 require('HeadlandLoopGeometry')
+require('HeadlandLoopModel')
+require('HeadlandLoopValidation')
+require('HeadlandLoopReturn')
+require('HeadlandLoopSearch')
 require('Logger')
 Logger.debug = function() end
 Logger.debugSparse = function() end

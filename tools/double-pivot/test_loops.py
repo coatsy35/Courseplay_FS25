@@ -481,6 +481,31 @@ class LoopTests(unittest.TestCase):
                 continue
             check(file.read_text(encoding='utf-8-sig'), file.as_posix())
 
+    def test_boundary_cache_matches_independent_rotated_rectangle_corners(self):
+        self.lua.execute('''
+            local G=HeadlandLoopGeometry
+            local v=fixture({field={{x=-96,z=-64},{x=96,z=-64},{x=96,z=128},{x=-96,z=128}}})
+            local boundary=G.getBoundary(v)
+            local body={left=12.8,right=-12.8,front=6.6,back=-4.55}
+            -- Repeat in reverse order to exercise cached inside/outside cells
+            -- and shared edges after unrelated footprint queries.
+            for pass=1,2 do
+                for sample=1,2000 do
+                    local i=pass==1 and sample or 2001-sample
+                    local pose={x=(i*17%240)-120,z=(i*29%240)-88,t=i*.071}
+                    local expected=true
+                    for _,x in ipairs({body.left,body.right}) do
+                        for _,z in ipairs({body.front,body.back}) do
+                            local wx=pose.x+x*math.cos(pose.t)+z*math.sin(pose.t)
+                            local wz=pose.z-x*math.sin(pose.t)+z*math.cos(pose.t)
+                            expected=expected and wx>-96 and wx<96 and wz>-64 and wz<128
+                        end
+                    end
+                    assert(G.bodyFits(body,pose,boundary)==expected,'cached boundary classification changed')
+                end
+            end
+        ''')
+
     def test_saved_saxlingham_corner_passes_chain_checks_and_mirrored_start_variations(self):
         self.lua.execute((SOURCE / 'tools/double-pivot/saxlingham-corner.lua').read_text())
         self.lua.execute('''

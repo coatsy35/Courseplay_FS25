@@ -278,3 +278,45 @@ time; the inward loop and its planning pause are still present.
 
 The local combined build includes aad9736b and 7aad509b and retains the exact
 FS25_Courseplay_StraightEntryTest.zip name in its separate numbered folder.
+
+## Behaviour-preserving refactor - combined test 8.1.0.316
+
+Keep 8.1.0.315's tractor-led routes, lowering points, handover rules and configured
+turn speeds. The experimental toolbar-led planner remains outside the runtime.
+
+The planner now has five commented modules sharing the HeadlandLoopGeometry API:
+
+- `HeadlandLoopGeometry.lua`: coordinate conventions, footprints and field boundaries.
+- `HeadlandLoopModel.lua`: measured bodies, independent hitches and radius estimate.
+- `HeadlandLoopValidation.lua`: incremental full-chain simulation and acceptance checks.
+- `HeadlandLoopSearch.lua`: candidate preparation, ordering and accepted Course creation.
+- `HeadlandLoopReturn.lua`: live pose checks and the decision to resume fieldwork.
+
+Each section explains its purpose and the reason for its constraints. CourseTurn
+delegates its handover decision to the return module. Remove the unused root-only
+validator, root-course precheck and early-settling truncation branch; all active
+callers still check the complete chain and complete return. Retain the straight
+return compatibility path because existing callers and regressions still use it.
+
+Boundary queries use numeric grid columns and per-query edge stamps instead of
+allocating string keys and duplicate-edge tables for every body sample. Search
+start/goal poses are cached per pull/entry, avoiding repeated scene-node queries
+for each radius and Dubins word. Sampling resolution, candidate order, acceptance
+criteria and the runtime frame-time budget are unchanged.
+
+`tools/double-pivot/benchmark_loops.py` compares waypoint coordinates, headings,
+lowering controls, return metadata and candidate-count diagnostics by fingerprint.
+Three-run medians on the same local Lua 5.2 harness were:
+
+| Saved case | .315 | .316 | Reduction |
+| --- | ---: | ---: | ---: |
+| First corner, actual return | 4.416 s | 3.993 s | 9.6% |
+| Third corner, curved return | 3.266 s | 2.832 s | 13.3% |
+| First corner, straight return | 4.427 s | 3.730 s | 15.7% |
+| Mirrored straight return | 4.263 s | 3.755 s | 11.9% |
+
+All four fingerprints match .315. These timings are offline comparisons, not a
+promise of seconds saved in GIANTS. The boundary-cache regression compares 4,000
+queries against independent rotated-corner containment, including negative grid
+coordinates and queries repeated in reverse order. Run all source and extracted
+ZIP release checks before publishing the separate numbered test build.
