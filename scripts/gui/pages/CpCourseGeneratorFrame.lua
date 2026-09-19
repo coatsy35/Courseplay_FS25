@@ -353,10 +353,11 @@ function CpCourseGeneratorFrame:addImplementProfileSelector(layout, vehicle)
     FocusManager:loadElementFromCustomValues(control)
 end
 
--- Save directly from fieldwork settings, then select the new entry without reapplying its values.
+-- Both Map and Fieldwork Settings share the naming dialogue. Saving must keep the current page open.
 function CpCourseGeneratorFrame:saveFieldworkProfile()
     CpImplementProfileGui.saveNew(function() return self.cpMenu:getCurrentVehicle() end,
         'CP_implementProfiles_saveProfile', function(profile)
+        if not self.fieldworkSettingsVisible then return end
         self:updateSubCategoryPages(self.CATEGRORIES.BASIC_SETTINGS)
         for i, saved in ipairs(self.fieldworkProfiles) do
             if saved.id == profile.id then
@@ -697,12 +698,6 @@ function CpCourseGeneratorFrame:updateSubCategoryPages(state)
 		layout:invalidateLayout()
 		self.settingsSlider:setDataElement(layout)
         FocusManager:setFocus(self.subCategoryPages[state])
-        if state == self.CATEGRORIES.BASIC_SETTINGS then
-            table.insert(self.menuButtonInfo, {
-                inputAction = InputAction.MENU_ACCEPT,
-                text = g_i18n:getText('CP_implementProfiles_saveProfile'),
-                callback = function() self:saveFieldworkProfile() end})
-        end
         if state == self.CATEGRORIES.BASIC_SETTINGS and #(self.fieldworkProfiles or {}) > 0 then
             table.insert(self.menuButtonInfo, {
                 inputAction = InputAction.MENU_EXTRA_1,
@@ -722,7 +717,16 @@ function CpCourseGeneratorFrame:updateSubCategoryPages(state)
 		self.settingsSliderBox:setVisible(false)
 		self.ingameMap:setVisible(true)
 		self:openMap()
-	end 
+	end
+    -- Save the menu's current vehicle setup from either page; the manager still validates access and state.
+    local vehicle = self.cpMenu:getCurrentVehicle()
+    if (state == self.CATEGRORIES.IN_GAME_MAP or state == self.CATEGRORIES.BASIC_SETTINGS) and
+        vehicle and vehicle.getCpSettings and vehicle.getCourseGeneratorSettings then
+        table.insert(self.menuButtonInfo, {
+            inputAction = InputAction.MENU_ACCEPT,
+            text = g_i18n:getText('CP_implementProfiles_saveProfile'),
+            callback = function() self:saveFieldworkProfile() end})
+    end
 	self:setMenuButtonInfoDirty()
 end
 

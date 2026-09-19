@@ -21,7 +21,9 @@ does not add the test title suffix.
 Open CP's **Implement profiles** page. **Attached equipment** shows exact and partial matches;
 **All equipment** allows browsing without entering a tractor. Expand an implement type, then a model
 or combination, to see its saved profiles. Combinations
-also appear under their component implement types; these are links to one saved profile.
+also appear under their component implement types; these are links to one saved profile. Harvester and header
+setups appear only under Harvesters, without separate Headers or Implement combinations entries. This changes
+only directory grouping; matching still checks the complete equipment setup.
 
 With the tractor and CP stopped, adjust vehicle and course generation settings, then select
 **Save as new**. Select a matching profile and choose **Load profile** to reuse it. **Update profile**
@@ -255,3 +257,7 @@ checks. The language tests verify profile key coverage and format arguments acro
 CP language. The Lua suite also covers shared dialogue cancellation, changed equipment/selection,
 native-shell isolation and settings-section routing. These boundary tests do not replace in-game
 layout and multiplayer testing.
+
+Save implement profile is available on the Map and Fieldwork Settings bottom bars for the current
+CP vehicle. Both use the same naming dialogue and validation. Saving from the map keeps the map
+open and does not apply the saved profile or change the current job.
