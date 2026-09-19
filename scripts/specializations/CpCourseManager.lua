@@ -32,6 +32,7 @@ function CpCourseManager.registerXmlSchemaValues(schema,baseKey)
 	schema:register(XMLValueType.INT, baseKey .. "#nVehicles", "Number of vehicles for a multi-vehicle course")
     schema:register(XMLValueType.BOOL, baseKey .. "#headlandClockwise", "Headlands are clockwise.")
     schema:register(XMLValueType.BOOL, baseKey .. "#islandHeadlandClockwise", "Headlands around islands are clockwise.")
+    schema:register(XMLValueType.BOOL, baseKey .. "#loopTurnsOnHeadland", "Use loop turns at headland corners.")
     schema:register(XMLValueType.BOOL, baseKey .. "#wasEdited", "Was the course edited by the course editor.")
     schema:register(XMLValueType.BOOL, baseKey .. "#compacted", "Rows are compacted, only start and end is saved.")
     Waypoint.registerXmlSchema(schema, baseKey)
@@ -223,6 +224,14 @@ function CpCourseManager:addCourse(course,noEventSend)
     local spec = CpCourseManager.getSpec(self) 
     course:setVehicle(self)
     table.insert(spec.courses,course)
+    -- Missing metadata denotes an older/new course: use the current fieldwork setup.
+    -- An explicit false must override a previous course/profile's true value.
+    local setting = self:getCpSettings().loopTurnsOnHeadland
+    if course.loopTurnsOnHeadland == nil then
+        course.loopTurnsOnHeadland = setting:getValue()
+    elseif #spec.courses == 1 then
+        setting:setValue(course.loopTurnsOnHeadland, true)
+    end
     SpecializationUtil.raiseEvent(self,"onCpCourseChange",course,noEventSend)
 end
 

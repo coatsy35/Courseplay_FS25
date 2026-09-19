@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Дозволити використання прокладача маршрутів на поворотах, наприклад, щоб уникнути перешкод та посівів."/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Петльовий розворот на РС"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Замість того, щоб виконувати звичайний поворот на розворотній смузі, автомобіль рухатиметься петлею. Перша смуга повинна мати скруглені кути!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Скласти обладнання в кінці маршруту"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Вмикає/Вимикає автоматичне складання обладнання в конці робочого маршруту."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Повернутися до початкової точки"/>

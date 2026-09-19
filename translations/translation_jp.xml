@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="障害物や作物の回避など、旋回時の経路探索を使用することができます"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Loop turn on headland"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Instead of performing a normal turn on headland, the vehicle will drive a loop. The first headland should have round corners!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="作業機の格納"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="有効にするとコースの終点で作業機を格納（折りたたみ）します"/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Return to starting point"/>

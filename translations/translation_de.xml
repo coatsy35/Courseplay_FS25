@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Aktiviert den Pathfinder für Wendemanöver, zum Beispiel um Objekten oder der Frucht auszuweichen."/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Wendeschleife im Vorgewende"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Anstatt eines normalen Wendemanövers im Vorgewende, wird eine Schleife gefahren. Das erste Vorgewende sollte runde Ecken haben!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Geräte am Ende einklappen"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Geräte am Ende des Kurses einklappen oder nicht."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Zum Startpunkt zurückfahren"/>

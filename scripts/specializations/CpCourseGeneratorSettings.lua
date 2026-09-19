@@ -289,6 +289,13 @@ function CpCourseGeneratorSettings:hasHeadlandsSelected()
     return spec.numberOfHeadlands:getValue() > 0
 end
 
+--- A loaded headland course can be adjusted even when the next generation has zero headlands.
+function CpCourseGeneratorSettings:isHeadlandSectionVisible()
+    if CpCourseGeneratorSettings.hasHeadlandsSelected(self) then return true end
+    local course = self.getFieldWorkCourse and self:getFieldWorkCourse()
+    return course ~= nil and (course:getNumberOfHeadlands() or 0) > 0
+end
+
 function CpCourseGeneratorSettings:isNarrowFieldEnabled()
     -- FieldworkCourseTwoSided does not work with multitools.
     return CpCourseGeneratorSettings.hasHeadlandsSelected(self) and

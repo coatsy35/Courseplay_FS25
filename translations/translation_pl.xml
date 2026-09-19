@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Czy zezwolić na używanie znajdywania ścieżki przy zawracaniu, aby np. omijać przeszkody i rośliny."/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Pętla na uwrociu"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Zamiast wykonywać normalny nawrót na uwrociu, pojazd wykona pętlę. Pierwszy nawrót powinien mieć zaokrąglone zakręty!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Złóż narzędzie po zakończeniu kursu"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Ustala czy pomocnik ma złożyć narzędzie po zakończeniu kursu."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Powrót do punktu startu"/>

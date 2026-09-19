@@ -935,6 +935,7 @@ function Course:copy(vehicle, first, last)
     newCourse.nVehicles = self.nVehicles
     newCourse.workWidth = self.workWidth
     newCourse.numberOfHeadlands = self.numberOfHeadlands
+    newCourse.loopTurnsOnHeadland = self.loopTurnsOnHeadland
     if self.nVehicles > 1 then
         newCourse.multiVehicleData = self.multiVehicleData:copy()
     end
@@ -1612,6 +1613,7 @@ function Course:saveToXml(courseXml, courseKey)
     courseXml:setValue(courseKey .. '#nVehicles', self.nVehicles or 1)
     CpUtil.setXmlValue(courseXml, courseKey .. '#headlandClockwise', self.headlandClockwise)
     CpUtil.setXmlValue(courseXml, courseKey .. '#islandHeadlandClockwise', self.islandHeadlandClockwise)
+    CpUtil.setXmlValue(courseXml, courseKey .. '#loopTurnsOnHeadland', self.loopTurnsOnHeadland)
     courseXml:setValue(courseKey .. '#wasEdited', self.editedByCourseEditor)
     CpUtil.setXmlValue(courseXml, courseKey .. '#compacted', self.compacted)
     if self.nVehicles > 1 then
@@ -1633,6 +1635,7 @@ function Course.createFromXml(vehicle, courseXml, courseKey)
     course.nVehicles = courseXml:getValue(courseKey .. '#nVehicles', 1)
     course.headlandClockwise = courseXml:getValue(courseKey .. '#headlandClockwise')
     course.islandHeadlandClockwise = courseXml:getValue(courseKey .. '#islandHeadlandClockwise')
+    course.loopTurnsOnHeadland = courseXml:getValue(courseKey .. '#loopTurnsOnHeadland')
     course.editedByCourseEditor = courseXml:getValue(courseKey .. '#wasEdited', false)
     course.compacted = courseXml:getValue(courseKey .. '#compacted', false)
     if course.nVehicles == 1 then
@@ -1659,6 +1662,7 @@ function Course:writeStream(vehicle, streamId, connection)
     streamWriteInt32(streamId, self.nVehicles or 1)
     CpUtil.streamWriteBool(streamId, self.headlandClockwise)
     CpUtil.streamWriteBool(streamId, self.islandHeadlandClockwise)
+    CpUtil.streamWriteBool(streamId, self.loopTurnsOnHeadland)
     streamWriteInt32(streamId, #self.waypoints or 0)
     streamWriteBool(streamId, self.editedByCourseEditor)
     for i, p in ipairs(self.waypoints) do
@@ -1677,6 +1681,7 @@ function Course.createFromStream(vehicle, streamId, connection)
     course.nVehicles = streamReadInt32(streamId)
     course.headlandClockwise = CpUtil.streamReadBool(streamId)
     course.islandHeadlandClockwise = CpUtil.streamReadBool(streamId)
+    course.loopTurnsOnHeadland = CpUtil.streamReadBool(streamId)
     local numWaypoints = streamReadInt32(streamId)
     course.editedByCourseEditor = streamReadBool(streamId)
     for ix = 1, numWaypoints do

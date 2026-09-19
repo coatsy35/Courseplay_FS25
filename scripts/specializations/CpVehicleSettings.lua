@@ -49,12 +49,14 @@ function CpVehicleSettings.prerequisitesPresent(specializations)
 end
 
 function CpVehicleSettings.registerEvents(vehicleType)
+    SpecializationUtil.registerEvent(vehicleType, 'onCpLoopTurnsOnHeadlandChanged')
     SpecializationUtil.registerEvent(vehicleType, 'onCpUserSettingChanged')
     SpecializationUtil.registerEvent(vehicleType, 'onCpLoadingShovelOffsetSettingChanged')
 end
 
 
-function CpVehicleSettings.registerEventListeners(vehicleType)	
+function CpVehicleSettings.registerEventListeners(vehicleType)
+    SpecializationUtil.registerEventListener(vehicleType, 'onCpLoopTurnsOnHeadlandChanged', CpVehicleSettings)
     SpecializationUtil.registerEventListener(vehicleType, "onPreLoad", CpVehicleSettings)
 	SpecializationUtil.registerEventListener(vehicleType, "onLoad", CpVehicleSettings)
     SpecializationUtil.registerEventListener(vehicleType, "onUpdate", CpVehicleSettings)
@@ -223,7 +225,28 @@ function CpVehicleSettings.loadSettingsSetup()
 end
 
 function CpVehicleSettings.getSettingSetup()
-    return CpVehicleSettings.settingsBySubTitle, CpVehicleSettings.pageTitle
+    -- The working value retains its savegame, profile and network identity, but belongs
+    -- on the fieldwork page. Copy only layout tables; never clone the setting objects.
+    local sections = {}
+    for _, section in ipairs(CpVehicleSettings.settingsBySubTitle) do
+        local copy = {}
+        for key, value in pairs(section) do copy[key] = value end
+        copy.elements = {}
+        for _, setting in ipairs(section.elements) do
+            if setting:getName() ~= 'loopTurnsOnHeadland' then
+                table.insert(copy.elements, setting)
+            end
+        end
+        table.insert(sections, copy)
+    end
+    return sections, CpVehicleSettings.pageTitle
+end
+
+--- Keep the loaded working course in step with manual edits and applied profiles.
+-- The library course is only changed when the user saves it again.
+function CpVehicleSettings:onCpLoopTurnsOnHeadlandChanged(setting)
+    local course = self.getFieldWorkCourse and self:getFieldWorkCourse()
+    if course then course.loopTurnsOnHeadland = setting:getValue() end
 end
 
 function CpVehicleSettings:loadSettings(savegame)

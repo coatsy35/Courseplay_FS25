@@ -24,7 +24,7 @@
 	</SettingSubTitle>
 	<!-- Only active with one or more headlands -->
 	<!--Headland settings-->
-	<SettingSubTitle title="headland" isVisible="hasHeadlandsSelected">	
+	<SettingSubTitle title="headland" isVisible="isHeadlandSectionVisible">
 		<Setting classType="AIParameterBooleanSetting" name="sharpenCorners" defaultBool="true"/>
 		<Setting classType="AIParameterSettingList" name="headlandsWithRoundCorners" min="0" max="50" default="1"/>
 		<Setting classType="AIParameterSettingList" name="turningRadius" min="5" max="12" setDefault="setDefaultTurningRadius"/>

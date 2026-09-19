@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Permite usar rotas em curvas, para evitar obstáculos e plantações"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Curva circular na cabeceira"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Em vez de fazer uma curva normal na cabeceira, o veículo fará um loop. A primeira cabeceira deve ter curvas arredondadas!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Dobrar implemento no final da rota"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Ativar / desativar dobrar o implemento no final da rota."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Voltar ao ponto inicial"/>

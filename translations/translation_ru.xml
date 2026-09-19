@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Позволить использовать путеискатель при поворотах, например, чтобы избежать препятствий и культур."/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Петлёвой разворот на РП"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Вместо выполнения обычного поворота на разворотной полосе, автомобиль будет разворачиваться по петле. Первая полоса должна иметь скруглённые углы!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Сложить инструмент в конце курса"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Включает/отключает автоматическое складывание орудий в конце курса."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Возврат на точку старта"/>

@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="如果有必要，允許路徑查找生成帶有彎道的路徑，例如規避障礙或作物。"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Loop turn on headland"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Instead of performing a normal turn on headland, the vehicle will drive a loop. The first headland should have round corners!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="工作結束時收起工具"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="開啟/關閉 工作結束時工具自動收起。"/>
     <text name="CP_vehicle_setting_returnToStart_title" text="返回起始點"/>

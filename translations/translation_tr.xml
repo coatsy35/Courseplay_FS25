@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Engellerden ve ekinlerden kaçınmak için yol bulucuyu kullanmaya olanak tanır"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Loop turn on headland"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Instead of performing a normal turn on headland, the vehicle will drive a loop. The first headland should have round corners!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="İş sonunda aletleri katla"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="İş bitiminde aletlerin otomatik katlanmasını etkinleştirir/devre dışı bırakır."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Başlangıç noktasına dön"/>

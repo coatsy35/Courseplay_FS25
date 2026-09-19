@@ -587,6 +587,9 @@
 			<Text language="de"><![CDATA[Anstatt eines normalen Wendemanövers im Vorgewende, wird eine Schleife gefahren. Das erste Vorgewende sollte runde Ecken haben!]]></Text>
 			<Text language="en"><![CDATA[Instead of performing a normal turn on headland, the vehicle will drive a loop. The first headland should have round corners!]]></Text>
 		</Translation>
+		<Translation name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip">
+			<Text language="en"><![CDATA[Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change.]]></Text>
+		</Translation>
 		<Translation name="CP_vehicle_setting_foldImplementAtEnd_title">
 			<Text language="de"><![CDATA[Geräte am Ende einklappen]]></Text>
 			<Text language="en"><![CDATA[Fold tools at course end]]></Text>
