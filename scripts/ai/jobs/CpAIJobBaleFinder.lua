@@ -31,8 +31,8 @@ function CpAIJobBaleFinder:getCanStartJob()
 	return self:getVehicle():cpGetFieldPolygon() ~= nil
 end
 
----@param resetToVehiclePosition boolean resets the field position to the vehicle position.
-function CpAIJobBaleFinder:applyCurrentState(vehicle, mission, farmId, isDirectStart, resetToVehiclePosition)
+---@param resetFieldPosition boolean resets the field position near the vehicle.
+function CpAIJobBaleFinder:applyCurrentState(vehicle, mission, farmId, isDirectStart, resetFieldPosition)
 	CpAIJob.applyCurrentState(self, vehicle, mission, farmId, isDirectStart)
 	self.cpJobParameters:validateSettings()
 
@@ -40,19 +40,8 @@ function CpAIJobBaleFinder:applyCurrentState(vehicle, mission, farmId, isDirectS
 	local x, z = self.cpJobParameters.fieldPosition:getPosition()
 	-- A direct reset must use the field at the vehicle instead of retaining the
 	-- boundary from the previous job.
-	if resetToVehiclePosition or x == nil or z == nil then
-		x, _, z = getWorldTranslation(vehicle.rootNode)
-		local fieldX, fieldZ, distance = CpFieldUtil.findNearbyFieldPosition(
-				x, z, self.maxNearbyFieldDistance)
-		if fieldX then
-			x, z = fieldX, fieldZ
-			if distance > 0 then
-				self:debug('Using nearby field position %.1f/%.1f, %.1f m from vehicle', x, z, distance)
-			end
-		else
-			self:debug('No field found within %.1f m of vehicle', self.maxNearbyFieldDistance)
-		end
-		self.cpJobParameters.fieldPosition:setPosition(x, z)
+	if resetFieldPosition or x == nil or z == nil then
+		self:setFieldPositionFromVehicle(vehicle, self.maxNearbyFieldDistance)
 	end
 end
 

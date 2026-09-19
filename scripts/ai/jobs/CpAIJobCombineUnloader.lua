@@ -60,8 +60,8 @@ end
 ---@param mission Mission
 ---@param farmId number
 ---@param isDirectStart boolean disables the drive to by giants
----@param resetToVehiclePosition boolean resets the field position to the vehicle position.
-function CpAIJobCombineUnloader:applyCurrentState(vehicle, mission, farmId, isDirectStart, resetToVehiclePosition)
+---@param resetFieldPosition boolean resets the field position near the vehicle.
+function CpAIJobCombineUnloader:applyCurrentState(vehicle, mission, farmId, isDirectStart, resetFieldPosition)
 	CpAIJob.applyCurrentState(self, vehicle, mission, farmId, isDirectStart)
 	
 	self.cpJobParameters:validateSettings()
@@ -71,19 +71,8 @@ function CpAIJobCombineUnloader:applyCurrentState(vehicle, mission, farmId, isDi
 	local x, z = self.cpJobParameters.fieldPosition:getPosition()
 	-- A direct reset must use the field at the vehicle instead of retaining the
 	-- boundary from the previous job.
-	if resetToVehiclePosition or x == nil or z == nil then
-		x, _, z = getWorldTranslation(vehicle.rootNode)
-		local fieldX, fieldZ, distance = CpFieldUtil.findNearbyFieldPosition(
-				x, z, self.minStartDistanceToField)
-		if fieldX then
-			x, z = fieldX, fieldZ
-			if distance > 0 then
-				self:debug('Using nearby field position %.1f/%.1f, %.1f m from vehicle', x, z, distance)
-			end
-		else
-			self:debug('No field found within %.1f m of vehicle', self.minStartDistanceToField)
-		end
-		self.cpJobParameters.fieldPosition:setPosition(x, z)
+	if resetFieldPosition or x == nil or z == nil then
+		self:setFieldPositionFromVehicle(vehicle, self.minStartDistanceToField)
 	end
 	x, z = self.cpJobParameters.fieldUnloadPosition:getPosition()
 	local angle = self.cpJobParameters.fieldUnloadPosition:getAngle()
