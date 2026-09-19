@@ -162,6 +162,7 @@
     <text name="CP_vehicle_setting_subTitle_basic" text="Основні налаштування"/>
     <text name="CP_vehicle_setting_subTitle_implement" text="Налаштування обладнання"/>
     <text name="CP_vehicle_setting_subTitle_combine" text="Налаштування комбайну"/>
+    <text name="CP_vehicle_setting_subTitle_unloaderCoordination" text="Unloader coordination"/>
     <text name="CP_vehicle_setting_subTitle_seeder" text="Налаштування сівалки"/>
     <text name="CP_vehicle_setting_subTitle_multitool" text="Налаштування сумісної роботи обладнання"/>
     <text name="CP_vehicle_setting_subTitle_speed" text="Швидкість"/>
@@ -291,6 +292,10 @@
     <text name="CP_vehicle_setting_pipeOffsetZ_tooltip" text="Поперечне зміщення вигрузної труби."/>
     <text name="CP_vehicle_setting_callUnloaderPercent_title" text="Виклик розвантажуючого при"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_tooltip" text="Виклик розвантажуючого, коли рівень заповнення комбайну вище цього значення."/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_title" text="Nearby standby unloader"/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_tooltip" text="Keeps one additional unloader nearby. Forage harvesters reserve it for relief; combines release it for a more urgent call."/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_title" text="Standby distance"/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_tooltip" text="Target distance for the standby unloader behind the harvester on already worked ground."/>
     <text name="CP_vehicle_setting_strawSwath_onlyCenter" text="вимк. на розворотній смузі"/>
     <!---->
     <!--Course generator settings-->

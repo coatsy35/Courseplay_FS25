@@ -487,6 +487,10 @@
 			<Text language="de"><![CDATA[Einstellungen für Drescher]]></Text>
 			<Text language="en"><![CDATA[Combine settings]]></Text>
 		</Translation>
+		<Translation name="CP_vehicle_setting_subTitle_unloaderCoordination">
+			<Text language="de"><![CDATA[Abfahrerkoordination]]></Text>
+			<Text language="en"><![CDATA[Unloader coordination]]></Text>
+		</Translation>
 		<Translation name="CP_vehicle_setting_subTitle_seeder">
 			<Text language="de"><![CDATA[Einstellungen für Saatmaschine]]></Text>
 			<Text language="en"><![CDATA[Seeder settings]]></Text>
@@ -951,6 +955,22 @@
 		<Translation name="CP_vehicle_setting_callUnloaderPercent_tooltip">
 			<Text language="de"><![CDATA[Ruft einen Abfahrer wenn der Füllstand des Ernters über diesen Wert liegt.]]></Text>
 			<Text language="en"><![CDATA[Call unloader when the harvester fill level is above this value.]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_nearbyStandbyUnloaders_title">
+			<Text language="de"><![CDATA[Abfahrer in Bereitschaft]]></Text>
+			<Text language="en"><![CDATA[Nearby standby unloader]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_nearbyStandbyUnloaders_tooltip">
+			<Text language="de"><![CDATA[Hält einen zusätzlichen Abfahrer in der Nähe bereit. Häcksler reservieren ihn für die Ablösung; Drescher geben ihn für dringendere Abrufe frei.]]></Text>
+			<Text language="en"><![CDATA[Keeps one additional unloader nearby. Forage harvesters reserve it for relief; combines release it for a more urgent call.]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_standbyUnloaderDistance_title">
+			<Text language="de"><![CDATA[Bereitschaftsabstand]]></Text>
+			<Text language="en"><![CDATA[Standby distance]]></Text>
+		</Translation>
+		<Translation name="CP_vehicle_setting_standbyUnloaderDistance_tooltip">
+			<Text language="de"><![CDATA[Zielabstand des Bereitschaftsabfahrers hinter dem Ernter auf bereits bearbeiteter Fläche.]]></Text>
+			<Text language="en"><![CDATA[Target distance for the standby unloader behind the harvester on already worked ground.]]></Text>
 		</Translation>
 		<Translation name="CP_vehicle_setting_strawSwath_onlyCenter">
 			<Text language="de"><![CDATA[Vorgewende deaktiviert]]></Text>

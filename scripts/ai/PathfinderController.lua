@@ -124,6 +124,15 @@ function PathfinderController:reset()
     self.startedAt = 0
 end
 
+--- Cancel an active request without invoking its completion callback.
+--- A later request will install its own context and listeners in the normal way.
+function PathfinderController:cancel()
+    self.pathfinder = nil
+    self.currentContext = nil
+    self.currentPathfinderCall = nil
+    self:reset()
+end
+
 function PathfinderController:update(dt)
     if self:isActive() then
         --- Applies coroutine for path finding

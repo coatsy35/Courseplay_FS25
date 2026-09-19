@@ -162,6 +162,7 @@
     <text name="CP_vehicle_setting_subTitle_basic" text="基本设置"/>
     <text name="CP_vehicle_setting_subTitle_implement" text="工具设置"/>
     <text name="CP_vehicle_setting_subTitle_combine" text="收割机设置"/>
+    <text name="CP_vehicle_setting_subTitle_unloaderCoordination" text="Unloader coordination"/>
     <text name="CP_vehicle_setting_subTitle_seeder" text="播种机设置"/>
     <text name="CP_vehicle_setting_subTitle_multitool" text="多工具设置"/>
     <text name="CP_vehicle_setting_subTitle_speed" text="速度设置"/>
@@ -291,6 +292,10 @@
     <text name="CP_vehicle_setting_pipeOffsetZ_tooltip" text="Pipe offset Z"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_title" text="呼叫卸载拖车"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_tooltip" text="当收割机填充高于此值时，呼叫卸载车。"/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_title" text="Nearby standby unloader"/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_tooltip" text="Keeps one additional unloader nearby. Forage harvesters reserve it for relief; combines release it for a more urgent call."/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_title" text="Standby distance"/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_tooltip" text="Target distance for the standby unloader behind the harvester on already worked ground."/>
     <text name="CP_vehicle_setting_strawSwath_onlyCenter" text="田间地头禁用"/>
     <!---->
     <!--Course generator settings-->

@@ -162,6 +162,7 @@
     <text name="CP_vehicle_setting_subTitle_basic" text="기본 설정"/>
     <text name="CP_vehicle_setting_subTitle_implement" text="장비 설정"/>
     <text name="CP_vehicle_setting_subTitle_combine" text="콤바인 설정"/>
+    <text name="CP_vehicle_setting_subTitle_unloaderCoordination" text="Unloader coordination"/>
     <text name="CP_vehicle_setting_subTitle_seeder" text="파종기 설정"/>
     <text name="CP_vehicle_setting_subTitle_multitool" text="다중 작업 설정"/>
     <text name="CP_vehicle_setting_subTitle_speed" text="속도 설정"/>
@@ -291,6 +292,10 @@
     <text name="CP_vehicle_setting_pipeOffsetZ_tooltip" text="Pipe offset Z"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_title" text="언로더 호출 비율"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_tooltip" text="수확기가 설정 비율 이상이면 언로더를 호출합니다."/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_title" text="Nearby standby unloader"/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_tooltip" text="Keeps one additional unloader nearby. Forage harvesters reserve it for relief; combines release it for a more urgent call."/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_title" text="Standby distance"/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_tooltip" text="Target distance for the standby unloader behind the harvester on already worked ground."/>
     <text name="CP_vehicle_setting_strawSwath_onlyCenter" text="헤드랜드 비활성화"/>
     <!---->
     <!--Course generator settings-->

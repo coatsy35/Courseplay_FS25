@@ -149,6 +149,21 @@
 				 isVisible="isPipeOffsetSettingsVisible" title="CP_deactivated"/>
 	</SettingSubTitle>
 
+	<SettingSubTitle title="unloaderCoordination" isVisible="areHarvesterSettingsVisible">
+		<!-- Number of additional unloaders coordinated near this harvester. -->
+		<Setting classType="AIParameterSettingList" name="nearbyStandbyUnloaders" default="1">
+			<Values>
+				<Value name="STANDBY_UNLOADERS_OFF">0</Value>
+				<Value name="STANDBY_UNLOADERS_ONE">1</Value>
+			</Values>
+			<Texts>
+				<Text prefix="false">CP_deactivated</Text>
+				<Text prefix="false">CP_activated</Text>
+			</Texts>
+		</Setting>
+		<Setting classType="AIParameterSettingList" name="standbyUnloaderDistance" min="30" max="80" incremental="5" default="50" unit="2"/>
+	</SettingSubTitle>
+
 	<SettingSubTitle title="seeder" isVisible="areSowingMachineSettingsVisible">
 		<!--Ridgemarker-->	
 		<Setting classType="AIParameterBooleanSetting" name="ridgeMarkersAutomatic" defaultBool="false" isVisible="isRidgeMarkerSettingVisible" isExpertModeOnly="true"/>

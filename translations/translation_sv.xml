@@ -162,6 +162,7 @@
     <text name="CP_vehicle_setting_subTitle_basic" text="Grundläggande inställningar"/>
     <text name="CP_vehicle_setting_subTitle_implement" text="Verktygsinställningar"/>
     <text name="CP_vehicle_setting_subTitle_combine" text="Kombinera inställningar"/>
+    <text name="CP_vehicle_setting_subTitle_unloaderCoordination" text="Unloader coordination"/>
     <text name="CP_vehicle_setting_subTitle_seeder" text="Såmaskinens inställningar"/>
     <text name="CP_vehicle_setting_subTitle_multitool" text="Inställningar för multiverktyg"/>
     <text name="CP_vehicle_setting_subTitle_speed" text="Hastigheter"/>
@@ -291,6 +292,10 @@
     <text name="CP_vehicle_setting_pipeOffsetZ_tooltip" text="Rörets förskjutning Z"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_title" text="Ring avlastaren på"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_tooltip" text="Anropa avlastaren när skördarens fyllnadsnivå är över detta värde."/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_title" text="Nearby standby unloader"/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_tooltip" text="Keeps one additional unloader nearby. Forage harvesters reserve it for relief; combines release it for a more urgent call."/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_title" text="Standby distance"/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_tooltip" text="Target distance for the standby unloader behind the harvester on already worked ground."/>
     <text name="CP_vehicle_setting_strawSwath_onlyCenter" text="Headlands funktionshindrad"/>
     <!---->
     <!--Course generator settings-->

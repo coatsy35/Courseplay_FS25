@@ -137,6 +137,9 @@ AIDriveStrategyUnloadCombine.UNLOAD_TYPES = {
 AIDriveStrategyUnloadCombine.myStates = {
     IDLE = { fuelSaveAllowed = true }, --- Only allow fuel save, if the unloader is waiting for a combine.
     WAITING_FOR_PATHFINDER = {},
+    WAITING_FOR_STANDBY_PATHFINDER = {},
+    DRIVING_TO_STANDBY = { collisionAvoidanceEnabled = true },
+    WAITING_IN_STANDBY = { fuelSaveAllowed = true },
     MOVING_BACK_BEFORE_PATHFINDING = { pathfinderController = nil, pathfinderContext = nil }, -- there is an obstacle ahead, move back a bit so the pathfinder can succeed
     --- States to maneuver away from combines and so on.
     --- No need to be assigned to a combine!
@@ -217,6 +220,9 @@ function AIDriveStrategyUnloadCombine:init(task, job)
     self.driveUnloadNowRequested = CpTemporaryObject(false)
     self.movingAwayDelay = CpTemporaryObject(false)
     self.checkForTrailerToUnloadTo = CpTemporaryObject(true)
+    self.checkStandbyPosition = CpTemporaryObject(true)
+    self.standbyAssignment = nil
+    self.standbyTargetX, self.standbyTargetZ = nil, nil
     self.unloadTargetType = self.UNLOAD_TYPES.COMBINE
     --- Register all active unloaders here to access them fast.
     AIDriveStrategyUnloadCombine.activeUnloaders[self] = self.vehicle
@@ -232,6 +238,7 @@ function AIDriveStrategyUnloadCombine:delete()
         CpUtil.destroyNode(self.invertedStartPositionMarkerNode)
     end
 
+    UnloaderCoordinator:unregister(self)
     self:releaseCombine()
     AIDriveStrategyUnloadCombine.activeUnloaders[self] = nil
     AIDriveStrategyCourse.delete(self)
@@ -289,6 +296,8 @@ end
 
 function AIDriveStrategyUnloadCombine:setAIVehicle(vehicle, jobParameters)
     AIDriveStrategyCourse.setAIVehicle(self, vehicle)
+    -- init() runs before the strategy receives its vehicle, so register the usable value here as well.
+    AIDriveStrategyUnloadCombine.activeUnloaders[self] = vehicle
     self:setJobParameterValues(jobParameters)
     self.reverser = AIReverseDriver(self.vehicle, self.ppc)
     self.collisionAvoidanceController = CollisionAvoidanceController(self.vehicle, self)
@@ -424,7 +433,20 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
             self.checkForTrailerToUnloadTo:set(false, 10000)
             self:debug('Trailers over %d fill level', self.settings.fullThreshold:getValue())
             self:startUnloadingTrailers()
+        else
+            self:updateStandbyCoordinator()
         end
+    elseif self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER then
+        self:setMaxSpeed(0)
+        self:updateStandbyCoordinator()
+
+    elseif self.state == self.states.DRIVING_TO_STANDBY then
+        self:setFieldSpeed()
+        self:updateStandbyCoordinator()
+
+    elseif self.state == self.states.WAITING_IN_STANDBY then
+        self:setMaxSpeed(0)
+        self:updateStandbyCoordinator()
     elseif self.state == self.states.WAITING_FOR_PATHFINDER then
         -- just wait for the pathfinder to finish
         self:setMaxSpeed(0)
@@ -1000,7 +1022,11 @@ end
 ------------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyUnloadCombine:onLastWaypointPassed()
     self:debug('Last waypoint passed')
-    if self.state == self.states.DRIVING_TO_COMBINE then
+    if self.state == self.states.DRIVING_TO_STANDBY then
+        self:debug('Standby position reached')
+        self:setNewState(self.states.WAITING_IN_STANDBY)
+        self:setMaxSpeed(0)
+    elseif self.state == self.states.DRIVING_TO_COMBINE then
         if self:isOkToStartUnloadingCombine() then
             -- Right behind the combine, aligned, go for the pipe
             self:startUnloadingCombine()
@@ -1326,6 +1352,7 @@ end
 ------------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyUnloadCombine:startUnloadingTrailers()
     self:setMaxSpeed(0)
+    UnloaderCoordinator:release(self)
     self:releaseCombine()
 
     if self.fieldUnloadPositionNode then
@@ -1601,8 +1628,18 @@ function AIDriveStrategyUnloadCombine:isIdle()
     return self.state == self.states.IDLE
 end
 
-function AIDriveStrategyUnloadCombine:isAllowedToBeCalled()
-    return self:isIdle() or self:hasToWaitForAssignedCombine()
+--- Staging is provisional work: the unloader must remain available for a real call.
+function AIDriveStrategyUnloadCombine:isAvailableForStaging()
+    return self.unloadTargetType == self.UNLOAD_TYPES.COMBINE and
+            not self:getAllTrailersFull(self.settings.fullThreshold:getValue()) and
+            (self:isIdle() or self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
+                    self.state == self.states.DRIVING_TO_STANDBY or self.state == self.states.WAITING_IN_STANDBY)
+end
+
+---@param callingHarvester table|nil
+function AIDriveStrategyUnloadCombine:isAllowedToBeCalled(callingHarvester)
+    local available = self:isIdle() or self:hasToWaitForAssignedCombine() or self:isAvailableForStaging()
+    return available and UnloaderCoordinator:canBeCalledBy(self, callingHarvester)
 end
 
 --- Get the Dubins path length and the estimated seconds en-route to gaol
@@ -1635,6 +1672,9 @@ end
 --- unloader to come to the combine.
 ---@return boolean true if the unloader has accepted the request
 function AIDriveStrategyUnloadCombine:call(combine, waypoint)
+    -- A real unload call always supersedes provisional staging. Firm forage reservations are filtered by
+    -- isAllowedToBeCalled(), so reaching this point also performs the atomic standby-to-active promotion.
+    UnloaderCoordinator:release(self)
     local xOffset, zOffset = self:getPipeOffset(combine)
     if waypoint then
         -- combine set up a rendezvous waypoint for us, go there
@@ -1690,6 +1730,133 @@ function AIDriveStrategyUnloadCombine:call(combine, waypoint)
         end
         return true
     end
+end
+
+------------------------------------------------------------------------------------------------------------------------
+-- Standby coordination
+------------------------------------------------------------------------------------------------------------------------
+
+function AIDriveStrategyUnloadCombine:updateStandbyCoordinator()
+    if self:isInStandbyState() and (self:isDriveUnloadNowRequested() or
+            self:getAllTrailersFull(self.settings.fullThreshold:getValue())) then
+        self:debug('Leaving standby to unload trailer')
+        UnloaderCoordinator:release(self)
+        self:startUnloadingTrailers()
+        return
+    end
+    if self.checkStandbyPosition:get() then
+        self.checkStandbyPosition:set(false, UnloaderCoordinator.rebalanceIntervalMs)
+        UnloaderCoordinator:update(self)
+    end
+end
+
+function AIDriveStrategyUnloadCombine:isInStandbyState()
+    return self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
+            self.state == self.states.DRIVING_TO_STANDBY or
+            self.state == self.states.WAITING_IN_STANDBY
+end
+
+function AIDriveStrategyUnloadCombine:cancelStandbyPathfinding()
+    if self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER and self.pathfinderController then
+        self.pathfinderController:cancel()
+    end
+end
+
+---@param assignment table|nil
+function AIDriveStrategyUnloadCombine:clearStandbyAssignment(assignment)
+    if assignment and self.standbyAssignment and assignment.harvester ~= self.standbyAssignment.harvester then
+        return
+    end
+    self:cancelStandbyPathfinding()
+    self.standbyAssignment = nil
+    self.standbyTargetX, self.standbyTargetZ = nil, nil
+    if self:isInStandbyState() then
+        self:setNewState(self.states.IDLE)
+        self:setMaxSpeed(0)
+    end
+end
+
+---@param assignment table
+function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
+    if not assignment or not self:isAvailableForStaging() then
+        return
+    end
+
+    local oldAssignment = self.standbyAssignment
+    self.standbyAssignment = assignment
+    local waypoint = assignment.waypoint
+    if not waypoint then
+        -- During turns the already reached position is safer than chasing a moving target through the manoeuvre.
+        if self:isInStandbyState() then
+            self:cancelStandbyPathfinding()
+            self:setNewState(self.states.WAITING_IN_STANDBY)
+            self:setMaxSpeed(0)
+        end
+        return
+    end
+
+    local hasFruit = PathfinderUtil.hasFruit(waypoint.x, waypoint.z, 1, 1)
+    if hasFruit then
+        self:debug('Standby target for %s still contains fruit, retaining current position',
+                CpUtil.getName(assignment.harvester))
+        return
+    end
+
+    local vehicleX, _, vehicleZ = getWorldTranslation(self.vehicle.rootNode)
+    local distanceToTarget = MathUtil.vector2Length(waypoint.x - vehicleX, waypoint.z - vehicleZ)
+    if distanceToTarget < 8 then
+        self.standbyTargetX, self.standbyTargetZ = waypoint.x, waypoint.z
+        self:cancelStandbyPathfinding()
+        self:setNewState(self.states.WAITING_IN_STANDBY)
+        self:setMaxSpeed(0)
+        return
+    end
+
+    local sameHarvester = oldAssignment and oldAssignment.harvester == assignment.harvester
+    local targetMoved = not self.standbyTargetX or
+            MathUtil.vector2Length(waypoint.x - self.standbyTargetX, waypoint.z - self.standbyTargetZ) > 20
+    if sameHarvester and not targetMoved and self:isInStandbyState() then
+        return
+    end
+
+    self:startPathfindingToStandby(assignment.harvester, waypoint)
+end
+
+---@param harvester table
+---@param waypoint Waypoint
+function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypoint)
+    self:cancelStandbyPathfinding()
+    self.standbyTargetX, self.standbyTargetZ = waypoint.x, waypoint.z
+    local harvesterStrategy = harvester:getCpDriveStrategy()
+    local context = PathfinderContext(self.vehicle)
+    context:maxFruitPercent(self:getMaxFruitPercent())
+    context:offFieldPenalty(self:getOffFieldPenalty(harvester))
+    context:useFieldNum(CpFieldUtil.getFieldNumUnderVehicle(harvester))
+    context:areaToAvoid(harvesterStrategy:getAreaToAvoid())
+    context:vehiclesToIgnore({ harvester })
+    context:maxIterations(PathfinderUtil.getMaxIterationsForFieldPolygon(self.vehicle:cpGetFieldPolygon()))
+    self.pathfinderController:registerListeners(self, self.onPathfindingDoneToStandby)
+    self:setNewState(self.states.WAITING_FOR_STANDBY_PATHFINDER)
+    self:debug('Pathfinding to standby position for %s', CpUtil.getName(harvester))
+    self.pathfinderController:findPathToGoal(context, PathfinderUtil.getWaypointAsState3D(waypoint, 0, 0))
+end
+
+function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, success, course, goalNodeInvalid)
+    if success and self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER and self.standbyAssignment then
+        self:debug('Pathfinding to standby position successful')
+        course:adjustForReversing(math.max(1, -AIUtil.getDirectionNodeToReverserNodeOffset(self.vehicle)))
+        self:startCourse(course, 1)
+        self:setNewState(self.states.DRIVING_TO_STANDBY)
+        return true
+    end
+    self:debug('Pathfinding to standby position failed; retaining current position')
+    if self.standbyAssignment then
+        self:setNewState(self.states.WAITING_IN_STANDBY)
+        self:setMaxSpeed(0)
+    else
+        self:setNewState(self.states.IDLE)
+    end
+    return false
 end
 
 ------------------------------------------------------------------------------------------------------------------------

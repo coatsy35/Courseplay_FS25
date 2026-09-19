@@ -162,6 +162,7 @@
     <text name="CP_vehicle_setting_subTitle_basic" text="Grundeinstellungen"/>
     <text name="CP_vehicle_setting_subTitle_implement" text="Geräteeinstellungen"/>
     <text name="CP_vehicle_setting_subTitle_combine" text="Einstellungen für Drescher"/>
+    <text name="CP_vehicle_setting_subTitle_unloaderCoordination" text="Abfahrerkoordination"/>
     <text name="CP_vehicle_setting_subTitle_seeder" text="Einstellungen für Saatmaschine"/>
     <text name="CP_vehicle_setting_subTitle_multitool" text="Multitooleinstellungen"/>
     <text name="CP_vehicle_setting_subTitle_speed" text="Geschwindigkeiten"/>
@@ -291,6 +292,10 @@
     <text name="CP_vehicle_setting_pipeOffsetZ_tooltip" text="Rohr Abstand Z"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_title" text="Abfahrer rufen ab"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_tooltip" text="Ruft einen Abfahrer wenn der Füllstand des Ernters über diesen Wert liegt."/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_title" text="Abfahrer in Bereitschaft"/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_tooltip" text="Hält einen zusätzlichen Abfahrer in der Nähe bereit. Häcksler reservieren ihn für die Ablösung; Drescher geben ihn für dringendere Abrufe frei."/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_title" text="Bereitschaftsabstand"/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_tooltip" text="Zielabstand des Bereitschaftsabfahrers hinter dem Ernter auf bereits bearbeiteter Fläche."/>
     <text name="CP_vehicle_setting_strawSwath_onlyCenter" text="Vorgewende deaktiviert"/>
     <!---->
     <!--Course generator settings-->

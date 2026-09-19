@@ -110,6 +110,7 @@ function AIDriveStrategyCombineCourse:init(task, job)
 end
 
 function AIDriveStrategyCombineCourse:delete()
+    UnloaderCoordinator.nextRebalanceAt = 0
     self.pocketHelperNode:destroy()
     AIDriveStrategyFieldWorkCourse.delete(self)
 end
@@ -823,6 +824,26 @@ function AIDriveStrategyCombineCourse:estimateDistanceUntilFull(ix)
             self.course:getCurrentWaypointIx(), dUntilCallUnloader, litersUntilCallUnloader, fillLevel, wpDistance)
 end
 
+--- Estimated seconds until this harvester reaches its configured normal unloader call level.
+--- The measured harvest rate is preferred; the fallback deliberately remains conservative while the
+--- first row is establishing a usable rate.
+---@return number
+function AIDriveStrategyCombineCourse:getSecondsUntilUnloaderCall()
+    if self:alwaysNeedsUnloader() then
+        return 0
+    end
+    local fillLevel = self.combineController:getFillLevel()
+    local capacity = self.combineController:getCapacity()
+    local targetFillLevel = capacity * self.settings.callUnloaderPercent:getValue() / 100
+    local litresRemaining = math.max(0, targetFillLevel - fillLevel)
+    if self.litersPerSecond and self.litersPerSecond > 0.1 then
+        return litresRemaining / self.litersPerSecond
+    end
+    local percentageRemaining = math.max(0,
+            self.settings.callUnloaderPercent:getValue() - self.combineController:getFillLevelPercentage())
+    return percentageRemaining * 6
+end
+
 function AIDriveStrategyCombineCourse:shouldWaitAtEndOfRow()
     if self.settings.selfUnload:getValue() then
         -- don't wait for anyone when self unloading
@@ -994,7 +1015,7 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
             -- or when starting.
             if driveStrategy:isServingPosition(x, z, 10) then
                 local unloaderFillLevelPercentage = driveStrategy:getFillLevelPercentage()
-                if driveStrategy:isAllowedToBeCalled() and unloaderFillLevelPercentage < 99 then
+                if driveStrategy:isAllowedToBeCalled(self.vehicle) and unloaderFillLevelPercentage < 99 then
                     local unloaderDistance, unloaderEte
                     if combine then
                         -- if already stopped, we want the unloader to come to us

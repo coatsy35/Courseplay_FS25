@@ -349,6 +349,11 @@ function CpVehicleSettings:areCombineSettingsVisible()
     return implement and not ImplementUtil.isChopper(implement)
 end
 
+--- Are shared combine/forage harvester unloader coordination settings needed.
+function CpVehicleSettings:areHarvesterSettingsVisible()
+    return AIUtil.getImplementOrVehicleWithSpecialization(self, Combine) ~= nil
+end
+
 --- Are the sowing machine settings needed.
 function CpVehicleSettings:areSowingMachineSettingsVisible()
     

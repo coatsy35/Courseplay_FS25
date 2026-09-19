@@ -162,6 +162,7 @@
     <text name="CP_vehicle_setting_subTitle_basic" text="Ustawienia podstawowe"/>
     <text name="CP_vehicle_setting_subTitle_implement" text="Ustawienia narzędzi"/>
     <text name="CP_vehicle_setting_subTitle_combine" text="Ustawienia kombajnu"/>
+    <text name="CP_vehicle_setting_subTitle_unloaderCoordination" text="Unloader coordination"/>
     <text name="CP_vehicle_setting_subTitle_seeder" text="Ustawienia siewników"/>
     <text name="CP_vehicle_setting_subTitle_multitool" text="Ustawienia wielu narzędzi"/>
     <text name="CP_vehicle_setting_subTitle_speed" text="Prędkości"/>
@@ -291,6 +292,10 @@
     <text name="CP_vehicle_setting_pipeOffsetZ_tooltip" text="Przesunięcie rury w przód-tył"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_title" text="Wezwij kierowcę gdy"/>
     <text name="CP_vehicle_setting_callUnloaderPercent_tooltip" text="Wezwanie kierowcy, gdy poziom napełnienia kombajnu przekroczy tę wartość."/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_title" text="Nearby standby unloader"/>
+    <text name="CP_vehicle_setting_nearbyStandbyUnloaders_tooltip" text="Keeps one additional unloader nearby. Forage harvesters reserve it for relief; combines release it for a more urgent call."/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_title" text="Standby distance"/>
+    <text name="CP_vehicle_setting_standbyUnloaderDistance_tooltip" text="Target distance for the standby unloader behind the harvester on already worked ground."/>
     <text name="CP_vehicle_setting_strawSwath_onlyCenter" text="Wyłącz na uwrociach"/>
     <!---->
     <!--Course generator settings-->
