@@ -4,6 +4,7 @@
 CpAIJobBaleFinder = CpObject(CpAIJob)
 CpAIJobBaleFinder.name = "BALE_FINDER_CP"
 CpAIJobBaleFinder.jobName = "CP_job_baleCollect"
+CpAIJobBaleFinder.maxNearbyFieldDistance = 20
 function CpAIJobBaleFinder:init(isServer)
 	CpAIJob.init(self, isServer)
 	self.selectedFieldPlot = FieldPlot(true)
@@ -41,6 +42,16 @@ function CpAIJobBaleFinder:applyCurrentState(vehicle, mission, farmId, isDirectS
 	-- boundary from the previous job.
 	if resetToVehiclePosition or x == nil or z == nil then
 		x, _, z = getWorldTranslation(vehicle.rootNode)
+		local fieldX, fieldZ, distance = CpFieldUtil.findNearbyFieldPosition(
+				x, z, self.maxNearbyFieldDistance)
+		if fieldX then
+			x, z = fieldX, fieldZ
+			if distance > 0 then
+				self:debug('Using nearby field position %.1f/%.1f, %.1f m from vehicle', x, z, distance)
+			end
+		else
+			self:debug('No field found within %.1f m of vehicle', self.maxNearbyFieldDistance)
+		end
 		self.cpJobParameters.fieldPosition:setPosition(x, z)
 	end
 end
