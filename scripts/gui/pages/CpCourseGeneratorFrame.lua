@@ -386,30 +386,10 @@ function CpCourseGeneratorFrame:loadFieldworkProfile(confirmed)
     if not ok then CpImplementProfileGui.showError(reason) end
 end
 
---- Headland driving behaviour shares the fieldwork UI without changing its legacy
--- savegame/profile key or creating a second independently synchronised setting.
-function CpCourseGeneratorFrame.getFieldworkSettings(vehicle)
-    local settings, sections = {}, {}
-    for key, value in pairs(vehicle:getCourseGeneratorSettings()) do settings[key] = value end
-    settings.loopTurnsOnHeadland = vehicle:getCpSettings().loopTurnsOnHeadland
-    for _, section in ipairs(CpCourseGeneratorSettings.getSettingSetup()) do
-        local copy = {}
-        for key, value in pairs(section) do copy[key] = value end
-        copy.elements = {}
-        for _, setting in ipairs(section.elements) do
-            table.insert(copy.elements, setting)
-            if setting:getName() == 'headlandsWithRoundCorners' then
-                table.insert(copy.elements, settings.loopTurnsOnHeadland)
-            end
-        end
-        table.insert(sections, copy)
-    end
-    return settings, sections
-end
-
 function CpCourseGeneratorFrame:updateSettings(vehicle)
     self.bindingProfileSettings = true
-	local settings, settingsBySubTitle = CpCourseGeneratorFrame.getFieldworkSettings(vehicle)
+	local settings = vehicle:getCourseGeneratorSettings()
+	local settingsBySubTitle = CpCourseGeneratorSettings.getSettingSetup()
 
 	local layout = self.subCategoryPages[self.CATEGRORIES.BASIC_SETTINGS]:getDescendantByName("layout")
 	for i = #layout.elements, 1, -1 do

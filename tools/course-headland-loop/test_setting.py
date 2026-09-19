@@ -13,13 +13,19 @@ class CourseHeadlandSettingTests(unittest.TestCase):
     def setUp(self):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
         self.lua.globals().ROOT = ROOT.as_posix()
-        setting = ET.parse(ROOT / 'config/VehicleSettingsSetup.xml').find(".//Setting[@name='loopTurnsOnHeadland']")
-        self.lua.globals().SETTING_CALLBACK = setting.attrib['onChangeCallback']
-        self.assertEqual(setting.attrib['tooltip'], 'CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip')
+        vehicle_setup = ET.parse(ROOT / 'config/VehicleSettingsSetup.xml')
+        generator_setup = ET.parse(ROOT / 'config/CourseGeneratorSettingsSetup.xml')
+        self.assertIsNone(vehicle_setup.find(".//Setting[@name='loopTurnsOnHeadland']"))
+        setting = generator_setup.find(".//Setting[@name='loopTurnsOnHeadland']")
+        rounded = generator_setup.find(".//Setting[@name='headlandsWithRoundCorners']")
+        self.assertEqual(setting.attrib['onChangeCallback'], 'onCpLoopTurnsOnHeadlandChanged')
         self.assertEqual(setting.attrib['isDisabled'], 'isLoopTurnsOnHeadlandDisabled')
-        rounded = ET.parse(ROOT / 'config/CourseGeneratorSettingsSetup.xml').find(
-            ".//Setting[@name='headlandsWithRoundCorners']")
+        self.assertEqual(setting.attrib['tooltip'], 'CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip')
         self.assertEqual(rounded.attrib['onChangeCallback'], 'onCpHeadlandsWithRoundCornersChanged')
+        headland_names = [e.attrib['name'] for e in generator_setup.findall(
+            ".//SettingSubTitle[@title='headland']/Setting")]
+        self.assertEqual(headland_names.index('loopTurnsOnHeadland'),
+                         headland_names.index('headlandsWithRoundCorners') + 1)
         master = ET.parse(ROOT / 'config/MasterTranslations.xml')
         note = master.find(".//Translation[@name='CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip']/Text[@language='en']")
         self.assertEqual(note.text, 'For large trailed combinations, instead of performing a normal corner turn on a headland, '
@@ -56,20 +62,31 @@ class CourseHeadlandSettingTests(unittest.TestCase):
             AIParameterSetting.debug = function() end
             SpecializationUtil = {raiseEvent=function(v, event, setting)
                 if event == 'onCpLoopTurnsOnHeadlandChanged' then
-                    CpVehicleSettings.onCpLoopTurnsOnHeadlandChanged(v, setting)
+                    CpCourseGeneratorSettings.onCpLoopTurnsOnHeadlandChanged(v, setting)
+                elseif event == 'onCpHeadlandsWithRoundCornersChanged' then
+                    CpCourseGeneratorSettings.onCpHeadlandsWithRoundCornersChanged(v, setting)
                 end
             end}
-            function vehicle(value)
-                local v = {}
+            function scalar(value)
+                return {value=value, values={0,1,2,3,4,5,6,8,10,12,20,25}, texts={},
+                    getValue=function(self) return self.value end,
+                    setValue=function(self,v) self.value=v; return false end,
+                    setFloatValue=function(self,v) self.value=v; return false end,
+                    getIsDisabled=function() return false end}
+            end
+            function vehicle(loop, rounded)
+                local v = {settings={}}
                 v['spec_' .. CpCourseManager.SPEC_NAME] = {courses={}}
+                v.generator = {headlandsWithRoundCorners=scalar(rounded == nil and 1 or rounded)}
+                v['spec_' .. CpCourseGeneratorSettings.SPEC_NAME] = v.generator
                 v.getCpSettings = function(self) return self.settings end
-                v.getCourseGeneratorSettings = function(self) return self.generator or {} end
+                v.getCourseGeneratorSettings = function(self) return self.generator end
                 v.getFieldWorkCourse = CpCourseManager.getFieldWorkCourse
-                v.settings = {}
-                v.settings.loopTurnsOnHeadland = AIParameterBooleanSetting({
-                    name='loopTurnsOnHeadland', values={}, texts={}, defaultBool=value,
-                    callbacks={onChangeCallbackStr=SETTING_CALLBACK}
-                }, v, CpVehicleSettings)
+                v.generator.loopTurnsOnHeadland = AIParameterBooleanSetting({
+                    name='loopTurnsOnHeadland', values={}, texts={}, defaultBool=loop,
+                    isDisabledFunc='isLoopTurnsOnHeadlandDisabled',
+                    callbacks={onChangeCallbackStr='onCpLoopTurnsOnHeadlandChanged'}
+                }, v, CpCourseGeneratorSettings)
                 return v
             end
             function assign(v, course)
@@ -89,7 +106,7 @@ class CourseHeadlandSettingTests(unittest.TestCase):
             streamReadString=read; streamReadFloat32=read; streamReadInt32=read; streamReadBool=read
         ''')
 
-    def test_course_xml_and_copy_preserve_true_false_and_legacy_absence(self):
+    def test_course_xml_copy_and_stream_preserve_optional_choice(self):
         for value in ('true', 'false', 'nil'):
             with self.subTest(value=value):
                 self.lua.execute(f'''
@@ -99,128 +116,113 @@ class CourseHeadlandSettingTests(unittest.TestCase):
                     local loaded = Course.createFromXml(nil, saved, 'course')
                     assert(loaded.loopTurnsOnHeadland == {value})
                     assert(loaded:copy().loopTurnsOnHeadland == {value})
-                ''')
-
-    def test_stream_round_trip_preserves_optional_boolean_and_alignment(self):
-        for value in ('true', 'false', 'nil'):
-            with self.subTest(value=value):
-                self.lua.execute(f'''
-                    local c = Course(nil, {{}}); c.loopTurnsOnHeadland = {value}
-                    local s = stream(); c:writeStream(nil, s)
-                    streamWriteInt32(s, 12345)
-                    local loaded = Course.createFromStream(nil, s)
-                    assert(loaded.loopTurnsOnHeadland == {value})
+                    local s = stream(); c:writeStream(nil, s); streamWriteInt32(s, 12345)
+                    local streamed = Course.createFromStream(nil, s)
+                    assert(streamed.loopTurnsOnHeadland == {value})
                     assert(streamReadInt32(s) == 12345)
                 ''')
 
-    def test_loading_opposite_courses_restores_choice_on_another_tractor(self):
+    def test_course_is_runtime_owner_and_loading_restores_working_control(self):
         self.lua.execute('''
             local v = vehicle(true)
             local normal, loop = Course(nil, {}), Course(nil, {})
             normal.loopTurnsOnHeadland=false; loop.loopTurnsOnHeadland=true
             assign(v, normal)
-            assert(not v:getCpSettings().loopTurnsOnHeadland:getValue())
+            assert(not v.generator.loopTurnsOnHeadland:getValue())
+            assert(not normal:getLoopTurnsOnHeadland())
             assign(v, loop)
-            assert(v:getCpSettings().loopTurnsOnHeadland:getValue())
-            local other = vehicle(false)
-            assign(other, loop:copy())
-            assert(other:getCpSettings().loopTurnsOnHeadland:getValue())
-            assign(v, normal)
-            assert(not v:getCpSettings().loopTurnsOnHeadland:getValue())
-            assert(loop.loopTurnsOnHeadland)
+            assert(v.generator.loopTurnsOnHeadland:getValue())
+            assert(loop:getLoopTurnsOnHeadland())
+            local turn = {fieldWorkCourse=loop}
+            assert(CourseTurn.getUseLoopTurnsOnHeadland(turn))
+            v.generator.loopTurnsOnHeadland:setValue(false, true)
+            assert(not loop:getLoopTurnsOnHeadland())
         ''')
 
-    def test_legacy_course_adopts_profile_default_and_manual_edit_preserves_library(self):
+    def test_legacy_course_adopts_profile_default_without_changing_library(self):
         self.lua.execute('''
             local v = vehicle(false)
-            local profile = {settings={['vehicle.loopTurnsOnHeadland']=true}}
-            ImplementProfile.setSettings(v, profile.settings)
+            local values = {['vehicle.loopTurnsOnHeadland']=true}
+            ImplementProfile.migrateSettings(values)
+            assert(values['vehicle.loopTurnsOnHeadland'] == nil)
+            assert(values['generator.loopTurnsOnHeadland'])
+            ImplementProfile.setSettings(v, values)
             local c = Course(nil, {}); assign(v, c)
-            assert(c.loopTurnsOnHeadland)
-            local points = c.waypoints
-            v:getCpSettings().loopTurnsOnHeadland:setValue(false, true)
-            assert(c.loopTurnsOnHeadland == false and c.waypoints == points)
-            assert(profile.settings['vehicle.loopTurnsOnHeadland'])
-            assert(ImplementProfile.capture(v)['vehicle.loopTurnsOnHeadland'] == false)
-            local saved = xml(); c:saveToXml(saved, 'course')
-            local other = vehicle(true)
-            assign(other, Course.createFromXml(other, saved, 'course'))
-            assert(not other:getCpSettings().loopTurnsOnHeadland:getValue())
+            assert(c:getLoopTurnsOnHeadland())
+            v.generator.loopTurnsOnHeadland:setValue(false, true)
+            assert(not c:getLoopTurnsOnHeadland())
+            assert(values['generator.loopTurnsOnHeadland'])
+            assert(ImplementProfile.capture(v)['generator.loopTurnsOnHeadland'] == false)
         ''')
 
-    def test_additional_course_does_not_overwrite_the_active_course(self):
+    def test_additional_course_does_not_replace_active_choice(self):
         self.lua.execute('''
             local v = vehicle(false)
             local first, second = Course(nil, {}), Course(nil, {})
             first.loopTurnsOnHeadland=true; second.loopTurnsOnHeadland=false
-            assign(v, first)
-            CpCourseManager.addCourse(v, second, true)
-            assert(v.settings.loopTurnsOnHeadland:getValue())
-            assert(first.loopTurnsOnHeadland and not second.loopTurnsOnHeadland)
+            assign(v, first); CpCourseManager.addCourse(v, second, true)
+            assert(v.generator.loopTurnsOnHeadland:getValue())
+            assert(first:getLoopTurnsOnHeadland() and not second:getLoopTurnsOnHeadland())
         ''')
 
-    def test_network_setting_read_updates_loaded_course_without_rebroadcast(self):
+    def test_network_setting_updates_loaded_course(self):
         self.lua.execute('''
             local sender, receiver = vehicle(false), vehicle(true)
             local c = Course(nil, {}); assign(receiver, c)
             local s = stream()
-            sender.settings.loopTurnsOnHeadland:writeStream(s, {getIsServer=function() return false end})
-            receiver.settings.loopTurnsOnHeadland:readStream(s, {getIsServer=function() return true end})
-            assert(c.loopTurnsOnHeadland == false)
+            sender.generator.loopTurnsOnHeadland:writeStream(s, {getIsServer=function() return false end})
+            receiver.generator.loopTurnsOnHeadland:readStream(s, {getIsServer=function() return true end})
+            assert(not c:getLoopTurnsOnHeadland())
         ''')
 
-    def test_course_setting_appears_only_in_headland_ui_without_mutating_shared_layout(self):
+    def test_loaded_course_keeps_headland_controls_visible(self):
         self.lua.execute('''
             local v = vehicle(false)
-            local function named(name) return {getName=function() return name end} end
-            local round = named('headlandsWithRoundCorners')
-            local originalVehicle = {{title='basic', elements={named('fuelSave'), v.settings.loopTurnsOnHeadland}}}
-            local originalGenerator = {{title='headland', elements={round}, isVisibleFunc='hasHeadlandsSelected'}}
-            CpVehicleSettings.settingsBySubTitle = originalVehicle
-            CpCourseGeneratorSettings.settingsBySubTitle = originalGenerator
-            for i=1,2 do
-                local sections = CpVehicleSettings.getSettingSetup()
-                assert(#sections[1].elements == 1)
-                assert(sections[1].elements[1]:getName() == 'fuelSave')
-                local settings, layout = CpCourseGeneratorFrame.getFieldworkSettings(v)
-                assert(layout[1].elements[2] == v.settings.loopTurnsOnHeadland)
-                assert(settings.loopTurnsOnHeadland == v.settings.loopTurnsOnHeadland)
-                assert(layout[1].isVisibleFunc == 'hasHeadlandsSelected')
-            end
-            assert(#originalVehicle[1].elements == 2 and #originalGenerator[1].elements == 1)
-        ''')
-
-    def test_loaded_course_keeps_headland_controls_visible_with_zero_generation_headlands(self):
-        self.lua.execute('''
-            local v = vehicle(false)
-            local selected = 0
-            v['spec_' .. CpCourseGeneratorSettings.SPEC_NAME] = {
-                numberOfHeadlands={getValue=function() return selected end}}
+            v.generator.numberOfHeadlands={getValue=function() return 0 end}
             assert(not CpCourseGeneratorSettings.isHeadlandSectionVisible(v))
             local c = Course(nil, {}); c.numberOfHeadlands=2; assign(v, c)
             assert(CpCourseGeneratorSettings.isHeadlandSectionVisible(v))
-            assert(not CpCourseGeneratorSettings.hasHeadlandsSelected(v))
             c.numberOfHeadlands=0
             assert(not CpCourseGeneratorSettings.isHeadlandSectionVisible(v))
-            selected=1
-            assert(CpCourseGeneratorSettings.isHeadlandSectionVisible(v))
         ''')
 
-    def test_loop_option_requires_a_rounded_headland_and_turns_off_at_zero(self):
+    def test_loop_requires_rounded_headland_and_saved_true_restores_prerequisite(self):
         self.lua.execute('''
-            local v = vehicle(true)
-            local rounded = 1
-            local roundedSetting = {getValue=function() return rounded end}
-            v.generator = {headlandsWithRoundCorners=roundedSetting}
+            local v = vehicle(false, 0)
+            assert(CpCourseGeneratorSettings.isLoopTurnsOnHeadlandDisabled(v))
             local c = Course(nil, {}); c.loopTurnsOnHeadland=true; assign(v, c)
-            assert(not CpVehicleSettings.isLoopTurnsOnHeadlandDisabled(v))
-            rounded=0
-            assert(CpVehicleSettings.isLoopTurnsOnHeadlandDisabled(v))
-            CpCourseGeneratorSettings.onCpHeadlandsWithRoundCornersChanged(v, roundedSetting)
-            assert(not v.settings.loopTurnsOnHeadland:getValue())
-            assert(c.loopTurnsOnHeadland == false)
-            ImplementProfile.setSettings(v, {['vehicle.loopTurnsOnHeadland']=true})
-            assert(not v.settings.loopTurnsOnHeadland:getValue())
+            assert(v.generator.headlandsWithRoundCorners:getValue() == 1)
+            assert(v.generator.loopTurnsOnHeadland:getValue() and c:getLoopTurnsOnHeadland())
+            v.generator.headlandsWithRoundCorners.value=0
+            CpCourseGeneratorSettings.onCpHeadlandsWithRoundCornersChanged(
+                v, v.generator.headlandsWithRoundCorners)
+            assert(not v.generator.loopTurnsOnHeadland:getValue())
+            assert(not c:getLoopTurnsOnHeadland())
+            ImplementProfile.setSettings(v, {
+                ['generator.headlandsWithRoundCorners']=0,
+                ['generator.loopTurnsOnHeadland']=true})
+            assert(not v.generator.loopTurnsOnHeadland:getValue())
+        ''')
+
+    def test_legacy_vehicle_save_value_migrates_once(self):
+        self.lua.execute('''
+            local v = vehicle(false)
+            local base = 'vehicles.vehicle(0)' .. CpVehicleSettings.KEY .. CpVehicleSettings.SETTINGS_KEY
+            local legacy = {entries={[base]={'legacy'}}, values={
+                ['legacy#name']='loopTurnsOnHeadland', ['legacy#currentValue']='true'}}
+            legacy.iterate=function(self,key,callback)
+                for _,entry in ipairs(self.entries[key] or {}) do callback(0,entry) end
+            end
+            legacy.getValue=function(self,key) return self.values[key] end
+            legacy.getString=legacy.getValue
+            CpCourseGeneratorSettings.loadLegacyLoopTurnsSetting(v,
+                {key='vehicles.vehicle(0)', xmlFile=legacy})
+            assert(v.generator.loopTurnsOnHeadland:getValue())
+            v.generator.loopTurnsOnHeadland.loadedValue=false
+            legacy.values['legacy#currentValue']='false'
+            CpCourseGeneratorSettings.loadLegacyLoopTurnsSetting(v,
+                {key='vehicles.vehicle(0)', xmlFile=legacy})
+            assert(v.generator.loopTurnsOnHeadland:getValue())
         ''')
 
 

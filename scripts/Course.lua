@@ -146,6 +146,12 @@ function Course:getNumberOfHeadlands()
     return self.numberOfHeadlands
 end
 
+--- Loop-turn behaviour belongs to the generated/saved course. Older courses
+-- receive their working default when CpCourseManager makes them active.
+function Course:getLoopTurnsOnHeadland()
+    return self.loopTurnsOnHeadland == true
+end
+
 --- get number of waypoints in course
 function Course:getNumberOfWaypoints()
     return #self.waypoints

@@ -86,6 +86,7 @@ local function vehicle(name, attachments)
     result.vehicleSettings, result.generatorSettings = {}, {}
     for _, key in ipairs(ImplementProfile.SETTINGS.vehicle) do result.vehicleSettings[key] = setting(false) end
     for _, key in ipairs(ImplementProfile.SETTINGS.generator) do result.generatorSettings[key] = setting(1) end
+    result.generatorSettings.loopTurnsOnHeadland.value = false
     result.generatorSettings.workWidth.value = 6
     result.vehicleSettings.turnSpeed.value = 8
     result.vehicleSettings.toolOffsetX.value = 0

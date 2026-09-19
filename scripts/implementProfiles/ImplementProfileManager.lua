@@ -43,7 +43,7 @@ function ImplementProfileManager.readValues(xml, key)
         if not name or value == nil or result[name] ~= nil then valid = false
         else result[name] = value end
     end)
-    return valid and count <= ImplementProfile.MAX_SETTINGS and result or nil
+    return valid and count <= ImplementProfile.MAX_SETTINGS and ImplementProfile.migrateSettings(result) or nil
 end
 
 function ImplementProfileManager.writeProfile(xml, key, profile)

@@ -224,13 +224,10 @@ function CpCourseManager:addCourse(course,noEventSend)
     local spec = CpCourseManager.getSpec(self) 
     course:setVehicle(self)
     table.insert(spec.courses,course)
-    -- Missing metadata denotes an older/new course: use the current fieldwork setup.
-    -- An explicit false must override a previous course/profile's true value.
-    local setting = self:getCpSettings().loopTurnsOnHeadland
-    if course.loopTurnsOnHeadland == nil then
-        course.loopTurnsOnHeadland = setting:getValue()
-    elseif #spec.courses == 1 then
-        setting:setValue(course.loopTurnsOnHeadland, true)
+    -- Only the first course is active. Additional combined courses must not
+    -- replace its course-owned headland-turn preference.
+    if #spec.courses == 1 then
+        CpCourseGeneratorSettings.applyCourseHeadlandTurn(self, course)
     end
     SpecializationUtil.raiseEvent(self,"onCpCourseChange",course,noEventSend)
 end

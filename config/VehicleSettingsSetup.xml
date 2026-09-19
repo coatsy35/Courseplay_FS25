@@ -38,8 +38,6 @@
 		<!--Pathfinder Reverse-->
 		<Setting classType="AIParameterBooleanSetting" name="allowReversePathfinding" defaultBool="true" isExpertModeOnly="true" isVisible="areCourseSettingsVisible"/>
 		<Setting classType="AIParameterBooleanSetting" name="allowPathfinderTurns" defaultBool="false" isExpertModeOnly="true" isVisible="areCourseSettingsVisible"/>
-		<!-- Retain the storage/profile key; the control is displayed in Fieldwork Settings. -->
-		<Setting classType="AIParameterBooleanSetting" name="loopTurnsOnHeadland" defaultBool="false" onChangeCallback="onCpLoopTurnsOnHeadlandChanged" isDisabled="isLoopTurnsOnHeadlandDisabled" tooltip="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip"/>
 	</SettingSubTitle>
 
 	<SettingSubTitle title="implement">

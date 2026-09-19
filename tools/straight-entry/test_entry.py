@@ -1165,7 +1165,7 @@ class EntryTests(unittest.TestCase):
                 c.isLeftTurn=function() return side<0 end
                 local t=setmetatable({vehicle=v,turnContext=c,workWidth=25.6,steeringLength=9.8,
                     turningRadius=10,debug=function() end,
-                    settings={loopTurnsOnHeadland={getValue=function() return true end}}},CourseTurn)
+                    getUseLoopTurnsOnHeadland=function() return true end},CourseTurn)
                 -- Quadtrac/Seed Hawk scalar dimensions, synthetic field edge.
                 local top=42
                 v.cpGetFieldPolygon=function() return {{x=-100,z=-100},{x=100,z=-100},

@@ -27,6 +27,7 @@
 	<SettingSubTitle title="headland" isVisible="isHeadlandSectionVisible">
 		<Setting classType="AIParameterBooleanSetting" name="sharpenCorners" defaultBool="true"/>
 		<Setting classType="AIParameterSettingList" name="headlandsWithRoundCorners" min="0" max="50" default="1" onChangeCallback="onCpHeadlandsWithRoundCornersChanged"/>
+		<Setting classType="AIParameterBooleanSetting" name="loopTurnsOnHeadland" defaultBool="false" onChangeCallback="onCpLoopTurnsOnHeadlandChanged" isDisabled="isLoopTurnsOnHeadlandDisabled" title="CP_vehicle_setting_loopTurnsOnHeadland_title" tooltip="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip"/>
 		<Setting classType="AIParameterSettingList" name="turningRadius" min="5" max="12" setDefault="setDefaultTurningRadius"/>
 		<Setting classType="AIParameterBooleanSetting" name="headlandClockwise" defaultBool="true">
 			<Texts>
