@@ -60,8 +60,8 @@ end
 ---@param mission Mission
 ---@param farmId number
 ---@param isDirectStart boolean disables the drive to by giants
----@param isStartPositionInvalid boolean resets the drive to target position by giants and the field position to the vehicle position.
-function CpAIJobCombineUnloader:applyCurrentState(vehicle, mission, farmId, isDirectStart, isStartPositionInvalid)
+---@param resetToVehiclePosition boolean resets the field position to the vehicle position.
+function CpAIJobCombineUnloader:applyCurrentState(vehicle, mission, farmId, isDirectStart, resetToVehiclePosition)
 	CpAIJob.applyCurrentState(self, vehicle, mission, farmId, isDirectStart)
 	
 	self.cpJobParameters:validateSettings()
@@ -69,8 +69,9 @@ function CpAIJobCombineUnloader:applyCurrentState(vehicle, mission, farmId, isDi
 	self:copyFrom(vehicle:getCpCombineUnloaderJob())
 
 	local x, z = self.cpJobParameters.fieldPosition:getPosition()
-	-- no field position from the previous job, use the vehicle's current position
-	if x == nil or z == nil then
+	-- A direct reset must use the field at the vehicle instead of retaining the
+	-- boundary from the previous job.
+	if resetToVehiclePosition or x == nil or z == nil then
 		x, _, z = getWorldTranslation(vehicle.rootNode)
 		self.cpJobParameters.fieldPosition:setPosition(x, z)
 	end
