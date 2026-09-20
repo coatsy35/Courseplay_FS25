@@ -97,6 +97,29 @@ setmetatable(turningController, { __index = FieldWorkerProximityController })
 assert(turningController:hasPhysicalTurnPriority(workingVehicle, working),
         'A turning lead combine must ignore the follower trail that would otherwise create mutual yielding')
 
+local rearApproachingController = {
+    vehicle = approachingTurnVehicle,
+    workingWidth = 14,
+    minimumTurnClearance = FieldWorkerProximityController.minimumTurnClearance,
+}
+setmetatable(rearApproachingController, { __index = FieldWorkerProximityController })
+assert(rearApproachingController:mustYieldPhysicalTurnClearance(workingVehicle, working, true, false),
+        'A rear combine approaching a turn must keep yielding to the established lead combine')
+assert(not rearApproachingController:hasPhysicalTurnPriority(workingVehicle, working, true, false),
+        'Approaching a turn must not reverse the established convoy order')
+assert(not workingController:mustYieldPhysicalTurnClearance(approachingTurnVehicle, approachingTurn, false, true),
+        'The established lead combine must retain priority until it has cleared the corner')
+assert(workingController:hasPhysicalTurnPriority(approachingTurnVehicle, approachingTurn, false, true),
+        'The lead combine must not stop for a follower that is approaching the same corner')
+
+local otherAhead, selfAhead = rearApproachingController:resolveTurnConvoyOrder(
+        workingVehicle, working, true, false)
+assert(otherAhead and not selfAhead, 'A measurable lead vehicle must establish the convoy order')
+otherAhead, selfAhead = rearApproachingController:resolveTurnConvoyOrder(
+        workingVehicle, working, false, false)
+assert(otherAhead and not selfAhead,
+        'The established convoy order must survive ambiguous trail geometry throughout the turn')
+
 wideLeading.getExpectedRearwardManeuverDistance = function() return 25 end
 assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wideLeading) >= 81,
         'A following combine must reserve the lead combine pocket reversing distance')

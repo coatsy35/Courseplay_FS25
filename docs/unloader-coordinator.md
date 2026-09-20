@@ -59,8 +59,10 @@ that clearance position and deregisters, subject to the existing five-second min
 Following-combine turn clearance scales at twice the wider header plus half of both vehicle lengths and a ten-metre
 margin, with a 50-metre minimum and a further 30-metre slowdown band. This gives approximately 50 metres stopped
 clearance for 15-metre headers and 56 metres for 18-metre headers.
-A lead combine starting a turn or manoeuvre retains priority over a following combine and ignores the follower's stale
-trail position. The follower continues to respect the full physical turn clearance, preventing mutual-yield deadlocks.
+A lead combine retains its established convoy priority throughout a corner. A following combine approaching the same
+turn cannot reverse that order merely because it enters its own turn state; it stops outside the full physical turn
+clearance until the lead has cleared the corner. The lead ignores the follower's stale trail position, preventing
+mutual-yield deadlocks.
 
 ## Settings
 

@@ -20,6 +20,9 @@ function FieldWorkerProximityController:init(vehicle, workingWidth)
     self.fieldWorkCourse = self.vehicle:getFieldWorkCourse()
     ---@type Waypoint[]
     self.trail = {}
+    -- Preserve the last unambiguous convoy order while either machine is turning. Trail matching is temporarily
+    -- unreliable as their headings diverge around a corner.
+    self.otherVehicleAheadOnTrail = {}
     -- we use a moving average for slowing down to avoid that sudden, temporary lows in distance immediately
     -- stop a the vehicle. Such a temporary low can happen for instance when a vehicle is turning and during
     -- the turn it has momentarily the same direction as a waypoint in the following vehicle's trail, and
@@ -141,16 +144,47 @@ end
 
 ---@param otherVehicle table
 ---@param otherStrategy table
+---@param otherIsAheadOnTrail boolean
+---@param selfIsAheadOnTrail boolean
+---@return boolean, boolean
+function FieldWorkerProximityController:resolveTurnConvoyOrder(otherVehicle, otherStrategy,
+                                                               otherIsAheadOnTrail, selfIsAheadOnTrail)
+    self.otherVehicleAheadOnTrail = self.otherVehicleAheadOnTrail or {}
+    local myStrategy = self.vehicle:getCpDriveStrategy()
+    local turnClearanceActive = isDrivingToWorkStart(myStrategy) or isDrivingToWorkStart(otherStrategy) or
+            isTurningOrManeuvering(myStrategy) or isTurningOrManeuvering(otherStrategy)
+    if otherIsAheadOnTrail ~= selfIsAheadOnTrail then
+        self.otherVehicleAheadOnTrail[otherVehicle] = otherIsAheadOnTrail
+    elseif turnClearanceActive and self.otherVehicleAheadOnTrail[otherVehicle] ~= nil then
+        otherIsAheadOnTrail = self.otherVehicleAheadOnTrail[otherVehicle]
+        selfIsAheadOnTrail = not otherIsAheadOnTrail
+    elseif not turnClearanceActive then
+        self.otherVehicleAheadOnTrail[otherVehicle] = nil
+    end
+    return otherIsAheadOnTrail, selfIsAheadOnTrail
+end
+
+---@param otherVehicle table
+---@param otherStrategy table
+---@param otherIsAheadOnTrail boolean|nil
+---@param selfIsAheadOnTrail boolean|nil
 ---@return boolean
-function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy)
+function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy,
+                                                                        otherIsAheadOnTrail, selfIsAheadOnTrail)
     local myStrategy = self.vehicle:getCpDriveStrategy()
     local myStarting = isDrivingToWorkStart(myStrategy)
     local otherStarting = isDrivingToWorkStart(otherStrategy)
+    local myManeuvering = isTurningOrManeuvering(myStrategy)
+    local otherManeuvering = isTurningOrManeuvering(otherStrategy)
+    -- Course progress establishes the convoy order before a corner. Approaching a turn must not let the rear
+    -- vehicle claim priority from the machine whose trail it is following.
+    if otherIsAheadOnTrail ~= selfIsAheadOnTrail and
+            (myStarting or otherStarting or myManeuvering or otherManeuvering) then
+        return otherIsAheadOnTrail == true
+    end
     if myStarting ~= otherStarting then
         return myStarting
     end
-    local myManeuvering = isTurningOrManeuvering(myStrategy)
-    local otherManeuvering = isTurningOrManeuvering(otherStrategy)
     if myManeuvering ~= otherManeuvering then
         return not myManeuvering
     end
@@ -159,16 +193,23 @@ end
 
 ---@param otherVehicle table
 ---@param otherStrategy table
+---@param otherIsAheadOnTrail boolean|nil
+---@param selfIsAheadOnTrail boolean|nil
 ---@return boolean
-function FieldWorkerProximityController:hasPhysicalTurnPriority(otherVehicle, otherStrategy)
+function FieldWorkerProximityController:hasPhysicalTurnPriority(otherVehicle, otherStrategy,
+                                                                 otherIsAheadOnTrail, selfIsAheadOnTrail)
     local myStrategy = self.vehicle:getCpDriveStrategy()
     local myStarting = isDrivingToWorkStart(myStrategy)
     local otherStarting = isDrivingToWorkStart(otherStrategy)
+    local myManeuvering = isTurningOrManeuvering(myStrategy)
+    local otherManeuvering = isTurningOrManeuvering(otherStrategy)
+    if otherIsAheadOnTrail ~= selfIsAheadOnTrail and
+            (myStarting or otherStarting or myManeuvering or otherManeuvering) then
+        return selfIsAheadOnTrail == true
+    end
     if myStarting ~= otherStarting then
         return otherStarting
     end
-    local myManeuvering = isTurningOrManeuvering(myStrategy)
-    local otherManeuvering = isTurningOrManeuvering(otherStrategy)
     if myManeuvering ~= otherManeuvering then
         return myManeuvering
     end
@@ -206,9 +247,15 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 local otherConvoyDistance = otherVehicle:getCpSettings().convoyDistance:getValue()
                 maxConvoyDistance = math.max(maxConvoyDistance, otherConvoyDistance)
                 local distanceFromOther = otherStrategy:getFieldWorkProximity(self.vehicle:getAIDirectionNode())
+                local distanceFromMe = self:getFieldWorkProximity(otherVehicle:getAIDirectionNode())
+                local otherIsAheadOnTrail = distanceFromOther > 0 and distanceFromOther < math.huge
+                local selfIsAheadOnTrail = distanceFromMe > 0 and distanceFromMe < math.huge
+                otherIsAheadOnTrail, selfIsAheadOnTrail = self:resolveTurnConvoyOrder(otherVehicle, otherStrategy,
+                        otherIsAheadOnTrail, selfIsAheadOnTrail)
                 self:debugSparse('have same course as %s (done %s, convoy distance %.1f), distance %.1f',
                         CpUtil.getName(otherVehicle), otherIsDone, otherConvoyDistance, distanceFromOther)
-                local hasTurnPriority = self:hasPhysicalTurnPriority(otherVehicle, otherStrategy)
+                local hasTurnPriority = self:hasPhysicalTurnPriority(otherVehicle, otherStrategy,
+                        otherIsAheadOnTrail, selfIsAheadOnTrail)
                 if distanceFromOther > 0 and distanceFromOther < distanceLimit and not hasTurnPriority then
                     self:debugSparse('too close (%.1f m < %.1f) to %s in front of me, slowing down.',
                     distanceFromOther, distanceLimit, CpUtil.getName(otherVehicle))
@@ -220,7 +267,8 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 -- Trail distance becomes misleading while another machine turns or drives back to its work-start
                 -- waypoint. The yielding machine therefore also observes the real separation and stops outside an
                 -- envelope based on both vehicle lengths and the wider header.
-                if self:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy) then
+                if self:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy,
+                        otherIsAheadOnTrail, selfIsAheadOnTrail) then
                     local x, _, z = getWorldTranslation(self.vehicle.rootNode)
                     local ox, _, oz = getWorldTranslation(otherVehicle.rootNode)
                     local physicalDistance = MathUtil.vector2Length(ox - x, oz - z)
