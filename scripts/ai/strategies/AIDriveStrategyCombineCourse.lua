@@ -1617,6 +1617,12 @@ function AIDriveStrategyCombineCourse:isWaitingInPocket()
             self.unloadState == self.states.WAITING_FOR_UNLOAD_IN_POCKET
 end
 
+--- The combine has finished reversing and is harvesting forward into the unloading pocket.
+---@return boolean
+function AIDriveStrategyCombineCourse:isMakingPocket()
+    return self.state == self.states.UNLOADING_ON_FIELD and self.unloadState == self.states.MAKING_POCKET
+end
+
 --- Interface for Mode 2
 ---@return boolean true when the combine is waiting to after it pulled back.
 function AIDriveStrategyCombineCourse:isWaitingForUnloadAfterPulledBack()

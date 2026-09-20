@@ -1561,22 +1561,30 @@ function AIDriveStrategyUnloadCombine:followCombineToPocket()
     local combineStrategy = self.combineToUnload:getCpDriveStrategy()
     self:setFieldSpeed()
 
-    -- A pocket is a manoeuvre, not a moving-unload opportunity. Copying the combine course while it is reversing
-    -- to make the pocket also copies those temporary reverse waypoints and sends the trailer backwards into the
-    -- following traffic. Hold behind until the pocket is complete; the stopped-combine approach is then rebuilt
-    -- directly to the pipe.
+    -- A completed pocket uses a fresh stopped-combine approach. Do not apply the moving-unload alignment gate here:
+    -- the trailer is deliberately behind the combine, so that gate can leave it waiting forever.
+    if combineStrategy:isWaitingForUnload() then
+        self:debug('Pocket is ready; starting a fresh forward approach to the pipe')
+        self:startUnloadingCombine()
+        return
+    end
+
+    -- Copying the combine course while it is reversing to make a pocket also copies those temporary reverse
+    -- waypoints and sends the trailer backwards into following traffic. Moving unload remains unavailable during
+    -- every pocket manoeuvre.
     local canStartMovingUnload = not combineStrategy:isManeuvering() and
             combineStrategy:canUnloadWhileMovingAtCurrentPosition()
-    if (combineStrategy:isWaitingForUnload() or canStartMovingUnload) and
-            self:isOkToStartUnloadingCombine() then
-        self:debug('Pocket is ready or safe moving unload is available; moving under the pipe')
+    if canStartMovingUnload and self:isOkToStartUnloadingCombine() then
+        self:debug('Safe moving unload is available; moving under the pipe')
         self:startUnloadingCombine()
         return
     end
 
     local distance = self:getDistanceFromCombine(self.combineToUnload)
     local standbyDistance = UnloaderCoordinator:getStandbyDistance(self.combineToUnload)
-    if combineStrategy:isManeuvering() then
+    -- Hold for the reverse half of pocket creation. Once the combine cuts forward into the pocket, follow the
+    -- already-copied fieldwork course and close back to the normal standby distance.
+    if combineStrategy:isManeuvering() and not combineStrategy:isMakingPocket() then
         local clearance = self:getHarvesterTurnClearanceDistance(self.combineToUnload)
         if distance < clearance + 20 then
             self:setMaxSpeed(0)

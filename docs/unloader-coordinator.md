@@ -43,8 +43,9 @@ trailers stay parked until the active lead's measured fill rate predicts that it
 Disabling moving unload on the first headland prevents only alongside unloading. The normal call still promotes the
 lead trailer, which follows behind at the configured distance until the combine reaches its pocket. A route being
 calculated is not treated as a blockage, so Courseplay cannot repeatedly swap trailers and cancel their pathfinders.
-While the combine reverses and drives forward to create a pocket, the trailer remains behind and cannot copy the
-temporary pocket course. Once the combine is stopped in the pocket, the trailer builds a fresh forward pipe approach.
+While the combine reverses to create a pocket, the trailer remains clear and cannot copy the temporary reverse
+course. It follows forward at the standby gap while the combine cuts into the pocket. Once the combine stops, the
+trailer builds a fresh forward pipe approach without applying moving-unload alignment rules.
 
 Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
 polygon. Courseplay stops at the last safe position when no contained route exists; leaving the field remains the

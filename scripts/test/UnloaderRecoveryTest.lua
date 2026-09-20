@@ -89,6 +89,7 @@ local pocketCombineStrategy = {
     isWaitingForUnload = function() return false end,
     canUnloadWhileMovingAtCurrentPosition = function() return true end,
     isManeuvering = function() return true end,
+    isMakingPocket = function() return false end,
 }
 local pocketCombine = { getCpDriveStrategy = function() return pocketCombineStrategy end }
 strategy.combineToUnload = pocketCombine
@@ -103,9 +104,17 @@ strategy:followCombineToPocket()
 assert(not startedPocketUnload and heldBehindPocket,
         'A trailer must hold behind instead of copying the combine reverse course while a pocket is being made')
 
-pocketCombineStrategy.isManeuvering = function() return false end
+heldBehindPocket = false
+strategy.getDistanceFromCombine = function() return 60 end
+pocketCombineStrategy.isMakingPocket = function() return true end
+strategy:followCombineToPocket()
+assert(not startedPocketUnload and not heldBehindPocket,
+        'A trailer must follow forward at a safe gap while the combine cuts the pocket')
+
+strategy.isOkToStartUnloadingCombine = function() return false end
+pocketCombineStrategy.isWaitingForUnload = function() return true end
 strategy:followCombineToPocket()
 assert(startedPocketUnload,
-        'A trailer may start its forward approach once the combine is no longer manoeuvring')
+        'A completed pocket must start a fresh forward pipe approach without the moving-unload alignment gate')
 
 print('UnloaderRecoveryTest: OK')
