@@ -61,4 +61,25 @@ assert(strategy:yieldCallToCloserUnloader(combine, true),
 assert(releasedBlockedCall and backedOut,
         'A blocked unloader must release the combine and reverse on a boundary-contained recovery course')
 
+CpDelayedBoolean = function()
+    return { get = function(_, condition) return condition end }
+end
+AIUtil = { isStopped = function() return true end }
+local combineStrategy = {
+    isWaitingForUnload = function() return true end,
+    alwaysNeedsUnloader = function() return false end,
+    getFillLevelPercentage = function() return 100 end,
+}
+combine.getCpDriveStrategy = function() return combineStrategy end
+combine.getCpSettings = function()
+    return { callUnloaderPercent = { getValue = function() return 80 end } }
+end
+strategy.states.WAITING_FOR_PATHFINDER = {}
+strategy.states.WAITING_FOR_STANDBY_PATHFINDER = {}
+strategy.state = strategy.states.WAITING_FOR_PATHFINDER
+strategy.combineToUnload = combine
+strategy.inDeadlock = nil
+assert(not strategy:isInDeadlock(),
+        'A stationary tractor calculating a route must not be treated as blocked and repeatedly reassigned')
+
 print('UnloaderRecoveryTest: OK')

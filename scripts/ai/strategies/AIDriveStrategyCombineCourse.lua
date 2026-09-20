@@ -966,7 +966,11 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
         -- TODO: isPipeInFruitAllowed
         local tentativeRendezvousWaypointIx = self:findBestWaypointToUnload(self.waypointIxWhenCallUnloader, false)
         if not tentativeRendezvousWaypointIx then
-            self:debug('callUnloaderWhenNeeded: can\'t find a good waypoint to meet the unloader')
+            if self:callLeadForPocketWhenNeeded() then
+                self:debug('callUnloaderWhenNeeded: lead called to follow behind for pocket unloading')
+            else
+                self:debug('callUnloaderWhenNeeded: no safe moving rendezvous; lead does not need to depart yet')
+            end
             return
         end
         bestUnloader, bestEte = self:findUnloader(nil, self.course:getWaypoint(tentativeRendezvousWaypointIx))
@@ -1004,6 +1008,31 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
             end
         end
     end
+end
+
+--- A first-headland restriction prevents unloading alongside; it must not suppress the unloader call itself. Call
+--- the stable lead with the normal travel-time timing, then let it follow behind until the combine makes its pocket.
+---@return boolean true when a lead accepted the pre-call
+function AIDriveStrategyCombineCourse:callLeadForPocketWhenNeeded()
+    local callWaypoint = self.course:getWaypoint(self.waypointIxWhenCallUnloader)
+    local bestUnloader, bestEte = self:findUnloader(nil, callWaypoint)
+    if not bestUnloader or not bestEte then
+        return false
+    end
+    local speed = self.vehicle:getSpeedLimit(true)
+    if speed >= 100 then
+        return false
+    end
+    local distanceToCall = self.course:getDistanceBetweenWaypoints(self.waypointIxWhenCallUnloader,
+            self.course:getCurrentWaypointIx())
+    local combineEte = speed > 0.1 and distanceToCall / (speed / 3.6) or 0
+    local atCallPercentage = self.combineController:getFillLevelPercentage() >=
+            self.settings.callUnloaderPercent:getValue()
+    if not atCallPercentage and bestEte + 5 <= combineEte then
+        return false
+    end
+    local strategy = bestUnloader:getCpDriveStrategy()
+    return strategy.callForPocket and strategy:callForPocket(self.vehicle) or false
 end
 
 ---@return boolean
@@ -1366,6 +1395,12 @@ function AIDriveStrategyCombineCourse:getAreaToAvoid()
         local width = self.pullBackRightSideOffset
         return PathfinderUtil.NodeArea(AIUtil.getDirectionNode(self.vehicle), xOffset, zOffset, width, length)
     end
+end
+
+---@return boolean
+function AIDriveStrategyCombineCourse:canUnloadWhileMovingAtCurrentPosition()
+    local ix = self.course:getCurrentWaypointIx()
+    return self.settings.unloadOnFirstHeadland:getValue() or not self.course:isOnHeadland(ix, 1)
 end
 
 --- Lateral offset used while driving into a pocket. Keep it within the actual working width in either direction.

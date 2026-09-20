@@ -169,4 +169,29 @@ switchStrategy.findUnloader = function() return candidate, 20 end
 assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled and recoveryRequested,
         'A stopped combine must replace a blocked trailer and request its boundary-aware recovery')
 
+local pocketPreCallAccepted = false
+local pocketLeadStrategy = {
+    callForPocket = function(_, combine)
+        pocketPreCallAccepted = combine ~= nil
+        return true
+    end,
+}
+local pocketLead = { getCpDriveStrategy = function() return pocketLeadStrategy end }
+local pocketPreCallStrategy = setmetatable({
+    vehicle = {
+        getSpeedLimit = function() return 10 end,
+    },
+    course = {
+        getWaypoint = function(_, ix) return { x = ix, z = 0 } end,
+        getDistanceBetweenWaypoints = function(_, a, b) return math.abs(a - b) end,
+        getCurrentWaypointIx = function() return 100 end,
+    },
+    waypointIxWhenCallUnloader = 200,
+    combineController = { getFillLevelPercentage = function() return 75 end },
+    settings = { callUnloaderPercent = { getValue = function() return 80 end } },
+    findUnloader = function() return pocketLead, 40 end,
+}, { __index = AIDriveStrategyCombineCourse })
+assert(pocketPreCallStrategy:callLeadForPocketWhenNeeded() and pocketPreCallAccepted,
+        'A first-headland restriction must still pre-call the lead trailer when its journey time requires departure')
+
 print('PocketCoursePlanningTest: OK')

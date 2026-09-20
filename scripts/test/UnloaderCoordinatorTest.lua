@@ -76,6 +76,7 @@ local function makeUnloader(name, x, available, activeHarvester, fill)
         end,
         setStandbyAssignment = function(self, assignment) self.assignment = assignment end,
         clearStandbyAssignment = function(self) self.assignment = nil end,
+        hasReachedStandbyPosition = function(self) return self.reachedStandby or false end,
     }
     return strategy
 end
@@ -186,12 +187,12 @@ assert(pooled.assignment and pooled.assignment.reserved and pooled.assignment.ro
 assert(math.abs(pooled.assignment.waypoint.x - distantDemandCombine.rootNode.x) >= 100,
         'The pool target must remain well clear of the combine')
 
--- Lead staging is based on the configured call prediction, so it is close when that percentage is reached.
+-- Lead staging always uses harvested ground behind the current combine rather than unharvested future crop.
 local predictedCombine = makeHarvester('Predicted combine', 0, false, 120, 0)
 predictedCombine:getCpDriveStrategy().waypointIxWhenCallUnloader = 1100
 local predictedDemand = UnloaderCoordinator:createDemand(predictedCombine, g_currentMission.time)
-assert(predictedDemand.waypointIx == 1050 and predictedDemand.waypoint.x == 50,
-        'The close standby target must sit behind the predicted call waypoint, not the current combine position')
+assert(predictedDemand.waypointIx == 950 and predictedDemand.waypoint.x == -50,
+        'The close standby target must sit on harvested ground behind the current combine')
 
 -- A soft reservation protects clearly earlier downtime, but yields to a more urgent real call.
 local firstCombine = makeHarvester('First combine', 0, false, 5, 0)
@@ -217,6 +218,21 @@ local nearlyFullDemand = UnloaderCoordinator:createDemand(nearlyFull, g_currentM
 local merelyDueDemand = UnloaderCoordinator:createDemand(merelyDue, g_currentMission.time)
 assert(UnloaderCoordinator.sortDemands(nearlyFullDemand, merelyDueDemand),
         'The combine closest to downtime must rank first after both call thresholds have passed')
+
+-- Once a combine has called its lead, its own call percentage must not also promote the rear trailer.
+local coveredCombine = makeHarvester('Covered combine', 0, false, 0, 0, 30, 90)
+local calledLead = makeUnloader('Called lead', -40, false, coveredCombine, 0)
+local rearTrailer = makeUnloader('Rear trailer', -150, true, nil, 0)
+AIDriveStrategyUnloadCombine.activeUnloaders = {
+    [calledLead] = calledLead.vehicle,
+    [rearTrailer] = rearTrailer.vehicle,
+}
+g_currentMission.vehicleSystem.vehicles = { coveredCombine }
+UnloaderCoordinator.assignments = {}
+UnloaderCoordinator.trailerFillSamples = {}
+UnloaderCoordinator:rebalance(true)
+assert(rearTrailer.assignment and rearTrailer.assignment.role == 'POOL',
+        'A rear trailer must stay parked while the already-called lead still has capacity')
 
 -- A pool trailer enters the field once, then remains parked until promotion.
 local progressionCombine = makeHarvester('Progression combine', 0, false, 500, 0)
@@ -261,7 +277,16 @@ local standbyAssignment = {
 local fixedStandbyWaypoint = UnloaderCoordinator:getStableStagingWaypoint(progressionCombine, 'STANDBY',
         { x = 100, z = 0 }, 100, standbyAssignment)
 assert(fixedStandbyWaypoint == promotedWaypoint,
-        'A lead standby must park at its predicted call position rather than chase the combine')
+        'An en-route lead standby must finish its current deliberate move')
+
+progressiveTrailer.reachedStandby = true
+progressiveTrailer.x = -200
+progressionDemand.fillLevelPercentage = 80
+progressionDemand.isFirm = false
+local advancedStandbyWaypoint = UnloaderCoordinator:getStableStagingWaypoint(progressionCombine, 'STANDBY',
+        { x = -50, z = 0 }, 950, standbyAssignment, progressiveTrailer, progressionDemand)
+assert(advancedStandbyWaypoint.x == -50,
+        'A reached lead must advance from a distant stop when its combine reaches the call percentage')
 
 local accessPointTrailer = makeUnloader('Access-point trailer', -110, true, nil, 0)
 local accessPointAssignment = {

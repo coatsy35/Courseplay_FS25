@@ -140,26 +140,15 @@ function UnloaderCoordinator:getSecondsUntilTrailerFull(strategy, now)
     return math.max(0, (100 - fill) / rate)
 end
 
---- Calculate the fixed close-standby target from the predicted call position. For combines this is the waypoint at
---- their configured call percentage; forage relief falls back to a speed-and-time projection along the course.
+--- Calculate a close-standby target on the harvested course behind the harvester. A predicted future call position
+--- can still contain crop, so parking there would either be rejected or make the trailer cut through fruit.
 ---@param harvester table
 ---@param strategy AIDriveStrategyCombineCourse
 ---@param secondsUntilNeeded number
 ---@return Waypoint|nil, number|nil
 function UnloaderCoordinator:getPredictedStagingWaypoint(harvester, strategy, secondsUntilNeeded)
-    local referenceIx = strategy.waypointIxWhenCallUnloader
     local currentIx = strategy:getClosestFieldworkWaypointIx()
-    if referenceIx and currentIx and referenceIx < currentIx then
-        referenceIx = nil
-    end
-    if not referenceIx and secondsUntilNeeded > 0 and secondsUntilNeeded < math.huge then
-        local course = strategy:getFieldworkCourse()
-        local speed = harvester.getSpeedLimit and harvester:getSpeedLimit(true)
-        if course and course.getNextWaypointIxWithinDistance and currentIx and speed and speed < 100 then
-            referenceIx = course:getNextWaypointIxWithinDistance(currentIx, secondsUntilNeeded * speed / 3.6)
-        end
-    end
-    return self:getStagingWaypoint(harvester, nil, referenceIx)
+    return self:getStagingWaypoint(harvester, nil, currentIx)
 end
 
 ---@param harvester table
@@ -189,14 +178,12 @@ function UnloaderCoordinator:createDemand(harvester, now)
     local secondsUntilNeeded
     if isForager then
         secondsUntilNeeded = activeUnloader and self:getSecondsUntilTrailerFull(activeUnloader, now) or 0
+    elseif activeUnloader then
+        -- The called trailer is already the combine's lead. Keep the next trailer in the rear pool until the lead's
+        -- measured fill rate shows that it will need relief; the combine's own call percentage is already covered.
+        secondsUntilNeeded = self:getSecondsUntilTrailerFull(activeUnloader, now)
     elseif strategy.getSecondsUntilUnloaderCall then
         secondsUntilNeeded = strategy:getSecondsUntilUnloaderCall()
-        if activeUnloader then
-            -- A combine may empty its tank while filling the first trailer. Keep the second trailer's demand
-            -- urgent when that active trailer will leave sooner than the combine expects its next normal call.
-            secondsUntilNeeded = math.min(secondsUntilNeeded,
-                    self:getSecondsUntilTrailerFull(activeUnloader, now))
-        end
     else
         local settings = harvester:getCpSettings()
         secondsUntilNeeded = math.max(0,
@@ -312,15 +299,31 @@ end
 ---@param waypoint Waypoint|nil
 ---@param waypointIx number|nil
 ---@param oldAssignment table|nil
+---@param unloader AIDriveStrategyUnloadCombine|nil
+---@param demand table|nil
 ---@return Waypoint|nil, number|nil
-function UnloaderCoordinator:getStableStagingWaypoint(harvester, role, waypoint, waypointIx, oldAssignment)
+function UnloaderCoordinator:getStableStagingWaypoint(harvester, role, waypoint, waypointIx, oldAssignment,
+        unloader, demand)
     if not waypoint or not oldAssignment or oldAssignment.harvester ~= harvester or
             oldAssignment.role ~= role or not oldAssignment.waypoint or not oldAssignment.waypointIx then
         return waypoint, waypointIx
     end
-    -- A staging target is a parking position, not a moving follow point. Once a trailer has an in-field target,
-    -- keep it until its role or harvester changes. Promotion from POOL to STANDBY therefore permits one deliberate
-    -- move nearer; subsequent coordinator updates cannot make the trailer creep after the harvester.
+    if role == 'STANDBY' and unloader and unloader.hasReachedStandbyPosition and
+            unloader:hasReachedStandbyPosition() then
+        local distance = unloader:getDistanceAndEteToVehicle(harvester)
+        local workWidth = demand and demand.harvesterStrategy.getWorkWidth and
+                demand.harvesterStrategy:getWorkWidth() or 0
+        local callPercentage = harvester:getCpSettings().callUnloaderPercent:getValue()
+        local atCallPercentage = demand and not demand.isFirm and
+                demand.fillLevelPercentage >= callPercentage
+        local movementBand = atCallPercentage and math.max(15, workWidth) or math.max(50, 2 * workWidth)
+        if distance > self:getStandbyDistance(harvester) + movementBand then
+            -- Advance in deliberate hops. Before the call percentage the band is broad; at the call percentage it
+            -- tightens so the lead is genuinely nearby when the combine makes its pocket or requests unloading.
+            return waypoint, waypointIx
+        end
+    end
+    -- Pool targets remain fixed. An en-route standby also finishes its current move before another target is issued.
     return oldAssignment.waypoint, oldAssignment.waypointIx
 end
 
@@ -496,7 +499,7 @@ function UnloaderCoordinator:rebalance(force)
             if deploy then
                 waypoint, waypointIx = demand.waypoint, demand.waypointIx
                 waypoint, waypointIx = self:getStableStagingWaypoint(demand.harvester, 'STANDBY', waypoint,
-                        waypointIx, oldAssignment)
+                        waypointIx, oldAssignment, unloader, demand)
             else
                 waypoint, waypointIx, waitUntilHarvesterPasses =
                         self:getPoolWaypoint(unloader, demand, 1, oldAssignment)

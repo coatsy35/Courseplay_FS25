@@ -34,9 +34,13 @@ combine call may take a soft reservation only when its predicted downtime is wit
 combine.
 
 The nearest suitable trailer becomes the stable combine lead; a nearby partly filled trailer may win when its arrival
-time is within ten seconds of the nearest option. It moves once from its pool to a point the configured standby
-distance behind the combine's predicted call-percentage position, then waits. Rear pool trailers stay parked until
-the lead lacks enough capacity or a separate active or relief demand requires them.
+time is within ten seconds of the nearest option. It advances in deliberate hops to harvested positions behind the
+combine as the call approaches, tightening to the configured standby distance at the call percentage. Rear pool
+trailers stay parked until the active lead's measured fill rate predicts that it will need relief.
+
+Disabling moving unload on the first headland prevents only alongside unloading. The normal call still promotes the
+lead trailer, which follows behind at the configured distance until the combine reaches its pocket. A route being
+calculated is not treated as a blockage, so Courseplay cannot repeatedly swap trailers and cancel their pathfinders.
 
 Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
 polygon. Courseplay stops at the last safe position when no contained route exists; leaving the field remains the

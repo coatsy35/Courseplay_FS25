@@ -163,6 +163,7 @@ AIDriveStrategyUnloadCombine.myStates = {
 AIDriveStrategyUnloadCombine.myCombineUnloadStates = {
     DRIVING_TO_COMBINE = { collisionAvoidanceEnabled = true },
     DRIVING_TO_MOVING_COMBINE = { collisionAvoidanceEnabled = true },
+    FOLLOWING_COMBINE_TO_POCKET = { collisionAvoidanceEnabled = true },
     UNLOADING_MOVING_COMBINE = { openCoverAllowed = true },
     UNLOADING_STOPPED_COMBINE = { openCoverAllowed = true },
 }
@@ -459,6 +460,10 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
     elseif self.state == self.states.DRIVING_TO_MOVING_COMBINE then
 
         self:driveToMovingCombine()
+
+    elseif self.state == self.states.FOLLOWING_COMBINE_TO_POCKET then
+
+        self:followCombineToPocket()
 
     elseif self.state == self.states.UNLOADING_STOPPED_COMBINE then
 
@@ -757,7 +762,18 @@ function AIDriveStrategyUnloadCombine:isInDeadlock()
             local settings = self.combineToUnload:getCpSettings()
             urgentlyNeeded = combineStrategy:getFillLevelPercentage() >= settings.callUnloaderPercent:getValue()
         end
-        return self.inDeadlock:get(urgentlyNeeded and AIUtil.isStopped(self.vehicle), 10000)
+        -- The tractor is expected to be stationary while its asynchronous pathfinder runs. Treating that normal
+        -- wait as a blockage made a full combine swap between trailers and cancel every route before completion.
+        local isCalculatingRoute = self.state == self.states.WAITING_FOR_PATHFINDER or
+                self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER
+        local isDeliberatelyFollowingBehind = false
+        if self.state == self.states.FOLLOWING_COMBINE_TO_POCKET then
+            local distance = self:getDistanceFromCombine(self.combineToUnload)
+            local standbyDistance = UnloaderCoordinator:getStandbyDistance(self.combineToUnload)
+            isDeliberatelyFollowingBehind = distance <= standbyDistance + 5 or combineStrategy:isManeuvering()
+        end
+        return self.inDeadlock:get(urgentlyNeeded and not isCalculatingRoute and
+                not isDeliberatelyFollowingBehind and AIUtil.isStopped(self.vehicle), 10000)
     else
         return false
     end
@@ -1089,7 +1105,12 @@ function AIDriveStrategyUnloadCombine:onLastWaypointPassed()
             self:startWaitingForSomethingToDo()
         end
     elseif self.state == self.states.DRIVING_TO_MOVING_COMBINE then
-        self:startCourseFollowingCombine()
+        if self.approachingPocketStandby then
+            self.approachingPocketStandby = nil
+            self:startFollowingCombineToPocket()
+        else
+            self:startCourseFollowingCombine()
+        end
     elseif self.state == self.states.BACKING_UP_FOR_REVERSING_COMBINE then
         self:setNewState(self.stateAfterMovedOutOfWay)
         self:startRememberedCourse()
@@ -1235,6 +1256,7 @@ end
 
 function AIDriveStrategyUnloadCombine:releaseCombine()
     self.combineJustUnloaded = nil
+    self.approachingPocketStandby = nil
     if self.combineToUnload and self.combineToUnload:getIsCpActive() then
         local strategy = self.combineToUnload:getCpDriveStrategy()
         if strategy and strategy.deregisterUnloader then
@@ -1516,6 +1538,48 @@ function AIDriveStrategyUnloadCombine:startCourseFollowingCombine()
     self:setNewState(self.states.UNLOADING_MOVING_COMBINE)
 end
 
+--- Follow the combine on its own course while remaining behind it. This is used after a first-headland pre-call:
+--- the vehicle setting still forbids unloading alongside, but the lead trailer is already present when the combine
+--- reaches its pocket.
+function AIDriveStrategyUnloadCombine:startFollowingCombineToPocket()
+    local startIx
+    self.followCourse, startIx = self:setupFollowCourse()
+    if not self.followCourse or not startIx then
+        self:startWaitingForSomethingToDo()
+        return
+    end
+    local standbyDistance = UnloaderCoordinator:getStandbyDistance(self.combineToUnload)
+    startIx = self.followCourse:getPreviousWaypointIxWithinDistance(startIx, standbyDistance) or startIx
+    self.followCourse:setOffset(0, 0)
+    self:debug('Following %s from behind at waypoint %d until its pocket is ready',
+            CpUtil.getName(self.combineToUnload), startIx)
+    self:startCourse(self.followCourse, startIx)
+    self:setNewState(self.states.FOLLOWING_COMBINE_TO_POCKET)
+end
+
+function AIDriveStrategyUnloadCombine:followCombineToPocket()
+    local combineStrategy = self.combineToUnload:getCpDriveStrategy()
+    self:setFieldSpeed()
+
+    if (combineStrategy:isWaitingForUnload() or combineStrategy:canUnloadWhileMovingAtCurrentPosition()) and
+            self:isOkToStartUnloadingCombine() then
+        self:debug('Pocket is ready or headland restriction ended; moving under the pipe')
+        self:startUnloadingCombine()
+        return
+    end
+
+    local distance = self:getDistanceFromCombine(self.combineToUnload)
+    local standbyDistance = UnloaderCoordinator:getStandbyDistance(self.combineToUnload)
+    if combineStrategy:isManeuvering() then
+        local clearance = self:getHarvesterTurnClearanceDistance(self.combineToUnload)
+        if distance < clearance + 20 then
+            self:setMaxSpeed(0)
+        end
+    elseif distance <= standbyDistance then
+        self:setMaxSpeed(0)
+    end
+end
+
 function AIDriveStrategyUnloadCombine:getCombineToUnload()
     return self.combineToUnload
 end
@@ -1762,6 +1826,29 @@ function AIDriveStrategyUnloadCombine:getDistanceAndEteToWaypoint(waypoint)
     return self:getDistanceAndEte(goal)
 end
 
+--- Pre-call for a combine that will make a pocket instead of unloading alongside on the first headland. The lead
+--- becomes the active assignment immediately, approaches a harvested point behind the combine, then follows at the
+--- configured standby distance until the combine is waiting in its pocket.
+---@param combine table
+---@return boolean
+function AIDriveStrategyUnloadCombine:callForPocket(combine)
+    local assignment = UnloaderCoordinator.assignments[self]
+    local waypoint = UnloaderCoordinator:getStagingWaypoint(combine) or
+            assignment and assignment.harvester == combine and assignment.waypoint
+    if not waypoint then
+        self:debug('callForPocket: no safe harvested standby waypoint available yet')
+        return false
+    end
+    UnloaderCoordinator:release(self)
+    self.combineToUnload = combine
+    self.rendezvousWaypoint = waypoint
+    self.approachingPocketStandby = true
+    self:setNewState(self.states.WAITING_FOR_PATHFINDER)
+    self:debug('callForPocket: approaching the lead position behind %s', CpUtil.getName(combine))
+    self:startPathfindingToMovingCombine(waypoint, 0, 0)
+    return true
+end
+
 --- Interface function for a combine to call the unloader.
 ---@param combine table the combine vehicle calling
 ---@param waypoint Waypoint if given, the combine wants to meet the unloader at this waypoint, otherwise wants the
@@ -1771,6 +1858,7 @@ function AIDriveStrategyUnloadCombine:call(combine, waypoint)
     -- A real unload call always supersedes provisional staging. Firm forage reservations are filtered by
     -- isAllowedToBeCalled(), so reaching this point also performs the atomic standby-to-active promotion.
     UnloaderCoordinator:release(self)
+    self.approachingPocketStandby = nil
     local xOffset, zOffset = self:getPipeOffset(combine)
     if waypoint then
         -- combine set up a rendezvous waypoint for us, go there
@@ -1900,10 +1988,16 @@ function AIDriveStrategyUnloadCombine:isInStandbyState()
             self.state == self.states.WAITING_IN_STANDBY
 end
 
+---@return boolean
+function AIDriveStrategyUnloadCombine:hasReachedStandbyPosition()
+    return self.state == self.states.WAITING_IN_STANDBY
+end
+
 function AIDriveStrategyUnloadCombine:cancelStandbyPathfinding()
     if self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER and self.pathfinderController then
         self.pathfinderController:cancel()
     end
+    self.standbyPathfindingStartedAt = nil
 end
 
 function AIDriveStrategyUnloadCombine:holdAtStandbyPosition()
@@ -1967,6 +2061,12 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
                     waypoint.z - self.standbyTargetZ) >= targetMovementThreshold
     if sameHarvester and (self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
             self.state == self.states.DRIVING_TO_STANDBY) then
+        local now = g_currentMission and g_currentMission.time or g_time or 0
+        if self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER and self.standbyPathfindingStartedAt and
+                (now - self.standbyPathfindingStartedAt) >= 15000 then
+            self:debug('Standby pathfinding exceeded 15 seconds; cancelling the stale target')
+            self:holdAtStandbyPosition()
+        end
         -- Finish the current safe move before accepting the next progressively nearer target.
         return
     end
@@ -2000,11 +2100,13 @@ function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypo
     context._fieldworkBoundary = self.standbyBoundary
     self.pathfinderController:registerListeners(self, self.onPathfindingDoneToStandby)
     self:setNewState(self.states.WAITING_FOR_STANDBY_PATHFINDER)
+    self.standbyPathfindingStartedAt = g_currentMission and g_currentMission.time or g_time or 0
     self:debug('Pathfinding to standby position for %s', CpUtil.getName(harvester))
     self.pathfinderController:findPathToGoal(context, PathfinderUtil.getWaypointAsState3D(waypoint, 0, 0))
 end
 
 function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, success, course, goalNodeInvalid)
+    self.standbyPathfindingStartedAt = nil
     if success and not FieldworkBoundary.containsCourse(self.standbyBoundary, course) then
         self:debug('Standby path would cross the field polygon; rejecting it')
         success = false
@@ -2232,6 +2334,16 @@ end
 -- Drive to moving combine
 ------------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyUnloadCombine:driveToMovingCombine()
+
+    if self.approachingPocketStandby then
+        self:checkForCombineProximity()
+        self:setFieldSpeed()
+        if self.combineToUnload:getCpDriveStrategy():isManeuvering() and
+                self:isWithinSafeManeuveringDistance(self.combineToUnload) then
+            self:setMaxSpeed(0)
+        end
+        return
+    end
 
     self:checkForCombineProximity()
 
