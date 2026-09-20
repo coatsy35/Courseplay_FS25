@@ -10,8 +10,12 @@ UnloaderCoordinator.rebalanceIntervalMs = 3000
 UnloaderCoordinator.minimumAssignmentTimeMs = 30000
 UnloaderCoordinator.existingAssignmentBiasSeconds = 45
 UnloaderCoordinator.newAssignmentBiasSeconds = 120
+UnloaderCoordinator.combineSafetyMarginSeconds = 25
 UnloaderCoordinator.foragerSafetyMarginSeconds = 60
 UnloaderCoordinator.fallbackTrailerFillRatePercentPerSecond = 0.2
+UnloaderCoordinator.minimumPoolDistance = 100
+UnloaderCoordinator.poolDistanceStep = 45
+UnloaderCoordinator.maximumAdditionalPoolDistance = 150
 UnloaderCoordinator.assignments = {}
 UnloaderCoordinator.trailerFillSamples = {}
 UnloaderCoordinator.nextRebalanceAt = 0
@@ -146,7 +150,6 @@ function UnloaderCoordinator:createDemand(harvester, now)
     local secondsUntilNeeded
     if isForager then
         secondsUntilNeeded = activeUnloader and self:getSecondsUntilTrailerFull(activeUnloader, now) or 0
-        secondsUntilNeeded = secondsUntilNeeded - self.foragerSafetyMarginSeconds
     elseif strategy.getSecondsUntilUnloaderCall then
         secondsUntilNeeded = strategy:getSecondsUntilUnloaderCall()
         if activeUnloader then
@@ -196,7 +199,19 @@ function UnloaderCoordinator:getAssignmentCost(unloader, demand, now)
         _, ete = unloader:getDistanceAndEteToVehicle(demand.harvester)
     end
 
+    if unloader.shouldWaitAtPoolForHarvester and unloader:shouldWaitAtPoolForHarvester(demand.harvester) then
+        ete = ete + 50000
+    end
+
     local existing = self.assignments[unloader]
+    -- Keep using a partly filled trailer before introducing an empty one. This preserves capacity continuity and
+    -- prevents an empty trailer parked ahead of the combine winning on straight-line distance alone.
+    if unloader:getFillLevelPercentage() > 0.1 then
+        ete = ete - 100000
+        if unloader.wasLastAssignedToHarvester and unloader:wasLastAssignedToHarvester(demand.harvester) then
+            ete = ete - 100000
+        end
+    end
     if existing and existing.harvester == demand.harvester then
         ete = ete - self.existingAssignmentBiasSeconds
         if now - existing.assignedAt < self.minimumAssignmentTimeMs then
@@ -204,6 +219,75 @@ function UnloaderCoordinator:getAssignmentCost(unloader, demand, now)
         end
     end
     return ete
+end
+
+---@param unloader AIDriveStrategyUnloadCombine
+---@return Waypoint
+function UnloaderCoordinator:getWaypointAtUnloader(unloader)
+    local x, y, z = getWorldTranslation(unloader.vehicle.rootNode)
+    local yRot = 0
+    if getWorldRotation then
+        _, yRot, _ = getWorldRotation(unloader.vehicle.rootNode)
+    end
+    return { x = x, y = y, z = z, yRot = yRot }
+end
+
+---@param demand table
+---@param poolNumber number
+---@return number
+function UnloaderCoordinator:getPoolDistance(demand, poolNumber)
+    local workWidth = demand.harvesterStrategy.getWorkWidth and demand.harvesterStrategy:getWorkWidth() or 0
+    local timeUntilNeeded = math.max(0, demand.secondsUntilNeeded or 0)
+    local additionalDistance = math.min(self.maximumAdditionalPoolDistance, timeUntilNeeded * 0.35)
+    return math.max(self.minimumPoolDistance, 2 * workWidth + 30) + additionalDistance +
+            math.max(0, poolNumber - 1) * self.poolDistanceStep
+end
+
+---@param unloader AIDriveStrategyUnloadCombine
+---@param demand table
+---@param oldAssignment table|nil
+---@return boolean
+function UnloaderCoordinator:shouldDeploy(unloader, demand, oldAssignment)
+    local _, ete
+    if demand.waypoint then
+        _, ete = unloader:getDistanceAndEteToWaypoint(demand.waypoint)
+    else
+        _, ete = unloader:getDistanceAndEteToVehicle(demand.harvester)
+    end
+    local safetyMargin = demand.isFirm and self.foragerSafetyMarginSeconds or self.combineSafetyMarginSeconds
+    if oldAssignment and oldAssignment.harvester == demand.harvester and oldAssignment.role == 'STANDBY' then
+        safetyMargin = safetyMargin + self.existingAssignmentBiasSeconds
+    end
+    return demand.secondsUntilNeeded <= ete + safetyMargin
+end
+
+---@param unloader AIDriveStrategyUnloadCombine
+---@param demand table
+---@param poolNumber number
+---@param oldAssignment table|nil
+---@return Waypoint|nil, number|nil, boolean
+function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAssignment)
+    local poolDistance = self:getPoolDistance(demand, poolNumber)
+    local distance = unloader:getDistanceAndEteToVehicle(demand.harvester)
+    local waitUntilHarvesterPasses = unloader.shouldWaitAtPoolForHarvester and
+            unloader:shouldWaitAtPoolForHarvester(demand.harvester) or false
+
+    if oldAssignment and oldAssignment.harvester == demand.harvester and oldAssignment.role == 'POOL' and
+            oldAssignment.waypoint then
+        if oldAssignment.waitUntilHarvesterPasses and waitUntilHarvesterPasses then
+            return oldAssignment.waypoint, oldAssignment.waypointIx, true
+        elseif not oldAssignment.waitUntilHarvesterPasses and distance >= 0.75 * poolDistance then
+            return oldAssignment.waypoint, oldAssignment.waypointIx, false
+        end
+    end
+
+    -- A vehicle already far enough away, especially one waiting at another AutoDrive access point, should stay
+    -- where it is. When fruit avoidance puts it ahead of the combine it remains there until the combine passes.
+    if waitUntilHarvesterPasses or distance >= poolDistance then
+        return self:getWaypointAtUnloader(unloader), nil, waitUntilHarvesterPasses
+    end
+    local waypoint, waypointIx = self:getStagingWaypoint(demand.harvester, poolDistance)
+    return waypoint or self:getWaypointAtUnloader(unloader), waypointIx, false
 end
 
 ---@param demandA table
@@ -253,9 +337,11 @@ function UnloaderCoordinator:rebalance(force)
     local unloaders = self:getAvailableUnloaders()
     local demands = self:getDemands(now)
     local newAssignments = {}
+    local previousAssignments = self.assignments
 
-    -- Greedy earliest-need matching is intentional. Every demand gets at most one standby and every unloader
-    -- gets at most one target, preventing a group of independent unloaders clustering at the nearest harvester.
+    -- Greedy earliest-need matching is intentional. Every demand gets exactly one reservation at most and every
+    -- unloader gets at most one target. A combine reservation stays in the field pool until its predicted travel
+    -- time says it must start moving; forage relief uses the same calculation with a larger safety margin.
     for _, demand in ipairs(demands) do
         local bestIndex, bestCost
         for i, unloader in ipairs(unloaders) do
@@ -269,30 +355,45 @@ function UnloaderCoordinator:rebalance(force)
         if bestIndex then
             local unloader = table.remove(unloaders, bestIndex)
             local oldAssignment = self.assignments[unloader]
+            local deploy = self:shouldDeploy(unloader, demand, oldAssignment)
+            local waypoint, waypointIx, waitUntilHarvesterPasses
+            if deploy then
+                waypoint, waypointIx = demand.waypoint, demand.waypointIx
+                if oldAssignment and oldAssignment.harvester == demand.harvester and
+                        oldAssignment.role == 'STANDBY' and oldAssignment.waypoint then
+                    waypoint, waypointIx = oldAssignment.waypoint, oldAssignment.waypointIx
+                end
+            else
+                waypoint, waypointIx, waitUntilHarvesterPasses =
+                        self:getPoolWaypoint(unloader, demand, 1, oldAssignment)
+            end
             newAssignments[unloader] = {
                 harvester = demand.harvester,
                 isFirm = demand.isFirm,
-                role = 'STANDBY',
-                waypoint = demand.waypoint,
-                waypointIx = demand.waypointIx,
+                reserved = true,
+                role = deploy and 'STANDBY' or 'POOL',
+                waypoint = waypoint,
+                waypointIx = waypointIx,
                 assignedAt = oldAssignment and oldAssignment.harvester == demand.harvester
                         and oldAssignment.assignedAt or now,
                 secondsUntilNeeded = demand.secondsUntilNeeded,
+                waitUntilHarvesterPasses = waitUntilHarvesterPasses,
             }
         end
     end
 
-    -- Keep surplus unloaders useful without forming a queue at one harvester. Pool positions are progressively
-    -- further back on already worked courses, and the balancing penalty spreads the first spare across each active
-    -- harvester before adding another position to the same route.
+    -- Surplus unloaders remain well clear of the working pair. Pool positions start at a geometry- and urgency-based
+    -- distance of at least roughly 100 metres and are kept stable instead of following the moving harvester.
     local poolCounts = {}
     for _, unloader in ipairs(unloaders) do
         local bestDemand, bestWaypoint, bestWaypointIx, bestCost
+        local bestWaitUntilHarvesterPasses = false
         for _, demand in ipairs(demands) do
             if self:canServeDemand(unloader, demand) then
                 local poolNumber = (poolCounts[demand.harvester] or 0) + 1
-                local poolDistance = self:getStandbyDistance(demand.harvester) + 40 * poolNumber
-                local waypoint, waypointIx = self:getStagingWaypoint(demand.harvester, poolDistance)
+                local oldAssignment = self.assignments[unloader]
+                local waypoint, waypointIx, waitUntilHarvesterPasses =
+                        self:getPoolWaypoint(unloader, demand, poolNumber + 1, oldAssignment)
                 if waypoint then
                     local poolDemand = {
                         harvester = demand.harvester,
@@ -302,6 +403,7 @@ function UnloaderCoordinator:rebalance(force)
                             (poolCounts[demand.harvester] or 0) * 120
                     if not bestCost or cost < bestCost then
                         bestDemand, bestWaypoint, bestWaypointIx, bestCost = demand, waypoint, waypointIx, cost
+                        bestWaitUntilHarvesterPasses = waitUntilHarvesterPasses
                     end
                 end
             end
@@ -312,17 +414,19 @@ function UnloaderCoordinator:rebalance(force)
             newAssignments[unloader] = {
                 harvester = bestDemand.harvester,
                 isFirm = false,
+                reserved = false,
                 role = 'POOL',
                 waypoint = bestWaypoint,
                 waypointIx = bestWaypointIx,
                 assignedAt = oldAssignment and oldAssignment.harvester == bestDemand.harvester
                         and oldAssignment.assignedAt or now,
                 secondsUntilNeeded = math.huge,
+                waitUntilHarvesterPasses = bestWaitUntilHarvesterPasses,
             }
         end
     end
 
-    for unloader, oldAssignment in pairs(self.assignments) do
+    for unloader, oldAssignment in pairs(previousAssignments) do
         if not newAssignments[unloader] and unloader.clearStandbyAssignment then
             self:debug('Releasing %s from standby for %s', getVehicleName(unloader.vehicle),
                     getVehicleName(oldAssignment.harvester))
@@ -333,6 +437,12 @@ function UnloaderCoordinator:rebalance(force)
 
     for unloader, assignment in pairs(newAssignments) do
         if unloader.setStandbyAssignment then
+            local oldAssignment = previousAssignments[unloader]
+            if not oldAssignment or oldAssignment.harvester ~= assignment.harvester or
+                    oldAssignment.role ~= assignment.role then
+                self:debug('Assigning %s as %s for %s (needed in %.1fs)', getVehicleName(unloader.vehicle),
+                        assignment.role, getVehicleName(assignment.harvester), assignment.secondsUntilNeeded)
+            end
             unloader:setStandbyAssignment(assignment)
         end
     end
@@ -367,5 +477,31 @@ end
 ---@return boolean
 function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
     local assignment = self.assignments[unloader]
-    return not assignment or not assignment.isFirm or assignment.harvester == callingHarvester
+    if assignment and assignment.isFirm and assignment.harvester ~= callingHarvester then
+        return false
+    end
+    if assignment and assignment.waitUntilHarvesterPasses then
+        return false
+    end
+    local reservedUnloader = self:getReservedUnloader(callingHarvester)
+    return not reservedUnloader or reservedUnloader == unloader
+end
+
+---@param harvester table
+---@return AIDriveStrategyUnloadCombine|nil
+function UnloaderCoordinator:getReservedUnloader(harvester)
+    for unloader, assignment in pairs(self.assignments) do
+        if assignment.reserved and assignment.harvester == harvester then
+            return unloader
+        end
+    end
+    return nil
+end
+
+---@param unloader AIDriveStrategyUnloadCombine
+---@param harvester table
+---@return boolean
+function UnloaderCoordinator:isReservedFor(unloader, harvester)
+    local assignment = self.assignments[unloader]
+    return assignment and assignment.reserved and assignment.harvester == harvester or false
 end

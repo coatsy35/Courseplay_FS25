@@ -6,18 +6,29 @@ independent unloaders from clustering behind the nearest machine.
 
 ## Coverage
 
-- A combine receives soft staging coverage. Its standby drives towards an already travelled waypoint behind the
-  combine and remains available for a more urgent real unload call.
+- A combine receives one soft relief reservation. The reserved trailer remains in a distant field pool until its
+  journey time and the predicted call time say it must start moving, then stages at a stable harvested waypoint.
 - A forage harvester receives firm relief coverage. Its standby cannot be called by another harvester while the
   reservation remains valid.
 - A real unload call promotes the assigned standby and uses the existing rendezvous and unloading behaviour.
-- Unloaders beyond the active and configured standby requirements receive interruptible shared-pool positions,
-  distributed progressively further back along the harvesters' already worked routes.
+- Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. The
+  distance starts at roughly 100 metres and grows with time until demand, header width and the number of pool
+  trailers. A safe position reached from an AutoDrive field access point is held rather than continually moved.
+- A trailer waiting ahead with fruit avoidance enabled stays at its access-point pool until the harvester passes and
+  a fruit-free route behind it becomes available.
+- A partly filled trailer has selection priority over an empty trailer, while combine reservations remain soft so
+  the only available trailer may still serve another combine.
 
 Demands are ordered by predicted time until the trailer is needed. Combines use the measured harvest rate, their
 normal call percentage and, while unloading, the active trailer's predicted time to full. Forage harvesters use the
-active trailer's measured fill rate, with a safety margin because they have no holding tank. Existing assignments
-receive a temporary score advantage to prevent repeated target changes.
+active trailer's measured fill rate, with a larger safety margin because they have no holding tank. Existing
+assignments receive a temporary score advantage to prevent repeated target changes.
+
+Coordinator pathfinding and reverse-clearance courses are constrained to the detected field polygon. Courseplay
+stops at the last safe position when no contained route exists; leaving the field remains the AutoDrive handover.
+After unloading, the tractor reverses by a distance derived from header width and both vehicle lengths. Fieldwork
+traffic also applies the same physical turn envelope when trail-based convoy distance is unreliable during turns or
+the drive back to a work-start waypoint.
 
 ## Settings
 
@@ -26,8 +37,8 @@ Each combine or forage harvester has an **Unloader coordination** section:
 - **Nearby standby unloader** enables one additional staged or relief unloader.
 - **Standby distance** selects a target distance of 30–80 metres behind the harvester.
 
-Staging pauses during turns and manoeuvres. The target must be on fruit-free ground, and the normal field pathfinder
-retains fruit avoidance, collision avoidance and field-boundary constraints.
+Staging pauses during turns and manoeuvres. Targets must be on fruit-free ground, remain inside the field polygon,
+and retain collision avoidance. Reached pool and staging targets remain fixed until coverage or urgency changes.
 
 ## Validation
 

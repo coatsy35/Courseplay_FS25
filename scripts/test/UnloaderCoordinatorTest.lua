@@ -8,18 +8,25 @@ function getWorldTranslation(node)
     return node.x, 0, node.z
 end
 
+function getWorldRotation()
+    return 0, 0, 0
+end
+
 local function setting(value)
     return { getValue = function() return value end }
 end
 
 local function makeHarvester(name, x, isForager, secondsUntilCall, stageX)
+    local currentIx = 1000
     local course = {
-        getPreviousWaypointIxWithinDistance = function() return 10 end,
+        getPreviousWaypointIxWithinDistance = function(_, _, distance)
+            return currentIx - math.floor(distance)
+        end,
         isTurnStartAtIx = function() return false end,
         isTurnEndAtIx = function() return false end,
         isReverseAt = function() return false end,
-        getWaypoint = function() return {
-            x = stageX,
+        getWaypoint = function(_, ix) return {
+            x = stageX - (currentIx - ix),
             z = 0,
         } end,
     }
@@ -29,7 +36,8 @@ local function makeHarvester(name, x, isForager, secondsUntilCall, stageX)
         isManeuvering = function() return false end,
         isAboutToTurn = function() return false end,
         getFieldworkCourse = function() return course end,
-        getClosestFieldworkWaypointIx = function() return 20 end,
+        getClosestFieldworkWaypointIx = function() return currentIx end,
+        getWorkWidth = function() return 15 end,
         alwaysNeedsUnloader = function() return isForager end,
         getSecondsUntilUnloaderCall = function() return secondsUntilCall end,
         getFillLevelPercentage = function() return 50 end,
@@ -50,12 +58,15 @@ end
 
 local function makeUnloader(name, x, available, activeHarvester, fill)
     local strategy = {
-        vehicle = { name = name },
+        vehicle = { name = name, rootNode = { x = x, z = 0 } },
         x = x,
         assignment = nil,
         isAvailableForStaging = function() return available end,
         getCombineToUnload = function() return activeHarvester end,
         getFillLevelPercentage = function() return fill or 0 end,
+        wasLastAssignedToHarvester = function(self, harvester)
+            return self.lastHarvester == harvester
+        end,
         isServingPosition = function() return true end,
         getDistanceAndEteToWaypoint = function(self, waypoint)
             local distance = math.abs(self.x - waypoint.x)
@@ -90,7 +101,7 @@ AIDriveStrategyUnloadCombine = {
 }
 AIDriveStrategyCombineCourse = {
     isActiveCpCombine = function(vehicle)
-        return vehicle == forager or vehicle == combine
+        return vehicle and vehicle.getIsCpActive and vehicle:getIsCpActive()
     end,
 }
 g_currentMission = {
@@ -113,7 +124,51 @@ assert(UnloaderCoordinator:canBeCalledBy(nearForager, forager),
         'The reserved forage harvester must be able to promote its relief trailer')
 assert(not UnloaderCoordinator:canBeCalledBy(nearForager, combine),
         'Another harvester must not take a firm forage relief reservation')
-assert(UnloaderCoordinator:canBeCalledBy(nearCombine, forager),
-        'A real call must be allowed to interrupt soft combine staging')
+assert(not UnloaderCoordinator:canBeCalledBy(spare, combine),
+        'A combine with a reservation must not call an additional pool trailer')
+
+-- A partly filled trailer has continuity priority over a closer empty one.
+local continuityCombine = makeHarvester('Continuity combine', 500, false, 10, 500)
+local partial = makeUnloader('Part-filled trailer', 100, true, nil, 45)
+partial.lastHarvester = continuityCombine
+local empty = makeUnloader('Closer empty trailer', 480, true, nil, 0)
+AIDriveStrategyUnloadCombine.activeUnloaders = {
+    [partial] = partial.vehicle,
+    [empty] = empty.vehicle,
+}
+g_currentMission.time = 200000
+g_currentMission.vehicleSystem.vehicles = { continuityCombine }
+UnloaderCoordinator.assignments = {}
+UnloaderCoordinator:rebalance(true)
+assert(partial.assignment and partial.assignment.reserved,
+        'A partly filled trailer must be reserved before a closer empty trailer')
+assert(not empty.assignment.reserved, 'Only one trailer may be reserved for a combine')
+
+-- A non-urgent reservation stays in a dynamically distant pool rather than chasing the combine.
+local distantDemandCombine = makeHarvester('Non-urgent combine', 800, false, 600, 800)
+local pooled = makeUnloader('Pooled trailer', 790, true, nil, 0)
+AIDriveStrategyUnloadCombine.activeUnloaders = { [pooled] = pooled.vehicle }
+g_currentMission.time = 300000
+g_currentMission.vehicleSystem.vehicles = { distantDemandCombine }
+UnloaderCoordinator.assignments = {}
+UnloaderCoordinator:rebalance(true)
+assert(pooled.assignment and pooled.assignment.reserved and pooled.assignment.role == 'POOL',
+        'A non-urgent combine trailer must remain reserved in the field pool')
+assert(math.abs(pooled.assignment.waypoint.x - distantDemandCombine.rootNode.x) >= 100,
+        'The pool target must remain well clear of the combine')
+
+-- A soft combine reservation may still be overridden when it is the only trailer available to another combine.
+local firstCombine = makeHarvester('First combine', 0, false, 5, 0)
+local secondCombine = makeHarvester('Second combine', 500, false, 50, 500)
+local onlyTrailer = makeUnloader('Only trailer', 20, true, nil, 30)
+AIDriveStrategyUnloadCombine.activeUnloaders = { [onlyTrailer] = onlyTrailer.vehicle }
+g_currentMission.time = 400000
+g_currentMission.vehicleSystem.vehicles = { firstCombine, secondCombine }
+UnloaderCoordinator.assignments = {}
+UnloaderCoordinator:rebalance(true)
+assert(onlyTrailer.assignment and onlyTrailer.assignment.harvester == firstCombine,
+        'The only trailer should cover the most urgent combine first')
+assert(UnloaderCoordinator:canBeCalledBy(onlyTrailer, secondCombine),
+        'A second combine may call the only softly reserved trailer')
 
 print('UnloaderCoordinatorTest: OK')

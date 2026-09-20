@@ -81,6 +81,7 @@ AIDriveStrategyUnloadCombine = CpObject(AIDriveStrategyCourse)
 AIDriveStrategyUnloadCombine.minDistanceWhenMovingOutOfWay = 5
 -- when moving out of way of another vehicle, move at most so many meters
 AIDriveStrategyUnloadCombine.maxDistanceWhenMovingOutOfWay = 25
+AIDriveStrategyUnloadCombine.minimumHarvesterTurnClearance = 30
 AIDriveStrategyUnloadCombine.safeManeuveringDistance = 30 -- distance to keep from a combine not ready to unload
 AIDriveStrategyUnloadCombine.pathfindingRange = 5 -- won't do pathfinding if target is closer than this
 -- The normal limit to apply a penalty for the pathfinder. This is relatively low to keep the unloader further
@@ -498,9 +499,8 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
     elseif self.state == self.states.MOVING_BACK_WITH_TRAILER_FULL then
         self:setMaxSpeed(self.settings.reverseSpeed:getValue())
         -- drive back to have some room for the pathfinder
-        local _, dx, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
-        -- drive back more if we are close to the harvester
-        if dz > ((math.abs(dx) < self.turningRadius) and 0 or -3) then
+        local d, _, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
+        if dz > 0 and d >= (self.state.properties.clearanceDistance or 0) then
             self:startUnloadingTrailers()
         end
 
@@ -514,8 +514,8 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
             self.combineToUnload:getCpDriveStrategy():hold(1000)
         end
         -- drive back until the combine is in front of us
-        local _, _, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
-        if dz > 0 then
+        local d, _, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
+        if dz > 0 and d >= (self.state.properties.clearanceDistance or 0) then
             self:debug('Stop backing up')
             self:startWaitingForSomethingToDo()
         end
@@ -1051,6 +1051,12 @@ function AIDriveStrategyUnloadCombine:onLastWaypointPassed()
         self:startWaitingForSomethingToDo()
     elseif self.state == self.states.MOVING_BACK_FOR_HEADLAND_TURN then
         self:startWaitingForSomethingToDo()
+    elseif self.state == self.states.MOVING_BACK_WITH_TRAILER_FULL then
+        self:debug('Reached the last field-contained reverse waypoint; starting trailer unload handover')
+        self:startUnloadingTrailers()
+    elseif self.state == self.states.MOVING_BACK then
+        self:debug('Reached the last field-contained reverse waypoint')
+        self:startWaitingForSomethingToDo()
     elseif self.state == self.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL then
         self:debug('Inverted goal position reached, so give control back to the job.')
         self:onTrailerFull()
@@ -1463,11 +1469,23 @@ function AIDriveStrategyUnloadCombine:getPipeOffsetReferenceNode()
     return self.combineToUnload:getCpDriveStrategy():getPipeOffsetReferenceNode()
 end
 
+--- Build the corridor that keeps the complete tractor and trailer combination inside the field polygon.
+---@return table|nil
+function AIDriveStrategyUnloadCombine:getFieldworkBoundaryForRig()
+    local boundaryWidth = AIUtil.getWidth(self.vehicle) + 2
+    for _, childVehicle in ipairs(self.vehicle:getChildVehicles()) do
+        boundaryWidth = math.max(boundaryWidth, AIUtil.getWidth(childVehicle) + 2)
+    end
+    return FieldworkBoundary.forVehicle(self.vehicle, boundaryWidth)
+end
+
 ------------------------------------------------------------------------------------------------------------------------
 -- Pathfinding to moving combine (to a rendezvous waypoint)
 ------------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyUnloadCombine:startPathfindingToMovingCombine(waypoint, xOffset, zOffset)
     local context = PathfinderContext(self.vehicle)
+    self.combinePathBoundary = self:getFieldworkBoundaryForRig()
+    context._fieldworkBoundary = self.combinePathBoundary
     context:maxFruitPercent(self:getMaxFruitPercent())
     context:offFieldPenalty(self:getOffFieldPenalty(self.combineToUnload))
     context:useFieldNum(CpFieldUtil.getFieldNumUnderVehicle(self.combineToUnload))
@@ -1492,6 +1510,11 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToMovingCombine(controlle
         local dx = self.rendezvousWaypoint and self.rendezvousWaypoint.dx
         local dz = self.rendezvousWaypoint and self.rendezvousWaypoint.dz
         course:extend(AIDriveStrategyUnloadCombine.driveToCombineCourseExtensionLength, dx, dz)
+        if not FieldworkBoundary.containsCourse(self.combinePathBoundary, course) then
+            self:debug('Path to moving combine would cross the field polygon; waiting for another call')
+            self:startWaitingForSomethingToDo()
+            return false
+        end
         self:startCourse(course, 1)
         self:setNewState(self.states.DRIVING_TO_MOVING_COMBINE)
         return true
@@ -1507,6 +1530,8 @@ end
 ------------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyUnloadCombine:startPathfindingToWaitingCombine(xOffset, zOffset)
     local context = PathfinderContext(self.vehicle)
+    self.combinePathBoundary = self:getFieldworkBoundaryForRig()
+    context._fieldworkBoundary = self.combinePathBoundary
     local maxFruitPercent = self:getMaxFruitPercent(self:getPipeOffsetReferenceNode(), xOffset, zOffset)
     context:maxFruitPercent(maxFruitPercent)
     context:offFieldPenalty(self:getOffFieldPenalty(self.combineToUnload))
@@ -1522,6 +1547,11 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToWaitingCombine(controll
     if success and self.state == self.states.WAITING_FOR_PATHFINDER then
         self:debug('Pathfinding to waiting combine successful')
         course:adjustForReversing(math.max(1, -AIUtil.getDirectionNodeToReverserNodeOffset(self.vehicle)))
+        if not FieldworkBoundary.containsCourse(self.combinePathBoundary, course) then
+            self:debug('Path to waiting combine would cross the field polygon; waiting for another call')
+            self:startWaitingForSomethingToDo()
+            return false
+        end
         self:startCourse(course, 1)
         self:setNewState(self.states.DRIVING_TO_COMBINE)
         return true
@@ -1732,6 +1762,24 @@ function AIDriveStrategyUnloadCombine:call(combine, waypoint)
     end
 end
 
+---@param harvester table
+---@return boolean
+function AIDriveStrategyUnloadCombine:wasLastAssignedToHarvester(harvester)
+    return self.combineToUnload == harvester or self.combineJustUnloaded == harvester
+end
+
+--- An unloader waiting ahead of a harvester must not cut through crop to reach it. Keep the access-point pool until
+--- the harvester has passed, after which the coordinator may give it a fruit-free position behind the machine.
+---@param harvester table
+---@return boolean
+function AIDriveStrategyUnloadCombine:shouldWaitAtPoolForHarvester(harvester)
+    if not self.settings.avoidFruit:getValue() then
+        return false
+    end
+    local _, _, dz = localToLocal(self.vehicle.rootNode, harvester:getAIDirectionNode(), 0, 0, 0)
+    return dz > 0
+end
+
 ------------------------------------------------------------------------------------------------------------------------
 -- Standby coordination
 ------------------------------------------------------------------------------------------------------------------------
@@ -1762,6 +1810,14 @@ function AIDriveStrategyUnloadCombine:cancelStandbyPathfinding()
     end
 end
 
+function AIDriveStrategyUnloadCombine:holdAtStandbyPosition()
+    self:cancelStandbyPathfinding()
+    if self.state ~= self.states.WAITING_IN_STANDBY then
+        self:setNewState(self.states.WAITING_IN_STANDBY)
+    end
+    self:setMaxSpeed(0)
+end
+
 ---@param assignment table|nil
 function AIDriveStrategyUnloadCombine:clearStandbyAssignment(assignment)
     if assignment and self.standbyAssignment and assignment.harvester ~= self.standbyAssignment.harvester then
@@ -1787,11 +1843,7 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
     local waypoint = assignment.waypoint
     if not waypoint then
         -- During turns the already reached position is safer than chasing a moving target through the manoeuvre.
-        if self:isInStandbyState() then
-            self:cancelStandbyPathfinding()
-            self:setNewState(self.states.WAITING_IN_STANDBY)
-            self:setMaxSpeed(0)
-        end
+        self:holdAtStandbyPosition()
         return
     end
 
@@ -1799,6 +1851,7 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
     if hasFruit then
         self:debug('Standby target for %s still contains fruit, retaining current position',
                 CpUtil.getName(assignment.harvester))
+        self:holdAtStandbyPosition()
         return
     end
 
@@ -1806,15 +1859,14 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
     local distanceToTarget = MathUtil.vector2Length(waypoint.x - vehicleX, waypoint.z - vehicleZ)
     if distanceToTarget < 8 then
         self.standbyTargetX, self.standbyTargetZ = waypoint.x, waypoint.z
-        self:cancelStandbyPathfinding()
-        self:setNewState(self.states.WAITING_IN_STANDBY)
-        self:setMaxSpeed(0)
+        self:holdAtStandbyPosition()
         return
     end
 
-    local sameHarvester = oldAssignment and oldAssignment.harvester == assignment.harvester
+    local sameHarvester = oldAssignment and oldAssignment.harvester == assignment.harvester and
+            oldAssignment.role == assignment.role
     local targetMoved = not self.standbyTargetX or
-            MathUtil.vector2Length(waypoint.x - self.standbyTargetX, waypoint.z - self.standbyTargetZ) > 20
+            MathUtil.vector2Length(waypoint.x - self.standbyTargetX, waypoint.z - self.standbyTargetZ) > 35
     if sameHarvester and not targetMoved and self:isInStandbyState() then
         return
     end
@@ -1827,6 +1879,13 @@ end
 function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypoint)
     self:cancelStandbyPathfinding()
     self.standbyTargetX, self.standbyTargetZ = waypoint.x, waypoint.z
+    self.standbyBoundary = self:getFieldworkBoundaryForRig()
+    if not self.standbyBoundary or not FieldworkBoundary.contains(self.standbyBoundary, waypoint.x, waypoint.z) then
+        self:debug('Standby target for %s is outside the field polygon; retaining current position',
+                CpUtil.getName(harvester))
+        self:holdAtStandbyPosition()
+        return
+    end
     local harvesterStrategy = harvester:getCpDriveStrategy()
     local context = PathfinderContext(self.vehicle)
     context:maxFruitPercent(self:getMaxFruitPercent())
@@ -1835,6 +1894,7 @@ function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypo
     context:areaToAvoid(harvesterStrategy:getAreaToAvoid())
     context:vehiclesToIgnore({ harvester })
     context:maxIterations(PathfinderUtil.getMaxIterationsForFieldPolygon(self.vehicle:cpGetFieldPolygon()))
+    context._fieldworkBoundary = self.standbyBoundary
     self.pathfinderController:registerListeners(self, self.onPathfindingDoneToStandby)
     self:setNewState(self.states.WAITING_FOR_STANDBY_PATHFINDER)
     self:debug('Pathfinding to standby position for %s', CpUtil.getName(harvester))
@@ -1842,6 +1902,10 @@ function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypo
 end
 
 function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, success, course, goalNodeInvalid)
+    if success and not FieldworkBoundary.containsCourse(self.standbyBoundary, course) then
+        self:debug('Standby path would cross the field polygon; rejecting it')
+        success = false
+    end
     if success and self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER and self.standbyAssignment then
         self:debug('Pathfinding to standby position successful')
         course:adjustForReversing(math.max(1, -AIUtil.getDirectionNodeToReverserNodeOffset(self.vehicle)))
@@ -1851,8 +1915,7 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, suc
     end
     self:debug('Pathfinding to standby position failed; retaining current position')
     if self.standbyAssignment then
-        self:setNewState(self.states.WAITING_IN_STANDBY)
-        self:setMaxSpeed(0)
+        self:holdAtStandbyPosition()
     else
         self:setNewState(self.states.IDLE)
     end
@@ -2282,12 +2345,57 @@ function AIDriveStrategyUnloadCombine:startMovingBackFromCombine(newState, combi
         return
     end
 
-    local reverseCourse = Course.createStraightReverseCourse(self.vehicle, 15)
-    self:startCourse(reverseCourse, 1)
+    local requestedDistance = self:getHarvesterTurnClearanceDistance(combine)
+    local reverseCourse, reverseDistance = self:createBoundaryContainedReverseCourse(requestedDistance)
     self:setNewState(newState)
     self.state.properties.vehicle = combine
     self.state.properties.holdCombine = holdCombineWhileMovingBack
+    self.state.properties.clearanceDistance = math.min(requestedDistance, reverseDistance)
+    if reverseCourse then
+        self:debug('Backing %.1f m away from %s for turn clearance', reverseDistance, CpUtil.getName(combine))
+        self:startCourse(reverseCourse, 1)
+    else
+        self:debug('No reverse course remains inside the field polygon; retaining current position')
+        if newState == self.states.MOVING_BACK_WITH_TRAILER_FULL then
+            self:startUnloadingTrailers()
+        else
+            self:startWaitingForSomethingToDo()
+        end
+    end
     return
+end
+
+---@param harvester table|nil
+---@return number
+function AIDriveStrategyUnloadCombine:getHarvesterTurnClearanceDistance(harvester)
+    if not harvester then
+        return self.minimumHarvesterTurnClearance
+    end
+    local strategy = harvester.getCpDriveStrategy and harvester:getCpDriveStrategy()
+    local workWidth = strategy and strategy.getWorkWidth and strategy:getWorkWidth() or AIUtil.getWidth(harvester)
+    return math.max(self.minimumHarvesterTurnClearance,
+            workWidth + AIUtil.getLength(self.vehicle) / 2 + AIUtil.getLength(harvester) / 2 + 5)
+end
+
+---@param requestedDistance number
+---@param backMarker number|nil
+---@return Course|nil, number
+function AIDriveStrategyUnloadCombine:createBoundaryContainedReverseCourse(requestedDistance, backMarker)
+    local boundaryWidth = AIUtil.getWidth(self.vehicle) + 2
+    for _, childVehicle in ipairs(self.vehicle:getChildVehicles()) do
+        boundaryWidth = math.max(boundaryWidth, AIUtil.getWidth(childVehicle) + 2)
+    end
+    local boundary = FieldworkBoundary.forVehicle(self.vehicle, boundaryWidth)
+    if not boundary then
+        return nil, 0
+    end
+    for distance = requestedDistance, 5, -2 do
+        local course = Course.createStraightReverseCourse(self.vehicle, distance, 0, backMarker)
+        if FieldworkBoundary.containsCourse(boundary, course) then
+            return course, distance
+        end
+    end
+    return nil, 0
 end
 
 ------------------------------------------------------------------------------------------------------------------------
@@ -2487,8 +2595,13 @@ function AIDriveStrategyUnloadCombine:requestToBackupForReversingCombine(blocked
 
         self:setNewState(self.states.BACKING_UP_FOR_REVERSING_COMBINE)
         local _, backMarker = Markers.getMarkerNodes(self.vehicle)
-        local reverseCourse = Course.createStraightReverseCourse(self.vehicle,
-                AIDriveStrategyUnloadCombine.maxDistanceWhenMovingOutOfWay, 0, backMarker)
+        local reverseCourse = self:createBoundaryContainedReverseCourse(
+                self:getHarvesterTurnClearanceDistance(blockedVehicle), backMarker)
+        if not reverseCourse then
+            self:debug('Cannot back up for %s without crossing the field polygon', blockedVehicle:getName())
+            self:setNewState(self.stateAfterMovedOutOfWay)
+            return
+        end
         self:startCourse(reverseCourse, 1)
         self:debug('Backing up for reversing %s', blockedVehicle:getName())
         self.state.properties.vehicle = blockedVehicle
@@ -2527,14 +2640,14 @@ function AIDriveStrategyUnloadCombine:startMakingRoomForCombineTurningOnHeadland
     self:setNewState(self.states.MOVING_BACK_FOR_HEADLAND_TURN)
     -- reversing almost straight is better this
     self.ppc:setNormalLookaheadDistance()
-    if self.reverseForTurnCourse then
-        -- if we have a follow course from before the turn, then use that
-        self.reverseForTurnCourse:setOffset(self.followingCourseOffset, 0)
-        self:startCourse(self.reverseForTurnCourse, 1)
-    else
-        local reverseCourse = Course.createStraightReverseCourse(self.vehicle,
-                AIDriveStrategyUnloadCombine.maxDistanceWhenMovingOutOfWay)
+    local reverseCourse = self:createBoundaryContainedReverseCourse(
+            self:getHarvesterTurnClearanceDistance(combine))
+    if reverseCourse then
         self:startCourse(reverseCourse, 1)
+    else
+        self:debug('Cannot make more turn room without crossing the field polygon')
+        self:startWaitingForSomethingToDo()
+        return
     end
     self.state.properties.vehicle = combine
     self.state.properties.holdCombine = true
@@ -2546,7 +2659,7 @@ end
 function AIDriveStrategyUnloadCombine:makeRoomForCombineTurningOnHeadland()
     local dProximity, _ = self.proximityController:checkBlockingVehicleFront()
     local d, _, dz = self:getDistanceFromCombine(self.combineToUnload)
-    local dLimit = 0.6 * self.combineToUnload:getCpDriveStrategy():getWorkWidth()
+    local dLimit = self:getHarvesterTurnClearanceDistance(self.combineToUnload)
     -- if we are already behind the harvester's back and far enough and not blocking it and
     -- not in our proximity, then stop
     if dz > 0 and d > dLimit and dProximity > dLimit then

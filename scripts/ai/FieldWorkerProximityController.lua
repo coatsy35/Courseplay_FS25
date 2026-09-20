@@ -11,6 +11,8 @@ FieldWorkerProximityController.sameDirectionLimit = math.rad(45)
 -- Other vehicles are considered only as long as the lateral distance to them is less than
 -- lateralDistanceLimit * working width
 FieldWorkerProximityController.lateralDistanceLimit = 1.1
+FieldWorkerProximityController.minimumTurnClearance = 30
+FieldWorkerProximityController.turnSlowDownBand = 20
 
 function FieldWorkerProximityController:init(vehicle, workingWidth)
     self.vehicle = vehicle
@@ -127,9 +129,47 @@ function FieldWorkerProximityController:getFieldWorkProximity(node)
     return minDistance
 end
 
+local function isDrivingToWorkStart(strategy)
+    return strategy and strategy.states and strategy.state == strategy.states.DRIVING_TO_WORK_START_WAYPOINT
+end
+
+local function isTurningOrManeuvering(strategy)
+    return strategy and ((strategy.isTurning and strategy:isTurning()) or
+            (strategy.isManeuvering and strategy:isManeuvering()) or
+            (strategy.isAboutToTurn and strategy:isAboutToTurn())) or false
+end
+
+---@param otherVehicle table
+---@param otherStrategy table
+---@return boolean
+function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy)
+    local myStrategy = self.vehicle:getCpDriveStrategy()
+    local myStarting = isDrivingToWorkStart(myStrategy)
+    local otherStarting = isDrivingToWorkStart(otherStrategy)
+    if myStarting ~= otherStarting then
+        return myStarting
+    end
+    local myManeuvering = isTurningOrManeuvering(myStrategy)
+    local otherManeuvering = isTurningOrManeuvering(otherStrategy)
+    if myManeuvering ~= otherManeuvering then
+        return not myManeuvering
+    end
+    return false
+end
+
+---@param otherVehicle table
+---@param otherStrategy table
+---@return number
+function FieldWorkerProximityController:getPhysicalTurnClearance(otherVehicle, otherStrategy)
+    local otherWorkWidth = otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or AIUtil.getWidth(otherVehicle)
+    return math.max(self.minimumTurnClearance, math.max(self.workingWidth, otherWorkWidth) +
+            AIUtil.getLength(self.vehicle) / 2 + AIUtil.getLength(otherVehicle) / 2 + 5)
+end
+
 --- Limit our speed if there are vehicles in front of us in the same or adjacent row
 function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpeed)
     local minDistanceFromOthers = math.huge
+    local physicalSpeedLimit = currentMaxSpeed
     -- our trail should be long enough for everyone on the field, that is, at least as long as their
     -- convoy distance setting.
     local maxConvoyDistance = distanceLimit
@@ -151,6 +191,22 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                     distanceFromOther, distanceLimit, CpUtil.getName(otherVehicle))
                     minDistanceFromOthers = math.min(minDistanceFromOthers, distanceFromOther)
                 end
+                -- Trail distance becomes misleading while another machine turns or drives back to its work-start
+                -- waypoint. The yielding machine therefore also observes the real separation and stops outside an
+                -- envelope based on both vehicle lengths and the wider header.
+                if self:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy) then
+                    local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+                    local ox, _, oz = getWorldTranslation(otherVehicle.rootNode)
+                    local physicalDistance = MathUtil.vector2Length(ox - x, oz - z)
+                    local clearance = self:getPhysicalTurnClearance(otherVehicle, otherStrategy)
+                    if physicalDistance < clearance + self.turnSlowDownBand then
+                        local factor = CpMathUtil.clamp(
+                                (physicalDistance - clearance) / self.turnSlowDownBand, 0, 1)
+                        physicalSpeedLimit = math.min(physicalSpeedLimit, currentMaxSpeed * factor)
+                        self:debugSparse('yielding to %s at %.1f m for %.1f m turn clearance, speed %.1f',
+                                CpUtil.getName(otherVehicle), physicalDistance, clearance, physicalSpeedLimit)
+                    end
+                end
             end
         end
     end
@@ -165,7 +221,7 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
         self.slowDownFactor:update(1)
     end
 
-    local maxSpeed = currentMaxSpeed * self.slowDownFactor:get()
+    local maxSpeed = math.min(currentMaxSpeed * self.slowDownFactor:get(), physicalSpeedLimit)
     -- everything low enough should be 0 so it does not trigger the Giants didNotMoveTimer (which is disabled
     -- only when the maxSpeed we return in getDriveData is exactly 0
     maxSpeed = maxSpeed > 1 and maxSpeed or 0

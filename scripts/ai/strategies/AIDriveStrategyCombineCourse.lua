@@ -1005,6 +1005,7 @@ end
 --- target (combine or waypoint)
 function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
     local bestScore = -math.huge
+    local bestPriority = -math.huge
     local bestUnloader, bestEte
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         if AIDriveStrategyUnloadCombine.isActiveCpCombineUnloader(vehicle) then
@@ -1025,10 +1026,18 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
                         unloaderDistance, unloaderEte = driveStrategy:getDistanceAndEteToWaypoint(waypoint)
                     end
                     local score = unloaderFillLevelPercentage - 0.1 * unloaderDistance
-                    self:debug('findUnloader: %s idle on my field, fill level %.1f, distance %.1f, ETE %.1f, score %.1f)',
-                            CpUtil.getName(vehicle), unloaderFillLevelPercentage, unloaderDistance, unloaderEte, score)
-                    if score > bestScore then
+                    -- A partly filled trailer already represents an incomplete field cycle. Prefer it to an empty
+                    -- trailer even when the empty one is parked ahead and has a shorter straight-line journey.
+                    local priority = unloaderFillLevelPercentage > 0.1 and 2 or 0
+                    if UnloaderCoordinator:isReservedFor(driveStrategy, self.vehicle) then
+                        priority = priority + 1
+                    end
+                    self:debug('findUnloader: %s idle on my field, fill level %.1f, distance %.1f, ETE %.1f, priority %d, score %.1f)',
+                            CpUtil.getName(vehicle), unloaderFillLevelPercentage, unloaderDistance, unloaderEte,
+                            priority, score)
+                    if priority > bestPriority or priority == bestPriority and score > bestScore then
                         bestUnloader = vehicle
+                        bestPriority = priority
                         bestScore = score
                         bestEte = unloaderEte
                     end
@@ -1041,8 +1050,8 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
         end
     end
     if bestUnloader then
-        self:debug('findUnloader: best unloader is %s (score %.1f, ETE %.1f)',
-                CpUtil.getName(bestUnloader), bestScore, bestEte)
+        self:debug('findUnloader: best unloader is %s (priority %d, score %.1f, ETE %.1f)',
+                CpUtil.getName(bestUnloader), bestPriority, bestScore, bestEte)
         return bestUnloader, bestEte
     else
         self:debug('findUnloader: no idle unloader found')
