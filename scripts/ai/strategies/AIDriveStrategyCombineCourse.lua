@@ -21,6 +21,7 @@ AIDriveStrategyCombineCourse = CpObject(AIDriveStrategyFieldWorkCourse)
 
 -- fill level when we start making a pocket to unload if we are on the outermost headland
 AIDriveStrategyCombineCourse.pocketFillLevelFullPercentage = 95
+AIDriveStrategyCombineCourse.pocketCurveToleranceFactor = 0.05
 AIDriveStrategyCombineCourse.safeUnloadDistanceBeforeEndOfRow = 30
 AIDriveStrategyCombineCourse.turnClearanceLookAhead = 30
 -- when fill level is above this threshold, don't start the next row if the pipe would be
@@ -152,6 +153,7 @@ function AIDriveStrategyCombineCourse:setAllStaticParameters()
     -- when making a pocket, how far to back up before changing to forward
     -- for very long vehicles, like potato/sugar beet harvesters the 20 meters may not be enough
     self.pocketReverseDistance = AIUtil.getVehicleAndImplementsTotalLength(self.vehicle) * 2.2
+    self.pocketCourseSuitability = {}
     -- register ourselves at our boss
     -- TODO_22 g_combineUnloadManager:addCombineToList(self.vehicle, self)
     self.waitingForUnloaderAtEndOfRow = CpTemporaryObject()
@@ -262,7 +264,11 @@ function AIDriveStrategyCombineCourse:getDriveData(dt, vX, vY, vZ)
         self:checkRendezvous()
         self:checkBlockingUnloader()
 
-        if self:isFull() then
+        if self.startPocketBeforeUnsafeSection then
+            self.startPocketBeforeUnsafeSection = false
+            self:debug('Predicted tank capacity will not reach the next safe pocket section')
+            self:changeToUnloadOnField()
+        elseif self:isFull() then
             self:changeToUnloadOnField()
         elseif self:alwaysNeedsUnloader() then
             if not self.pipeController:isFillableTrailerUnderPipe() then
@@ -527,18 +533,13 @@ function AIDriveStrategyCombineCourse:onWaypointPassed(ix, course)
 
     self:checkFruit()
 
-    -- make sure we start making a pocket while we still have some fill capacity left as we'll be
-    -- harvesting fruit while making the pocket unless we have self unload turned on
-    if self:shouldMakePocket() and not self.settings.selfUnload:getValue() then
-        self.fillLevelFullPercentage = self.pocketFillLevelFullPercentage
-    end
-
     local isOnHeadland = self.course:isOnHeadland(ix)
     self.combineController:updateStrawSwath(isOnHeadland)
 
     if self.state == self.states.WORKING then
         if not self:alwaysNeedsUnloader() then
             self:estimateDistanceUntilFull(ix)
+            self:updatePocketUnloadPlan(ix)
             self:callUnloaderWhenNeeded()
         end
     end
@@ -569,7 +570,7 @@ function AIDriveStrategyCombineCourse:onLastWaypointPassed()
             self.state = self.states.UNLOADING_ON_FIELD
             self.unloadState = self.states.MAKING_POCKET
             -- offset the main fieldwork course and start on it
-            self.aiOffsetX = math.min(self.pullBackRightSideOffset, self:getWorkWidth())
+            self.aiOffsetX = self:getPocketCourseOffset()
             self:startRememberedCourse()
         elseif self.unloadState == self.states.PULLING_BACK_FOR_UNLOAD then
             -- pulled back, now wait for unload
@@ -819,6 +820,7 @@ function AIDriveStrategyCombineCourse:estimateDistanceUntilFull(ix)
     end
     local litersUntilFull = capacity - fillLevel
     local dUntilFull = CpMathUtil.divide(litersUntilFull, self.litersPerMeter)
+    self.distanceUntilFull = dUntilFull
     local litersUntilCallUnloader = capacity * self.settings.callUnloaderPercent:getValue() / 100 - fillLevel
     local dUntilCallUnloader = CpMathUtil.divide(litersUntilCallUnloader, self.litersPerMeter)
     self.waypointIxWhenFull = self.course:getNextWaypointIxWithinDistance(ix, dUntilFull) or self.course:getNumberOfWaypoints()
@@ -1298,15 +1300,141 @@ function AIDriveStrategyCombineCourse:getAreaToAvoid()
     end
 end
 
+--- Lateral offset used while driving into a pocket. Keep it within the actual working width in either direction.
+function AIDriveStrategyCombineCourse:getPocketCourseOffset()
+    return CpMathUtil.clamp(self.pullBackRightSideOffset, -self:getWorkWidth(), self:getWorkWidth())
+end
+
+--- Check that the whole reverse-and-offset pocket corridor is sufficiently straight and remains within the field.
+--- A curved headland may contain no explicit turn waypoint, but offsetting that curve still produces an unsafe pocket.
+---@param startIx number
+---@return boolean, number|nil, string|nil suitable, reverse waypoint, rejection reason
+function AIDriveStrategyCombineCourse:isPocketCourseSectionSuitable(startIx)
+    local boundary = FieldworkBoundary.forVehicle(self.vehicle, self:getWorkWidth())
+    local boundaryPolygon = boundary and boundary.polygon or nil
+    if self.pocketSuitabilityCourse ~= self.course or self.pocketSuitabilityPolygon ~= boundaryPolygon then
+        self.pocketCourseSuitability = {}
+        self.pocketSuitabilityCourse = self.course
+        self.pocketSuitabilityPolygon = boundaryPolygon
+    end
+    local cached = self.pocketCourseSuitability[startIx]
+    if cached then
+        return cached.suitable, cached.backIx, cached.reason
+    end
+
+    local function remember(suitable, backIx, reason)
+        self.pocketCourseSuitability[startIx] = { suitable = suitable, backIx = backIx, reason = reason }
+        return suitable, backIx, reason
+    end
+
+    local backIx = self.course:getPreviousWaypointIxWithinDistance(startIx, self.pocketReverseDistance)
+    if not backIx or startIx - backIx <= 2 then
+        return remember(false, backIx, 'not enough course behind')
+    end
+    for i = backIx, startIx do
+        if self.course:isTurnStartAtIx(i) or self.course:isTurnEndAtIx(i) or self.course:isReverseAt(i) then
+            return remember(false, backIx, string.format('turn or reverse at waypoint %d', i))
+        end
+    end
+
+    local backX, _, backZ = self.course:getWaypointPosition(backIx)
+    local startX, _, startZ = self.course:getWaypointPosition(startIx)
+    local chordX, chordZ = startX - backX, startZ - backZ
+    local chordLength = MathUtil.vector2Length(chordX, chordZ)
+    if chordLength < self.pocketReverseDistance / 2 then
+        return remember(false, backIx, 'reverse section folds back on itself')
+    end
+    local curveTolerance = math.max(0.5, self:getWorkWidth() * self.pocketCurveToleranceFactor)
+    for i = backIx + 1, startIx - 1 do
+        local x, _, z = self.course:getWaypointPosition(i)
+        local deviation = math.abs((x - backX) * chordZ - (z - backZ) * chordX) / chordLength
+        if deviation > curveTolerance then
+            return remember(false, backIx, string.format('course bends %.1f m from its chord', deviation))
+        end
+    end
+
+    if boundary then
+        local courseOffsetX, courseOffsetZ = self.course:getOffset()
+        local pocketOffset = self:getPocketCourseOffset()
+        local previousX, previousZ
+        for i = backIx, startIx do
+            local x, _, z = self.course:getWaypoint(i):getOffsetPosition(courseOffsetX + pocketOffset, courseOffsetZ)
+            if not FieldworkBoundary.contains(boundary, x, z) or
+                    previousX and not FieldworkBoundary.containsSegment(boundary, previousX, previousZ, x, z, false) then
+                return remember(false, backIx, string.format('offset corridor leaves the field at waypoint %d', i))
+            end
+            previousX, previousZ = x, z
+        end
+    end
+    return remember(true, backIx, nil)
+end
+
+--- Use the measured harvest rate to choose the last safe pocket before a curved section, or carry through the
+--- curve and make the pocket once a complete straight reversing section is available again.
+function AIDriveStrategyCombineCourse:updatePocketUnloadPlan(ix)
+    self.startPocketBeforeUnsafeSection = false
+    if self.settings.selfUnload:getValue() or not self:shouldMakePocket() then
+        self.fillLevelFullPercentage = self.normalFillLevelFullPercentage
+        return
+    end
+
+    local startIx = self.ppc:getLastPassedWaypointIx() or self.ppc:getCurrentWaypointIx() or ix
+    local suitable, _, reason = self:isPocketCourseSectionSuitable(startIx)
+    local distanceToCourseEnd = self.course:getDistanceToLastWaypoint(startIx)
+    local willFillOnCourse = self.distanceUntilFull and self.distanceUntilFull <= distanceToCourseEnd
+    if not self.waypointIxWhenFull or not willFillOnCourse then
+        self.fillLevelFullPercentage = suitable and self.pocketFillLevelFullPercentage or self.normalFillLevelFullPercentage
+        return
+    end
+
+    local firstUnsafeIx, nextSafeIx
+    for candidateIx = startIx + 1, math.min(self.waypointIxWhenFull, self.course:getNumberOfWaypoints()) do
+        local candidateSuitable = self:isPocketCourseSectionSuitable(candidateIx)
+        if not candidateSuitable then
+            firstUnsafeIx = firstUnsafeIx or candidateIx
+        elseif firstUnsafeIx then
+            nextSafeIx = candidateIx
+            break
+        end
+    end
+
+    if not suitable then
+        if nextSafeIx then
+            self.fillLevelFullPercentage = self.normalFillLevelFullPercentage
+            self:debugSparse('Pocket deferred until straight section at waypoint %d (%s)', nextSafeIx, reason or 'unsafe section')
+        else
+            self.fillLevelFullPercentage = self.pocketFillLevelFullPercentage
+        end
+        return
+    end
+
+    if firstUnsafeIx and nextSafeIx then
+        self.fillLevelFullPercentage = self.normalFillLevelFullPercentage
+        self:debugSparse('Pocket deferred across curved section to waypoint %d', nextSafeIx)
+        return
+    end
+
+    self.fillLevelFullPercentage = self.pocketFillLevelFullPercentage
+    if firstUnsafeIx and not nextSafeIx then
+        local distanceToUnsafe = self.course:getDistanceBetweenWaypoints(startIx, firstUnsafeIx)
+        local preparationDistance = math.max(self.pocketReverseDistance, self:getWorkWidth())
+        if distanceToUnsafe <= preparationDistance and self.combineController:getFillLevel() > 0 then
+            self.startPocketBeforeUnsafeSection = true
+            self:debug('Starting pocket %.1f m before unsafe curved section at waypoint %d',
+                    distanceToUnsafe, firstUnsafeIx)
+        end
+    end
+end
+
 --- Create a temporary course to make a pocket in the fruit on the right (or left), so we can move into that pocket and
 --- wait for the unload there. This way the unload tractor does not have to leave the field.
 --- We create a temporary course to reverse back far enough. After that, we return to the main course but
 --- set an offset to the right (or left)
 function AIDriveStrategyCombineCourse:createPocketCourse()
     local startIx = self.ppc:getLastPassedWaypointIx() or self.ppc:getCurrentWaypointIx()
-    -- find the waypoint we want to back up to
-    local backIx = self.course:getPreviousWaypointIxWithinDistance(startIx, self.pocketReverseDistance)
-    if not backIx then
+    local suitable, backIx, reason = self:isPocketCourseSectionSuitable(startIx)
+    if not suitable then
+        self:debug('Pocket rejected at waypoint %d: %s', startIx, reason or 'unsafe course section')
         return nil
     end
     -- this where we are back on track after returning from the pocket
@@ -1315,10 +1443,6 @@ function AIDriveStrategyCombineCourse:createPocketCourse()
     if startIx - backIx > 2 then
         local pocketReverseWaypoints = {}
         for i = startIx, backIx, -1 do
-            if self.course:isTurnStartAtIx(i) then
-                self:debug('There is a turn behind me at waypoint %d, no pocket', i)
-                return nil
-            end
             local x, _, z = self.course:getWaypointPosition(i)
             table.insert(pocketReverseWaypoints, { x = x, z = z, rev = true })
         end
