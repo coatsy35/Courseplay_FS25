@@ -593,7 +593,11 @@ function AIDriveStrategyUnloadCombine:isNextDriveSegmentInsideField(gx, gz)
     if self.unloadTargetType ~= self.UNLOAD_TYPES.COMBINE or not gx or not gz then
         return true
     end
-    local boundary = self:getFieldworkBoundaryForRig()
+    -- A pipe-side destination can legitimately sit inside the field polygon but closer to its edge than the
+    -- conservative circular rig envelope permits. Use the actual field polygon while serving an assigned combine;
+    -- provisional staging, clearance moves and return routes retain the full-rig corridor.
+    local boundary = self.combineToUnload and self:getFieldworkBoundaryForCombineApproach() or
+            self:getFieldworkBoundaryForRig()
     if not boundary then
         return true
     end
@@ -1645,12 +1649,31 @@ function AIDriveStrategyUnloadCombine:getFieldworkBoundaryForRig()
     return self.rigFieldworkBoundary
 end
 
+--- Keep active combine approaches inside the actual field polygon without invalidating a normal pipe-side target
+--- near an edge. Full-rig clearance remains in force for unattended staging and clearance manoeuvres.
+---@return table|nil
+function AIDriveStrategyUnloadCombine:getFieldworkBoundaryForCombineApproach()
+    local fieldPolygon = self.vehicle:cpGetFieldPolygon()
+    if not fieldPolygon or #fieldPolygon < 3 then
+        return nil
+    end
+    if self.combineApproachBoundary and self.combineApproachBoundary.polygon == fieldPolygon then
+        return self.combineApproachBoundary
+    end
+    self.combineApproachBoundary = {
+        polygon = fieldPolygon,
+        margin = 0,
+        islands = self.vehicle.cpGetIslandPolygons and self.vehicle:cpGetIslandPolygons() or {}
+    }
+    return self.combineApproachBoundary
+end
+
 ------------------------------------------------------------------------------------------------------------------------
 -- Pathfinding to moving combine (to a rendezvous waypoint)
 ------------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyUnloadCombine:startPathfindingToMovingCombine(waypoint, xOffset, zOffset)
     local context = PathfinderContext(self.vehicle)
-    self.combinePathBoundary = self:getFieldworkBoundaryForRig()
+    self.combinePathBoundary = self:getFieldworkBoundaryForCombineApproach()
     context._fieldworkBoundary = self.combinePathBoundary
     context:maxFruitPercent(self:getMaxFruitPercent())
     context:offFieldPenalty(self:getOffFieldPenalty(self.combineToUnload))
@@ -1696,7 +1719,7 @@ end
 ------------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyUnloadCombine:startPathfindingToWaitingCombine(xOffset, zOffset)
     local context = PathfinderContext(self.vehicle)
-    self.combinePathBoundary = self:getFieldworkBoundaryForRig()
+    self.combinePathBoundary = self:getFieldworkBoundaryForCombineApproach()
     context._fieldworkBoundary = self.combinePathBoundary
     local maxFruitPercent = self:getMaxFruitPercent(self:getPipeOffsetReferenceNode(), xOffset, zOffset)
     context:maxFruitPercent(maxFruitPercent)
@@ -1705,7 +1728,7 @@ function AIDriveStrategyUnloadCombine:startPathfindingToWaitingCombine(xOffset, 
     context:areaToAvoid(self.combineToUnload:getCpDriveStrategy():getAreaToAvoid())
     context:vehiclesToIgnore({}):maxIterations(PathfinderUtil.getMaxIterationsForFieldPolygon(self.vehicle:cpGetFieldPolygon()))
     self.pathfinderController:registerListeners(self, self.onPathfindingDoneToWaitingCombine,
-            self.onPathfindingFailedToStationaryTarget, self.onPathfindingObstacleAtStart)
+            self.onPathfindingFailedToWaitingCombine, self.onPathfindingObstacleAtStart)
     self.pathfinderController:findPathToNode(context, self:getPipeOffsetReferenceNode(), xOffset or 0, zOffset or 0, 3)
 end
 
@@ -1722,10 +1745,36 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToWaitingCombine(controll
         self:setNewState(self.states.DRIVING_TO_COMBINE)
         return true
     else
-        self:debug('Pathfinding to waiting combine failed')
-        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        self:debug('Pathfinding to waiting combine failed; retaining the job and trying a safe approach')
+        return self:recoverFromFailedCombineApproach()
+    end
+end
+
+--- A failed exact pipe approach must not dismiss the tractor. Move to a harvested point behind the assigned
+--- combine and let the normal pocket/follow logic make the final approach when the geometry is suitable.
+---@return boolean
+function AIDriveStrategyUnloadCombine:recoverFromFailedCombineApproach()
+    local combine = self.combineToUnload
+    local waypoint = combine and UnloaderCoordinator:getStagingWaypoint(combine)
+    if not waypoint then
+        self:debug('No safe approach waypoint is available; releasing the call for coordinator reassignment')
+        self:startWaitingForSomethingToDo()
         return false
     end
+    self.rendezvousWaypoint = waypoint
+    self.approachingPocketStandby = true
+    self:setNewState(self.states.WAITING_FOR_PATHFINDER)
+    self:debug('Recovering the call via a safe harvested approach behind %s', CpUtil.getName(combine))
+    self:startPathfindingToMovingCombine(waypoint, 0, 0)
+    return true
+end
+
+function AIDriveStrategyUnloadCombine:onPathfindingFailedToWaitingCombine(...)
+    self:debug('Pathfinding to waiting combine failed.')
+    self:onPathfindingFailed(
+            function()
+                self:recoverFromFailedCombineApproach()
+            end, ...)
 end
 
 -- Use as a default pathfinder controller failure callback for stationary targets, where retrying later with the

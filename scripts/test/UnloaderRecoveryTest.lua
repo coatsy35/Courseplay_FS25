@@ -145,4 +145,36 @@ strategy:requestFullTrailerHandover('boundary')
 strategy:requestFullTrailerHandover('boundary repeated')
 assert(handovers == 2, 'A boundary-triggered full-trailer handover must only be requested once')
 
+-- Active approaches use the actual field polygon. The full-rig boundary remains deliberately stricter for
+-- unattended staging and clearance moves, but must not reject a normal pipe-side target near an edge.
+local polygon = { {}, {}, {} }
+strategy.vehicle = {
+    cpGetFieldPolygon = function() return polygon end,
+    cpGetIslandPolygons = function() return { 'island' } end,
+    stopCurrentAIJob = function() error('Approach recovery must not stop the AI job') end,
+}
+strategy.combineApproachBoundary = nil
+local approachBoundary = strategy:getFieldworkBoundaryForCombineApproach()
+assert(approachBoundary.polygon == polygon and approachBoundary.margin == 0 and
+        approachBoundary.islands[1] == 'island',
+        'A combine approach must use the field polygon without the conservative full-rig inset')
+
+-- A rejected exact pipe route recovers through a harvested point behind the assigned combine and retains both the
+-- running worker and the active assignment.
+local recoveryStarted = false
+strategy.combineToUnload = combine
+strategy.states.WAITING_FOR_PATHFINDER = {}
+strategy.setNewState = function(self, state) self.state = state end
+strategy.startPathfindingToMovingCombine = function(_, waypoint)
+    recoveryStarted = waypoint.x == 12 and waypoint.z == 34
+end
+UnloaderCoordinator.getStagingWaypoint = function(_, harvester)
+    assert(harvester == combine, 'Recovery must retain the assigned combine')
+    return { x = 12, z = 34 }
+end
+assert(strategy:recoverFromFailedCombineApproach(),
+        'A failed exact pipe approach must recover through an in-field staging point')
+assert(recoveryStarted and strategy.combineToUnload == combine,
+        'Approach recovery must retain the active combine assignment')
+
 print('UnloaderRecoveryTest: OK')
