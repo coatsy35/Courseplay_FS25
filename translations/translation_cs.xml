@@ -1056,6 +1056,12 @@ hud还显示助手工作时堆或思洛存储器的剩余填充水平。
     <!---->
     <!--Implement profiles-->
     <!---->
+    <text name="CP_implementProfiles_categoryTitle" text="Profile category"/>
+    <text name="CP_implementProfiles_categoryPrompt" text="Choose where this profile should appear."/>
+    <text name="CP_implementProfiles_uncategorised" text="Uncategorised"/>
+    <text name="CP_implementProfiles_newCategory" text="New custom category"/>
+    <text name="CP_implementProfiles_categoryName" text="Category name"/>
+    <text name="CP_implementProfiles_invalidCategory" text="Enter a category name without line breaks."/>
     <text name="CP_implementProfiles_setupHeading" text="Implement setup"/>
     <text name="CP_implementProfiles_selectorTitle" text="Implement profile"/>
     <text name="CP_implementProfiles_selectorTooltip" text="Profiles matching the detected attached equipment. Select a profile, then choose Load profile or press the centre of the selector. Loading changes the working settings; generate the course afterwards."/>

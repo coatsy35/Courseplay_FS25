@@ -3314,6 +3314,12 @@ TPS extension
 		-->
 	</Category>
 	<Category name="Implement profiles">
+        <Translation name="CP_implementProfiles_categoryTitle"><Text language="en"><![CDATA[Profile category]]></Text></Translation>
+        <Translation name="CP_implementProfiles_categoryPrompt"><Text language="en"><![CDATA[Choose where this profile should appear.]]></Text></Translation>
+        <Translation name="CP_implementProfiles_uncategorised"><Text language="en"><![CDATA[Uncategorised]]></Text></Translation>
+        <Translation name="CP_implementProfiles_newCategory"><Text language="en"><![CDATA[New custom category]]></Text></Translation>
+        <Translation name="CP_implementProfiles_categoryName"><Text language="en"><![CDATA[Category name]]></Text></Translation>
+        <Translation name="CP_implementProfiles_invalidCategory"><Text language="en"><![CDATA[Enter a category name without line breaks.]]></Text></Translation>
 		<Translation name="CP_implementProfiles_setupHeading"><Text language="en"><![CDATA[Implement setup]]></Text></Translation>
         <Translation name="CP_implementProfiles_selectorTitle">
 			<Text language="en"><![CDATA[Implement profile]]></Text>

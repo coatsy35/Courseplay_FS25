@@ -19,6 +19,10 @@ localToLocal = function(node) return 0, 0, node end
 table.clone = ImplementProfile.copy
 InputAction = {MENU_ACTIVATE = 1, MENU_EXTRA_1 = 2, MENU_EXTRA_2 = 3, MENU_CANCEL = 4, CP_PROFILE_RENAME = 5, CP_PROFILE_DELETE = 6}
 g_i18n = {getText = function(_, text) return text end}
+Utils = {getFilenameInfo = function(path, withoutExtension)
+    local name = path:gsub('\\', '/'):match('[^/]+$')
+    return withoutExtension and name:gsub('%.[^%.]+$', '') or name
+end}
 g_gui = {getIsGuiVisible = function() return true end}
 require('CpImplementProfileGui')
 require('ImplementProfileManager')
@@ -105,9 +109,26 @@ local function profileFor(v)
         equipment = ImplementProfile.describe(v), settings = ImplementProfile.capture(v)}
 end
 
+-- Shop fixtures deliberately supply metadata independently of vehicle specialisations.
+local function shopItem(object, categories)
+    table.insert(g_storeManager.items, {xmlFilename = object.configFileName,
+        customEnvironment = object.customEnvironment, categoryNames = categories})
+end
+
 TestImplementProfiles = {}
 function TestImplementProfiles:setUp()
     files, failCopy, broadcasts = {}, nil, 0
+    g_storeManager = {
+        items = {}, categories = {PLOWS = {name = 'PLOWS', title = 'Ploughs'},
+            SOWINGMACHINES = {name = 'SOWINGMACHINES', title = 'Seed drills'},
+            MOD_AIR_CARTS = {name = 'MOD_AIR_CARTS', title = 'Air carts'}},
+        getItems = function(self) return self.items end,
+        getCategoryByName = function(self, name) return self.categories[name:upper()] end
+    }
+    shopItem(implement('plough'), {'PLOWS'})
+    shopItem(implement('drill'), {'SOWINGMACHINES'})
+    -- Ordinary save tests accept the first shop category; chooser tests control this boundary explicitly.
+    OptionDialog = {show = function(callback) callback(1) end}
     g_time = 0
     g_server = {broadcastEvent = function() broadcasts = broadcasts + 1 end}
     g_currentMission = {accessHandler = {
@@ -197,7 +218,7 @@ function TestImplementProfiles:testSelfPropelledWorkingMachineIsItsOwnEquipment(
     local equipment = ImplementProfile.describe(machine)
     lu.assertEquals(#equipment, 1)
     lu.assertEquals(equipment[1].mount, 'self')
-    lu.assertEquals(equipment[1].group, 'harvesters')
+    lu.assertEquals(equipment[1].group, '')
     lu.assertEquals(ImplementProfile.describe(vehicle('tractor', {})), {})
 end
 
@@ -207,7 +228,7 @@ function TestImplementProfiles:testHarvesterAndRemovableHeaderFormCompleteCombin
     local profile = profileFor(machine)
     lu.assertEquals(#profile.equipment, 2)
     lu.assertEquals(profile.equipment[1].mount, 'self')
-    lu.assertEquals(profile.equipment[2].group, 'headers')
+    lu.assertEquals(profile.equipment[2].group, '')
     machine.attachments[1].object = implement('headerB', 'spec_cutter')
     lu.assertNotEquals(ImplementProfile.match(profile, ImplementProfile.describe(machine)), 'exact')
     machine.attachments = {}
@@ -1057,7 +1078,7 @@ function TestImplementProfiles:testExpandableTypeAndModelTree()
     frame.setMenuButtonInfoDirty = function() end
     frame:refresh()
     lu.assertEquals(#frame.rows, 4)
-    lu.assertEquals(frame.rows[1].key, 'ploughs')
+    lu.assertEquals(frame.rows[1].key, 'shop:PLOWS')
     frame:toggleRow(frame.rows[1])
     lu.assertEquals(#frame.rows, 1)
     frame:toggleRow(frame.rows[1])
@@ -1072,7 +1093,7 @@ function TestImplementProfiles:testExpandableTypeAndModelTree()
     lu.assertEquals(#frame.rows, 2)
 end
 
-function TestImplementProfiles:testCombinationAppearsUnderItsComponentTypes()
+function TestImplementProfiles:testLegacyChainAppearsOnceUnderUncategorised()
     local v = vehicle(nil, {{object = implement('plough')}, {object = implement('drill', 'spec_sowingMachine')}})
     local profile = g_Courseplay.implementProfiles:save(v, 'Combination')
     local frame = CpImplementProfilesFrame.new()
@@ -1087,38 +1108,301 @@ function TestImplementProfiles:testCombinationAppearsUnderItsComponentTypes()
         if row.key then categories[row.key] = true end
         if row.profile then lu.assertEquals(row.profile.id, profile.id); links = links + 1 end
     end
-    lu.assertTrue(categories.combinations)
-    lu.assertTrue(categories.ploughs)
-    lu.assertTrue(categories.seedDrills)
-    lu.assertEquals(links, 3)
+    lu.assertTrue(categories.uncategorised)
+    lu.assertNil(categories.ploughs)
+    lu.assertNil(categories.seedDrills)
+    lu.assertEquals(links, 1)
 end
 
--- Harvester/header profiles share one directory section without changing equipment identity.
-function TestImplementProfiles:testHarvestersAndHeadersAreListedOnlyUnderHarvesters()
-    local setups = {
-        vehicle('combine', {{object = implement('header', 'spec_cutter')}}),
-        vehicle('tractor', {{object = implement('header', 'spec_cutter')}, {object = implement('trailer', 'spec_trailer')}}),
-        vehicle('integratedHarvester', {})
-    }
-    setups[1].spec_combine, setups[3].spec_combine = {}, {}
+-- Existing saved equipment metadata is sufficient; no profile migration or machine-name special case.
+function TestImplementProfiles:testSeedDrillAndBinHaveOneDirectoryEntryAfterReload()
+    local drill = implement('Seed Hawk 84', 'spec_sowingMachine')
+    local bin = implement('PD 1000', 'spec_trailer')
+    shopItem(drill, {'SOWINGMACHINES'})
+    shopItem(bin, {'MOD_AIR_CARTS'})
+    drill.attachments = {{object = bin}}
+    local v = vehicle(nil, {{object = drill}})
     local manager = g_Courseplay.implementProfiles
+    local saved = manager:save(v, '3 Headlands', nil, 'shop:SOWINGMACHINES')
+    manager:load()
+    local before = ImplementProfile.copy(manager.profiles[saved.id])
     local frame = CpImplementProfilesFrame.new()
-    frame.attachedOnly = false
-    for i, v in ipairs(setups) do
-        local profile = manager:save(v, 'Harvest setup ' .. i)
-        frame.equipment = ImplementProfile.describe(v)
+    frame.equipment = ImplementProfile.describe(v)
+    for _, attachedOnly in ipairs({false, true}) do
+        frame.attachedOnly = attachedOnly
         local groups = frame:buildGroups()
-        lu.assertNil(groups.combinations)
-        lu.assertNotNil(groups.harvesters)
-        lu.assertNil(groups.headers)
+        lu.assertEquals(groups['shop:SOWINGMACHINES'].count, 1)
         lu.assertNil(groups.other)
-        lu.assertEquals(groups.harvesters.count, i)
-        lu.assertEquals(ImplementProfile.match(profile, frame.equipment), 'exact')
+        lu.assertNil(groups.combinations)
+        local _, model = next(groups['shop:SOWINGMACHINES'].models)
+        lu.assertStrContains(model.title, 'Seed Hawk 84')
+        lu.assertStrContains(model.title, 'PD 1000')
+        lu.assertEquals(#model.profiles, 1)
+        lu.assertEquals(model.profiles[1].profile.id, saved.id)
+        lu.assertEquals(model.profiles[1].match, 'exact')
     end
-    -- Ordinary multi-implement setups must still appear alongside their component categories.
-    local tractor = vehicle(nil, {{object = implement('plough')}, {object = implement('drill', 'spec_sowingMachine')}})
-    manager:save(tractor, 'Fieldwork combination')
-    lu.assertEquals(frame:buildGroups().combinations.count, 1)
+    lu.assertEquals(manager.profiles[saved.id], before)
+    -- Display grouping must not allow loading the setup without its bin.
+    drill.attachments = {}
+    lu.assertNotEquals(ImplementProfile.match(before, ImplementProfile.describe(v)), 'exact')
+end
+
+function TestImplementProfiles:testShopMetadataOverridesLegacyGroupsAndSupportsModsAndMultipleCategories()
+    local mod = implement('machine', 'spec_plow')
+    mod.configFileName, mod.customEnvironment = 'H:/mods/FS25_AirTools/machine.xml', 'FS25_AirTools'
+    shopItem(mod, {'MOD_AIR_CARTS', 'SOWINGMACHINES'})
+    local equipment = ImplementProfile.describe(vehicle(nil, {{object = mod}}))
+    equipment[1].group = 'harvesters' -- Historical CP metadata must have no influence.
+    lu.assertEquals(ImplementProfile.directoryGroups(equipment), {'shop:MOD_AIR_CARTS', 'shop:SOWINGMACHINES'})
+    lu.assertEquals(ImplementProfile.directoryGroup(equipment), 'uncategorised')
+    lu.assertEquals(ImplementProfile.categoryTitle('shop:MOD_AIR_CARTS'), 'Air carts')
+    g_storeManager.categories.MOD_AIR_CARTS.title = 'Translated category'
+    lu.assertEquals(ImplementProfile.categoryTitle('shop:MOD_AIR_CARTS'), 'Translated category')
+    g_storeManager.items[3].categoryNames = {'PLOWS'} -- Store reload must be reflected without stale cache.
+    lu.assertEquals(ImplementProfile.directoryGroup(equipment), 'shop:PLOWS')
+end
+
+function TestImplementProfiles:testDlcCleanModelAndRelativeBasegamePathsResolveToShop()
+    local dlc = implement('dlc', 'spec_sowingMachine')
+    dlc.configFileName = 'H:/Games/FS25/pdlc/examplePack/vehicles/drill/drill.xml'
+    dlc.configFileNameClean, dlc.customEnvironment = 'drill', 'pdlc_examplePack'
+    shopItem(dlc, {'SOWINGMACHINES'})
+    local base = implement('base')
+    base.configFileName = 'data/vehicles/tools/tool.xml'
+    shopItem(base, {'PLOWS'})
+    local equipment = ImplementProfile.describe(vehicle(nil, {{object = dlc}, {object = base}}))
+    lu.assertEquals(equipment[1].model, 'pdlc_examplepack:drill')
+    lu.assertEquals(equipment[2].model, 'basegame:data/vehicles/tools/tool.xml')
+    lu.assertEquals(ImplementProfile.directoryGroups(equipment), {'shop:PLOWS', 'shop:SOWINGMACHINES'})
+end
+
+function TestImplementProfiles:testOldLibraryLoadsWithoutRewritingIdentityOrGuessingChains()
+    local v, manager = vehicle(), g_Courseplay.implementProfiles
+    local profile = manager:save(v, 'Legacy', nil, 'ploughs')
+    profile.equipment[1].group = 'ploughs'
+    lu.assertTrue(manager:persist(manager.profiles, manager.nextId))
+    manager:load()
+    local old = manager.profiles[profile.id]
+    lu.assertEquals(old.category, 'ploughs')
+    lu.assertEquals(old.equipment[1].group, 'ploughs')
+    lu.assertEquals(ImplementProfile.directoryGroup(old.equipment, old.category), 'shop:PLOWS')
+    lu.assertEquals(ImplementProfile.match(old, ImplementProfile.describe(v)), 'exact')
+    g_storeManager.items = {}
+    lu.assertEquals(ImplementProfile.directoryGroup(old.equipment, old.category), 'uncategorised')
+    lu.assertEquals(ImplementProfile.directoryGroup(old.equipment, 'shop:MISSING_MOD'), 'shop:MISSING_MOD')
+    lu.assertEquals(ImplementProfile.categoryTitle('shop:MISSING_MOD'), 'MISSING_MOD')
+end
+
+-- The category is personal library metadata, preserved independently of the current vehicle settings.
+function TestImplementProfiles:testChosenCategoryPersistsThroughReloadRenameUpdateAndEdit()
+    local v = vehicle(nil, {{object = implement('plough')}, {object = implement('drill', 'spec_sowingMachine')}})
+    local manager = g_Courseplay.implementProfiles
+    local saved = manager:save(v, 'Mixed setup', nil, 'shop:SOWINGMACHINES')
+    lu.assertNotNil(saved)
+    manager:load()
+    local current = manager.profiles[saved.id]
+    lu.assertEquals(current.category, 'shop:SOWINGMACHINES')
+    current = manager:rename(current, 'Renamed setup')
+    lu.assertEquals(current.category, 'shop:SOWINGMACHINES')
+    current = manager:save(v, current.name, current)
+    lu.assertEquals(current.category, 'shop:SOWINGMACHINES')
+    for name, setting in pairs(v.vehicleSettings) do CpVehicleSettings[name] = setting end
+    for name, setting in pairs(v.generatorSettings) do CpCourseGeneratorSettings[name] = setting end
+    local moved = manager:edit(current, current.settings, 'shop:PLOWS')
+    lu.assertNotNil(moved)
+    lu.assertEquals(moved.settings, current.settings)
+    lu.assertEquals(moved.category, 'shop:PLOWS')
+    local frame = CpImplementProfilesFrame.new()
+    frame.equipment, frame.attachedOnly = ImplementProfile.describe(v), false
+    local groups = frame:buildGroups()
+    lu.assertEquals(groups['shop:PLOWS'].count, 1)
+    lu.assertNil(groups['shop:SOWINGMACHINES'])
+    lu.assertNil(groups.combinations)
+    lu.assertNil(manager:edit(current, current.settings, 'shop:SOWINGMACHINES')) -- stale revision
+    lu.assertNil(manager:edit(moved, moved.settings, 'custom:')) -- empty custom name
+    lu.assertEquals(manager.profiles[moved.id], moved)
+    local custom = manager:edit(moved, moved.settings, 'custom:Autumn work')
+    lu.assertEquals(custom.category, 'custom:Autumn work')
+    custom = manager:rename(custom, 'Autumn setup')
+    custom = manager:save(v, custom.name, custom)
+    manager:load()
+    lu.assertEquals(manager.profiles[custom.id].category, 'custom:Autumn work')
+    lu.assertEquals(manager.profiles[custom.id].settings, moved.settings)
+    lu.assertEquals(frame:buildGroups()['custom:Autumn work'].count, 1)
+end
+
+function TestImplementProfiles:testMixedSetupAsksForOneCategoryBeforeSaving()
+    local v = vehicle(nil, {{object = implement('plough')}, {object = implement('drill', 'spec_sowingMachine')}})
+    local nameCallback, categoryCallback, choices, saved
+    local oldText, oldOption = TextInputDialog, OptionDialog
+    TextInputDialog = {show = function(callback) nameCallback = callback end}
+    OptionDialog = {show = function(callback, title, prompt, options)
+        categoryCallback, choices = callback, options
+        lu.assertEquals(title, 'CP_implementProfiles_categoryTitle')
+        lu.assertEquals(prompt, 'CP_implementProfiles_categoryPrompt')
+    end}
+    local function open()
+        CpImplementProfileGui.saveNew(function() return v end, 'CP_implementProfiles_saveNew', function(profile) saved = profile end)
+        nameCallback(nil, 'Working setup', true)
+    end
+    open()
+    lu.assertNil(next(g_Courseplay.implementProfiles.profiles))
+    lu.assertEquals(choices, {'Ploughs', 'Seed drills', 'CP_implementProfiles_newCategory'})
+    categoryCallback(0)
+    lu.assertNil(next(g_Courseplay.implementProfiles.profiles))
+    open()
+    categoryCallback(2)
+    lu.assertEquals(saved.category, 'shop:SOWINGMACHINES')
+    lu.assertEquals(saved.settings, ImplementProfile.capture(v))
+    TextInputDialog, OptionDialog = oldText, oldOption
+end
+
+function TestImplementProfiles:testEditCategoryCancellationKeepsDraftUntilSaved()
+    local v = vehicle(nil, {{object = implement('plough')}, {object = implement('drill', 'spec_sowingMachine')}})
+    local manager = g_Courseplay.implementProfiles
+    local original = manager:save(v, 'Existing mixed setup')
+    for name, setting in pairs(v.vehicleSettings) do CpVehicleSettings[name] = setting end
+    for name, setting in pairs(v.generatorSettings) do CpCourseGeneratorSettings[name] = setting end
+    local frame = CpImplementProfilesFrame.new()
+    frame.editDraft = ImplementProfile.copy(original)
+    frame.editDraft.settings['generator.numberOfHeadlands'] = 12
+    frame.setEditingControls, frame.refresh = function() end, function() end
+    local oldOption, oldFocus = OptionDialog, FocusManager
+    local choose
+    OptionDialog = {show = function(callback) choose = callback end}
+    FocusManager = {setFocus = function() end}
+    frame:finishEdit(true)
+    choose(0)
+    lu.assertNotNil(frame.editDraft)
+    lu.assertEquals(manager.profiles[original.id].revision, 1)
+    frame:finishEdit(true)
+    choose(2)
+    lu.assertNil(frame.editDraft)
+    lu.assertEquals(manager.profiles[original.id].category, 'shop:SOWINGMACHINES')
+    lu.assertEquals(manager.profiles[original.id].settings['generator.numberOfHeadlands'], 12)
+    lu.assertEquals(manager.profiles[original.id].revision, 2)
+    lu.assertEquals(v.generatorSettings.numberOfHeadlands.value, 1)
+    OptionDialog, FocusManager = oldOption, oldFocus
+end
+
+function TestImplementProfiles:testCategoryPromptRejectsChangedEquipment()
+    local v = vehicle(nil, {{object = implement('plough')}, {object = implement('drill', 'spec_sowingMachine')}})
+    local nameCallback, categoryCallback, errorText
+    local oldText, oldOption, oldInfo = TextInputDialog, OptionDialog, InfoDialog
+    TextInputDialog = {show = function(callback) nameCallback = callback end}
+    OptionDialog = {show = function(callback) categoryCallback = callback end}
+    InfoDialog = {show = function(text) errorText = text end}
+    CpImplementProfileGui.saveNew(function() return v end, 'CP_implementProfiles_saveNew', function() error('must not save') end)
+    nameCallback(nil, 'Old equipment', true)
+    v.attachments = {{object = implement('different drill', 'spec_sowingMachine')}}
+    categoryCallback(2)
+    lu.assertEquals(errorText, 'CP_implementProfiles_mismatch')
+    lu.assertNil(next(g_Courseplay.implementProfiles.profiles))
+    TextInputDialog, OptionDialog, InfoDialog = oldText, oldOption, oldInfo
+end
+
+function TestImplementProfiles:testSameCategoryChainStillAsksAndDoesNotSaveOnCancel()
+    local drill = implement('drill', 'spec_sowingMachine')
+    local bin = implement('bin', 'spec_trailer')
+    shopItem(bin, {'SOWINGMACHINES'})
+    drill.attachments = {{object = bin}}
+    local v = vehicle(nil, {{object = drill}})
+    local choose, selected, options
+    OptionDialog = {show = function(callback, _, _, texts) choose, options = callback, texts end}
+    CpImplementProfileGui.chooseCategory(ImplementProfile.describe(v), function(key) selected = key end)
+    lu.assertNil(selected)
+    lu.assertEquals(options, {'Seed drills', 'CP_implementProfiles_newCategory'})
+    choose(0)
+    lu.assertNil(selected)
+    choose(1)
+    lu.assertEquals(selected, 'shop:SOWINGMACHINES')
+end
+
+function TestImplementProfiles:testHarvesterChainUsesChosenShopCategoryWithoutExceptions()
+    local header = implement('header', 'spec_cutter')
+    local v = vehicle('combine', {{object = header}})
+    v.spec_combine = {}
+    g_storeManager.categories.COMBINES = {name = 'COMBINES', title = 'Harvesters'}
+    g_storeManager.categories.CUTTERS = {name = 'CUTTERS', title = 'Headers'}
+    shopItem(v, {'COMBINES'})
+    shopItem(header, {'CUTTERS'})
+    local equipment = ImplementProfile.describe(v)
+    lu.assertEquals(ImplementProfile.directoryGroups(equipment), {'shop:COMBINES', 'shop:CUTTERS'})
+    local manager = g_Courseplay.implementProfiles
+    manager:save(v, 'Header setup', nil, 'shop:CUTTERS')
+    local frame = CpImplementProfilesFrame.new()
+    frame.equipment, frame.attachedOnly = equipment, false
+    local groups = frame:buildGroups()
+    lu.assertNil(groups['shop:COMBINES'])
+    lu.assertEquals(groups['shop:CUTTERS'].count, 1)
+end
+
+-- Custom category input must survive persistence and must not act on a changed attachment.
+function TestImplementProfiles:testCustomCategoryNamingCancellationValidationAndReuse()
+    local v, manager = vehicle(), g_Courseplay.implementProfiles
+    local oldText, oldInfo = TextInputDialog, InfoDialog
+    local categoryCallback, nameCallback, saved, errorText, options
+    OptionDialog = {show = function(callback, _, _, texts) categoryCallback, options = callback, texts end}
+    TextInputDialog = {show = function(callback, target)
+        lu.assertEquals(target, CpImplementProfileGui)
+        nameCallback = callback
+    end}
+    InfoDialog = {show = function(text) errorText = text end}
+    local function open()
+        CpImplementProfileGui.saveNew(function() return v end, 'CP_implementProfiles_saveNew', function(p) saved = p end)
+        nameCallback(nil, 'Custom setup', true)
+        categoryCallback(#options)
+    end
+    open()
+    nameCallback(nil, 'Cancelled', false)
+    lu.assertNil(next(manager.profiles))
+    open()
+    nameCallback(nil, '   ', true)
+    lu.assertEquals(errorText, 'CP_implementProfiles_invalidCategory')
+    lu.assertNil(next(manager.profiles))
+    open()
+    nameCallback(nil, '  Spring work  ', true)
+    lu.assertEquals(saved.category, 'custom:Spring work')
+    manager:load()
+    lu.assertEquals(manager.profiles[saved.id].category, 'custom:Spring work')
+    lu.assertEquals(ImplementProfile.categoryTitle(saved.category), 'Spring work')
+    local chosen
+    CpImplementProfileGui.chooseCategory(saved.equipment, function(key) chosen = key end)
+    lu.assertEquals(options, {'Ploughs', 'Spring work', 'CP_implementProfiles_newCategory'})
+    categoryCallback(#options)
+    nameCallback(nil, 'spring WORK', true)
+    lu.assertEquals(chosen, 'custom:Spring work')
+    open()
+    v.attachments = {{object = implement('different')}}
+    nameCallback(nil, 'New category', true)
+    lu.assertEquals(errorText, 'CP_implementProfiles_mismatch')
+    local count = 0
+    for _ in pairs(manager.profiles) do count = count + 1 end
+    lu.assertEquals(count, 1)
+    TextInputDialog, InfoDialog = oldText, oldInfo
+end
+
+function TestImplementProfiles:testEditKeepsSavedCategoryAsFirstChoiceWithoutDuplicateOptions()
+    local options, selected
+    OptionDialog = {show = function(callback, _, _, texts) options = texts; callback(1) end}
+    local v = vehicle(nil, {{object = implement('plough')}, {object = implement('drill')}})
+    CpImplementProfileGui.chooseCategory(ImplementProfile.describe(v), function(key) selected = key end, 'shop:SOWINGMACHINES')
+    lu.assertEquals(options, {'Seed drills', 'Ploughs', 'CP_implementProfiles_newCategory'})
+    lu.assertEquals(selected, 'shop:SOWINGMACHINES')
+end
+
+function TestImplementProfiles:testMissingEquipmentCanUseCustomCategory()
+    g_storeManager.items = {}
+    local choices, choose, nameCallback, selected
+    local oldText = TextInputDialog
+    OptionDialog = {show = function(callback, _, _, texts) choose, choices = callback, texts end}
+    TextInputDialog = {show = function(callback) nameCallback = callback end}
+    CpImplementProfileGui.chooseCategory(ImplementProfile.describe(vehicle()), function(key) selected = key end)
+    lu.assertEquals(choices, {'CP_implementProfiles_newCategory'})
+    choose(1)
+    nameCallback(nil, 'Unlisted equipment', true)
+    lu.assertEquals(selected, 'custom:Unlisted equipment')
+    TextInputDialog = oldText
 end
 
 function TestImplementProfiles:testSaveFromFieldworkSettings()
