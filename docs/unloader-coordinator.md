@@ -14,6 +14,8 @@ independent unloaders from clustering behind the nearest machine.
 - Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. The
   distance starts at roughly 100 metres and grows with time until demand, header width and the number of pool
   trailers. A safe position reached from an AutoDrive field access point is held rather than continually moved.
+- A pooled trailer inside an approaching combine's swept path moves clear before the normal blocked-vehicle timeout.
+  Fruit-protected access-point waits remain stationary until the combine passes, as configured.
 - A trailer waiting ahead with fruit avoidance enabled stays at its access-point pool until the harvester passes and
   a fruit-free route behind it becomes available.
 - A partly filled trailer receives the normal Courseplay distance-weighted preference, so nearby combines finish its
@@ -30,7 +32,8 @@ polygon. Courseplay stops at the last safe position when no contained route exis
 AutoDrive handover. A tractor handed over just outside an access point may only drive inwards.
 After unloading, the tractor reverses by a distance derived from header width and both vehicle lengths. Fieldwork
 traffic also applies the same physical turn envelope when trail-based convoy distance is unreliable during turns or
-the drive back to a work-start waypoint.
+the drive back to a work-start waypoint. A combine waiting in a pocket or pull-back holds until the unloader reaches
+that clearance position and deregisters, subject to the existing five-second minimum pause.
 
 ## Settings
 

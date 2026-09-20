@@ -488,3 +488,12 @@ function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
     end
     return true
 end
+
+--- The combine keeps the unloader registered while it reverses to its calculated clearance position.
+--- Waiting for deregistration prevents a pocket or pull-back return starting after an arbitrary short timer.
+---@param unloader AIDriveStrategyUnloadCombine|nil
+---@param harvester table
+---@return boolean
+function UnloaderCoordinator:isStillClearingHarvester(unloader, harvester)
+    return unloader and unloader.getCombineToUnload and unloader:getCombineToUnload() == harvester or false
+end

@@ -415,8 +415,10 @@ function AIDriveStrategyCombineCourse:driveUnloadOnField()
         end
     elseif self.unloadState == self.states.WAITING_FOR_UNLOADER_TO_LEAVE then
         self:setMaxSpeed(0)
-        -- TODO: instead of just wait a few seconds we could check if the unloader has actually left
-        if self.waitingForUnloaderSince + 5000 < g_currentMission.time then
+        local minimumWaitFinished = self.waitingForUnloaderSince + 5000 < g_currentMission.time
+        local unloaderStillClearing = UnloaderCoordinator:isStillClearingHarvester(
+                self.unloader:get(), self.vehicle)
+        if minimumWaitFinished and not unloaderStillClearing then
             if self.stateBeforeWaitingForUnloaderToLeave == self.states.WAITING_FOR_UNLOAD_AFTER_PULLED_BACK then
                 local pullBackReturnCourse = self.pathfinderController:findAnalyticPathFromVehicleToGoal(
                         self.positionToContinueAfterPullback, self:getAllowReversePathfinding())
@@ -446,6 +448,8 @@ function AIDriveStrategyCombineCourse:driveUnloadOnField()
                 self:debug('Unloading finished, previous state not known, returning to fieldwork')
                 self:changeToFieldWork()
             end
+        elseif minimumWaitFinished then
+            self:debugSparse('Unloader is still reversing to its safe clearance position')
         end
     elseif self:isUnloadStateOneOf(self.drivingToSelfUnloadStates) then
         if self:isCloseToCourseEnd(25) then

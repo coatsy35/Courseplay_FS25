@@ -123,6 +123,10 @@ assert(not UnloaderCoordinator:canBeCalledBy(nearForager, combine),
         'Another harvester must not take a firm forage relief reservation')
 assert(UnloaderCoordinator:canBeCalledBy(spare, combine),
         'Soft combine staging must not exclude a better trailer from a real call')
+assert(UnloaderCoordinator:isStillClearingHarvester(active, forager),
+        'A registered unloader must keep its harvester waiting while it clears')
+assert(not UnloaderCoordinator:isStillClearingHarvester(active, combine),
+        'An unloader serving another harvester must not delay this combine')
 
 -- A partly filled trailer wins while it remains close enough to justify finishing its load.
 local continuityCombine = makeHarvester('Continuity combine', 500, false, 10, 500)

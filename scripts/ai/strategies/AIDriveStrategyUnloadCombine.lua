@@ -1813,10 +1813,46 @@ function AIDriveStrategyUnloadCombine:updateStandbyCoordinator()
         self:startUnloadingTrailers()
         return
     end
+    if self.state == self.states.WAITING_IN_STANDBY and self:moveOutOfApproachingHarvesterPath() then
+        return
+    end
     if self.checkStandbyPosition:get() then
         self.checkStandbyPosition:set(false, UnloaderCoordinator.rebalanceIntervalMs)
         UnloaderCoordinator:update(self)
     end
+end
+
+--- Leave a combine's swept path before its proximity controller has to stop and wait for the normal blocked-vehicle
+--- timeout. A fruit-protected access-point wait remains stationary until the harvester has passed, as configured.
+---@return boolean
+function AIDriveStrategyUnloadCombine:moveOutOfApproachingHarvesterPath()
+    if not self.standbyAssignment or self.standbyAssignment.waitUntilHarvesterPasses then
+        return false
+    end
+    local closestHarvester, closestDz
+    local rigWidth = AIUtil.getWidth(self.vehicle)
+    for _, childVehicle in ipairs(self.vehicle:getChildVehicles()) do
+        rigWidth = math.max(rigWidth, AIUtil.getWidth(childVehicle))
+    end
+    for _, harvester in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if AIDriveStrategyCombineCourse.isActiveCpCombine(harvester) then
+            local strategy = harvester:getCpDriveStrategy()
+            local dx, _, dz = localToLocal(self.vehicle.rootNode, harvester:getAIDirectionNode(), 0, 0, 0)
+            local lateralClearance = strategy:getWorkWidth() / 2 + rigWidth / 2 + 2
+            local approachDistance = self:getHarvesterTurnClearanceDistance(harvester) + 20
+            if dz > 0 and dz < approachDistance and math.abs(dx) < lateralClearance and
+                    (not closestDz or dz < closestDz) then
+                closestHarvester, closestDz = harvester, dz
+            end
+        end
+    end
+    if closestHarvester then
+        self:debug('%s is approaching my standby position; moving clear before blocking it',
+                CpUtil.getName(closestHarvester))
+        self:requestToMoveOutOfWay(closestHarvester)
+        return true
+    end
+    return false
 end
 
 function AIDriveStrategyUnloadCombine:isInStandbyState()
@@ -2394,8 +2430,12 @@ function AIDriveStrategyUnloadCombine:getHarvesterTurnClearanceDistance(harveste
     end
     local strategy = harvester.getCpDriveStrategy and harvester:getCpDriveStrategy()
     local workWidth = strategy and strategy.getWorkWidth and strategy:getWorkWidth() or AIUtil.getWidth(harvester)
+    local unloaderLength = AIUtil.getVehicleAndImplementsTotalLength and
+            AIUtil.getVehicleAndImplementsTotalLength(self.vehicle) or AIUtil.getLength(self.vehicle)
+    local harvesterLength = AIUtil.getVehicleAndImplementsTotalLength and
+            AIUtil.getVehicleAndImplementsTotalLength(harvester) or AIUtil.getLength(harvester)
     return math.max(self.minimumHarvesterTurnClearance,
-            workWidth + AIUtil.getLength(self.vehicle) / 2 + AIUtil.getLength(harvester) / 2 + 5)
+            workWidth + unloaderLength / 2 + harvesterLength / 2 + 5)
 end
 
 ---@param requestedDistance number
@@ -2540,6 +2580,9 @@ function AIDriveStrategyUnloadCombine:onBlockingVehicle(blockingVehicle, isBack)
 end
 
 function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle)
+    if self.standbyAssignment then
+        UnloaderCoordinator:release(self)
+    end
     self:onBlockingVehicle(vehicle)
 end
 

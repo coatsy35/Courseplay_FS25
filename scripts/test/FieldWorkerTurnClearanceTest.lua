@@ -21,14 +21,14 @@ local states = {
     DRIVING_TO_WORK_START_WAYPOINT = {},
 }
 
-local function makeStrategy(state, workWidth)
+local function makeStrategy(state, workWidth, aboutToTurn)
     return {
         states = states,
         state = state,
         getWorkWidth = function() return workWidth end,
         isTurning = function(self) return self.state == states.TURNING end,
         isManeuvering = function(self) return self.state == states.TURNING end,
-        isAboutToTurn = function() return false end,
+        isAboutToTurn = function() return aboutToTurn or false end,
     }
 end
 
@@ -46,6 +46,8 @@ end
 local workingVehicle, working = makeVehicle('Working combine', states.WORKING, 14, 10)
 local startingVehicle, starting = makeVehicle('Starting combine', states.DRIVING_TO_WORK_START_WAYPOINT, 14, 10)
 local turningVehicle, turning = makeVehicle('Turning combine', states.TURNING, 14, 10)
+local approachingTurnVehicle, approachingTurn = makeVehicle('Combine approaching turn', states.WORKING, 14, 10)
+approachingTurn.isAboutToTurn = function() return true end
 
 local startingController = {
     vehicle = startingVehicle,
@@ -66,6 +68,8 @@ assert(not workingController:mustYieldPhysicalTurnClearance(startingVehicle, sta
         'The working combine must retain priority over a combine returning to work')
 assert(workingController:mustYieldPhysicalTurnClearance(turningVehicle, turning),
         'A working combine must yield to another combine already turning')
+assert(workingController:mustYieldPhysicalTurnClearance(approachingTurnVehicle, approachingTurn),
+        'A following combine must yield before the combine ahead begins its turn')
 assert(workingController:getPhysicalTurnClearance(turningVehicle, turning) >= 29,
         'Turn clearance must account for the header and both vehicle lengths')
 
