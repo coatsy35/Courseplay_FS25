@@ -22,6 +22,7 @@ AIDriveStrategyCombineCourse = CpObject(AIDriveStrategyFieldWorkCourse)
 -- fill level when we start making a pocket to unload if we are on the outermost headland
 AIDriveStrategyCombineCourse.pocketFillLevelFullPercentage = 95
 AIDriveStrategyCombineCourse.safeUnloadDistanceBeforeEndOfRow = 30
+AIDriveStrategyCombineCourse.turnClearanceLookAhead = 30
 -- when fill level is above this threshold, don't start the next row if the pipe would be
 -- in the fruit
 AIDriveStrategyCombineCourse.waitForUnloadAtEndOfRowFillLevelThreshold = 95
@@ -1398,7 +1399,7 @@ end
 ---@return boolean the combine is about to turn
 function AIDriveStrategyCombineCourse:isAboutToTurn()
     if self.state == self.states.WORKING and self.course then
-        return self.course:isCloseToNextTurn(10)
+        return self.course:isCloseToNextTurn(math.max(self.turnClearanceLookAhead, 2 * self:getWorkWidth()))
     else
         return false
     end

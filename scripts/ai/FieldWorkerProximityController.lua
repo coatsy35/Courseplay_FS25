@@ -11,8 +11,8 @@ FieldWorkerProximityController.sameDirectionLimit = math.rad(45)
 -- Other vehicles are considered only as long as the lateral distance to them is less than
 -- lateralDistanceLimit * working width
 FieldWorkerProximityController.lateralDistanceLimit = 1.1
-FieldWorkerProximityController.minimumTurnClearance = 30
-FieldWorkerProximityController.turnSlowDownBand = 20
+FieldWorkerProximityController.minimumTurnClearance = 50
+FieldWorkerProximityController.turnSlowDownBand = 30
 
 function FieldWorkerProximityController:init(vehicle, workingWidth)
     self.vehicle = vehicle
@@ -162,8 +162,9 @@ end
 ---@return number
 function FieldWorkerProximityController:getPhysicalTurnClearance(otherVehicle, otherStrategy)
     local otherWorkWidth = otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or AIUtil.getWidth(otherVehicle)
-    return math.max(self.minimumTurnClearance, math.max(self.workingWidth, otherWorkWidth) +
-            AIUtil.getLength(self.vehicle) / 2 + AIUtil.getLength(otherVehicle) / 2 + 5)
+    local widestHeader = math.max(self.workingWidth, otherWorkWidth)
+    return math.max(self.minimumTurnClearance, 2 * widestHeader +
+            AIUtil.getLength(self.vehicle) / 2 + AIUtil.getLength(otherVehicle) / 2 + 10)
 end
 
 --- Limit our speed if there are vehicles in front of us in the same or adjacent row

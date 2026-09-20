@@ -34,6 +34,9 @@ After unloading, the tractor reverses by a distance derived from header width an
 traffic also applies the same physical turn envelope when trail-based convoy distance is unreliable during turns or
 the drive back to a work-start waypoint. A combine waiting in a pocket or pull-back holds until the unloader reaches
 that clearance position and deregisters, subject to the existing five-second minimum pause.
+Following-combine turn clearance scales at twice the wider header plus half of both vehicle lengths and a ten-metre
+margin, with a 50-metre minimum and a further 30-metre slowdown band. This gives approximately 50 metres stopped
+clearance for 15-metre headers and 56 metres for 18-metre headers.
 
 ## Settings
 

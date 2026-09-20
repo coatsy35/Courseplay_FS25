@@ -70,7 +70,20 @@ assert(workingController:mustYieldPhysicalTurnClearance(turningVehicle, turning)
         'A working combine must yield to another combine already turning')
 assert(workingController:mustYieldPhysicalTurnClearance(approachingTurnVehicle, approachingTurn),
         'A following combine must yield before the combine ahead begins its turn')
-assert(workingController:getPhysicalTurnClearance(turningVehicle, turning) >= 29,
+assert(workingController:getPhysicalTurnClearance(turningVehicle, turning) >= 50,
         'Turn clearance must account for the header and both vehicle lengths')
+
+local wideLeadingVehicle, wideLeading = makeVehicle('18 metre combine', states.TURNING, 18, 10)
+local wideFollowingController = {
+    vehicle = workingVehicle,
+    workingWidth = 15,
+    minimumTurnClearance = FieldWorkerProximityController.minimumTurnClearance,
+}
+setmetatable(wideFollowingController, { __index = FieldWorkerProximityController })
+assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wideLeading) >= 56,
+        'An 18 metre header must retain at least 56 metres of physical turn clearance')
+assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wideLeading) +
+        FieldWorkerProximityController.turnSlowDownBand >= 86,
+        'An 18 metre header must start slowing the following combine at least 86 metres away')
 
 print('FieldWorkerTurnClearanceTest: OK')
