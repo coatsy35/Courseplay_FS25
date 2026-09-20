@@ -1,8 +1,8 @@
 # Combine corner pocket
 
-Test build 005 uses version `8.1.0.322`, filename
-`FS25_Courseplay_ImplementProfilesTest.zip` and the in-game title
-`CoursePlay - Implement Profiles Test`.
+Test build 006 uses version `8.1.0.323`, filename
+`FS25_Courseplay_CombinePocketTest.zip` and the in-game title
+`CoursePlay - Combine Pocket Test`.
 
 On the outermost headland, the combine's square-corner pocket now places its
 second forward cut one complete working width inside the first cut. This keeps
