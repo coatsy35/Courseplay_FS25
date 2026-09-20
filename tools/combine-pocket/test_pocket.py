@@ -18,7 +18,7 @@ class CombinePocketTurnTests(unittest.TestCase):
         self.lua.execute('CpDebug = {DBG_TURN=1}')
         self.lua.execute((ROOT / 'scripts/ai/turns/AITurn.lua').read_text(encoding='utf-8-sig'))
 
-    def test_second_cut_is_one_complete_working_width_from_first(self):
+    def test_stock_pocket_geometry_is_uniformly_doubled(self):
         self.lua.execute('''
             CpFieldUtil = {isOnField=function() return true end}
             Course = function(_, waypoints)
@@ -45,9 +45,11 @@ class CombinePocketTurnTests(unittest.TestCase):
             local course, endIx = turn:generatePocketHeadlandTurn(context)
             assert(endIx == 42)
             assert(#course.waypoints == 10)
-            assert(course.waypoints[5].z == -10.2)
-            assert(course.waypoints[6].z == -12)
-            assert(course.waypoints[7].z == -12)
+            assert(course.waypoints[3].x == 18 and course.waypoints[3].rev)
+            assert(course.waypoints[4].x == 36 and course.waypoints[4].rev)
+            assert(course.waypoints[5].x == 27 and math.abs(course.waypoints[5].z + 10.8) < 0.0001)
+            assert(course.waypoints[6].x == 18 and math.abs(course.waypoints[6].z + 12.6) < 0.0001)
+            assert(math.abs(course.waypoints[7].z + 12.6) < 0.0001)
         ''')
 
     def test_each_reverse_waits_until_straw_discharge_finishes(self):

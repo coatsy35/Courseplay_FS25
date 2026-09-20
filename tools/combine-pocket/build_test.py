@@ -16,8 +16,8 @@ from zipfile import ZipFile
 ROOT = Path(__file__).resolve().parents[2]
 NAME = 'FS25_Courseplay_CombinePocketTest.zip'
 TITLE = 'CoursePlay - Combine Pocket Test'
-VERSION = '8.1.0.323'
-BUILD = '006'
+VERSION = '8.1.0.324'
+BUILD = '007'
 BASE = '13b80109'
 
 

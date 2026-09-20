@@ -1,12 +1,14 @@
 # Combine corner pocket
 
-Test build 006 uses version `8.1.0.323`, filename
+Test build 007 uses version `8.1.0.324`, filename
 `FS25_Courseplay_CombinePocketTest.zip` and the in-game title
 `CoursePlay - Combine Pocket Test`.
 
-On the outermost headland, the combine's square-corner pocket now places its
-second forward cut one complete working width inside the first cut. This keeps
-the second straw swath on a working lane rather than between two lanes.
+On the outermost headland, the combine's square-corner pocket retains the stock
+Courseplay waypoint proportions while doubling the complete pocket geometry.
+Its approximately half-width second cut therefore becomes a full-width cut,
+without steepening the stock reverse or pocket-entry angles. This keeps the
+second straw swath on a working lane rather than between two lanes.
 
 At each of the pocket's two forward-to-reverse changes, the header is raised
 and the combine remains stationary while its straw discharge is active. It
