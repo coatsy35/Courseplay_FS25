@@ -187,6 +187,10 @@ switchStrategy.callUnloader = function(_, selected, ix, ete)
 end
 assert(switchStrategy:trySwitchToCloserUnloader(assigned) and movingReplacementCalled,
         'A moving replacement must remain callable when getSpeedLimit also returns a boolean')
+switchStrategy.getClosestFieldworkWaypointIx = function() return nil end
+assigned.yieldCallToCloserUnloader = function() error('Must retain the existing call during an unlocated manoeuvre') end
+assert(not switchStrategy:trySwitchToCloserUnloader(assigned),
+        'A temporary course with no passed waypoint must not release the active unloader')
 
 local pocketCallAccepted = false
 local pocketLeadStrategy = {

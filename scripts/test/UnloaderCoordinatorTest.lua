@@ -349,4 +349,7 @@ assert(predictedIx == 1050 and predictedWaypoint.x == 50,
 PathfinderUtil.hasFruit = function() return true end
 _, predictedIx = UnloaderCoordinator:getPredictedStagingWaypoint(predictive, predictive:getCpDriveStrategy(), 20)
 assert(predictedIx == 950, 'Predicted staging must fall back to harvested ground rather than park in future crop')
+predictive:getCpDriveStrategy().getClosestFieldworkWaypointIx = function() return nil end
+assert(UnloaderCoordinator:getPredictedStagingWaypoint(predictive, predictive:getCpDriveStrategy(), 20) == nil,
+        'Starting a temporary pocket course without a passed waypoint must not crash fleet staging')
 print('Fleet reservation, capacity and prediction regressions: OK')

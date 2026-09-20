@@ -104,3 +104,34 @@ assert(FieldworkBoundary.containsRigSteering(boundary, tractor, 20, 30, false, 9
 assert(not FieldworkBoundary.containsRigSteering(boundary, tractor, 20, -30, true, 9),
         'The same rig must not reverse further out of the field')
 print('Articulated live steering regressions: OK')
+
+-- JPS grid nodes are route hints, not articulated vehicle poses. The detailed search must still reject the
+-- same aligned destination when its trailer projects outside the field.
+function CpObject() return {} end
+CpMathUtil.angleToGame = function(t) return t end
+PathfinderUtil = {helperNode = {}, setWorldPositionAndRotationOnTerrain = function() end}
+dofile('scripts/pathfinder/PathfinderConstraints.lua')
+dofile('scripts/pathfinder/JumpPointSearch.lua')
+local constraints = setmetatable({fieldworkBoundary = boundary, protectRigBoundary = true, vehicle = tractor,
+    ignoreTrailerAtStartRange = 0, collisionNodeCount = 0,
+    collisionDetector = {findCollidingShapes = function() return 0 end},
+    vehicleData = {
+        getVehicle = function() return tractor end,
+        getVehicleOverlapBoxParams = function() return {width = 1, length = 1} end,
+        getTowedImplement = function() return trailer end,
+        getHitchOffset = function() return -1 end,
+        getTowedImplementOverlapBoxParams = function() return {width = 1, length = 4, zOffset = -5} end,
+    }}, {__index = PathfinderConstraints})
+local grid = setmetatable({constraints = constraints}, {__index = JumpPointSearch})
+local gridNode = {x = 10, y = -3, t = 0, tTrailer = 0, d = 0}
+assert(grid:isValidNode(gridNode), 'Coarse routing must not reject a corridor based on an artificial trailer heading')
+assert(not constraints:isValidNode(gridNode, true, true),
+        'The detailed destination check must reject a trailer extending beyond the boundary')
+assert(not grid:isValidNode({x = -10, y = -3, t = 0, d = 0}), 'Coarse search must still respect the field')
+assert(not grid:isValidNode({x = 50, y = -50, t = 0, d = 0}), 'Coarse search must still avoid islands')
+constraints.collisionDetector.findCollidingShapes = function() return 1 end
+assert(not grid:isValidNode(gridNode), 'Coarse search must still avoid real vehicle obstacles')
+constraints.collisionDetector.findCollidingShapes = function() return 0 end
+assert(constraints:isValidNode({x = 20, y = -25, t = 0, tTrailer = 0, d = 0}, true, true),
+        'A fully contained detailed destination must remain usable')
+print('Coarse routing and detailed rig containment regressions: OK')

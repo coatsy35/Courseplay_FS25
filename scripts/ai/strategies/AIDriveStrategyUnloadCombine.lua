@@ -463,13 +463,9 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         self:setMaxSpeed(0)
         self:updateStandbyCoordinator()
     elseif self.state == self.states.WAITING_FOR_PATHFINDER then
-        -- just wait for the pathfinder to finish
+        -- The search already has an iteration budget. Elapsed-time cancellation can repeatedly discard a
+        -- progressing route on large fields or at low frame rates, before its normal failure/recovery callback.
         self:setMaxSpeed(0)
-        if self.combineToUnload and self.pathfinderController.startedAt and
-                (g_time or 0) - self.pathfinderController.startedAt > 30000 then
-            self:recordFailedCombineApproach()
-            self:startWaitingForSomethingToDo()
-        end
 
     elseif self.state == self.states.WAITING_FOR_DEPARTURE then
         self:setMaxSpeed(0)
@@ -2431,18 +2427,8 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
                     waypoint.z - self.standbyTargetZ) >= targetMovementThreshold
     if sameHarvester and (self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
             self.state == self.states.DRIVING_TO_STANDBY) then
-        local now = g_currentMission and g_currentMission.time or g_time or 0
-        if targetMoved and now - (self.standbyTargetStartedAt or 0) >= 15000 then
-            self:startPathfindingToStandby(assignment.harvester, waypoint)
-            return
-        end
-        if self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER and self.standbyPathfindingStartedAt and
-                (now - self.standbyPathfindingStartedAt) >= 15000 then
-            self:debug('Standby pathfinding exceeded 15 seconds; cancelling the stale target')
-            self.standbyRetryAt = (g_time or 0) + 5000
-            self:holdAtStandbyPosition()
-        end
-        -- Finish the current safe move before accepting the next progressively nearer target.
+        -- Finish this bounded search and deliberate move. The combine advancing is not a reason to repeatedly
+        -- discard a route; an actual unload call can still interrupt staging immediately.
         return
     end
     if sameHarvester and not targetMoved and self:hasReachedStandbyPosition() then

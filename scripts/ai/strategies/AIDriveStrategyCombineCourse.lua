@@ -1076,6 +1076,13 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
                 CpUtil.getName(bestUnloader), bestEte)
         return false
     end
+    local waitingForUnload = self:isWaitingForUnload()
+    local course, currentIx
+    -- Keep the accepted call while a temporary manoeuvre has no usable fieldwork waypoint yet.
+    if not waitingForUnload then
+        course, currentIx = self:getFieldworkCourse(), self:getClosestFieldworkWaypointIx()
+        if not course or not currentIx then return false end
+    end
     if not assignedUnloader:yieldCallToCloserUnloader(self.vehicle, assignedIsStuck) then
         return false
     end
@@ -1083,11 +1090,10 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
             CpUtil.getName(assignedUnloader.vehicle or assignedUnloader), assignedEte,
             assignedIsStuck and ', stuck' or '', CpUtil.getName(bestUnloader), bestEte)
     local replacement = bestUnloader:getCpDriveStrategy()
-    if self:isWaitingForUnload() then return replacement:call(self.vehicle, nil) end
-    local course = self:getFieldworkCourse()
+    if waitingForUnload then return replacement:call(self.vehicle, nil) end
     -- getSpeedLimit also returns a boolean; keep only its numeric first result.
     local speedLimit = self.vehicle:getSpeedLimit(true)
-    local ix = course:getNextWaypointIxWithinDistance(self:getClosestFieldworkWaypointIx(),
+    local ix = course:getNextWaypointIxWithinDistance(currentIx,
             bestEte * math.min(30, speedLimit) / 3.6)
     ix = ix and self:findBestWaypointToUnload(ix, false)
     if ix then

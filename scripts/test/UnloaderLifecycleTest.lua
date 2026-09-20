@@ -86,7 +86,18 @@ assert(stagingAttempts == 0)
 g_time = g_time + 5001
 staged:setStandbyAssignment(staged.standbyAssignment)
 assert(stagingAttempts == 1, 'A failed unchanged standby destination must not become a permanent hold')
+staged.state = staged.states.WAITING_FOR_STANDBY_PATHFINDER
+staged.pathfinderController.active = true
+staged.standbyPathfindingStartedAt = g_currentMission.time - 60000
+staged.standbyTargetStartedAt = g_currentMission.time - 60000
+staged:setStandbyAssignment(staged.standbyAssignment)
+assert(staged.pathfinderController.active and staged.state == staged.states.WAITING_FOR_STANDBY_PATHFINDER,
+        'A progressing standby search must not be cancelled just because it exceeds 15 seconds')
+staged:setStandbyAssignment({harvester = a, role = 'STANDBY', waypoint = {x = 180, z = 0}})
+assert(stagingAttempts == 1 and staged.pathfinderController.active,
+        'An advancing staging target must not repeatedly restart the same in-progress departure search')
 staged.vehicle.rootNode.x = 97
+staged.state = staged.states.WAITING_IN_STANDBY
 assert(staged:hasReachedStandbyPosition())
 
 -- Two accepted real calls beside each other must not both start departure pathfinding.
@@ -228,6 +239,18 @@ frame.maxSpeed = math.huge
 _, _, _, speed = frame:getDriveData(16)
 assert(speed == 0 and resumed == 1, 'A queued call must remain stopped while checking whether it may depart')
 print('Unloader update dispatcher regressions: OK')
+
+-- Large-field searches must reach their own bounded completion, rather than lose the call after 30 seconds.
+local frameCombine, frameCombineStrategy = harvester(100)
+frameCombineStrategy.registerUnloader = function() end
+frame.combineToUnload = frameCombine
+frame.state = frame.states.WAITING_FOR_PATHFINDER
+frame.pathfinderController.startedAt = g_time - 60000
+frame.pathfinderController.isActive = function() return true end
+frame.maxSpeed = math.huge
+_, _, _, speed = frame:getDriveData(16)
+assert(speed == 0 and frame.combineToUnload == frameCombine and frame.state == frame.states.WAITING_FOR_PATHFINDER,
+        'A long active search must retain its assignment so the entry queue can eventually depart')
 
 -- A successful path callback may synchronously launch a recovery search. The old completion must not reset it.
 dofile('scripts/ai/PathfinderController.lua')

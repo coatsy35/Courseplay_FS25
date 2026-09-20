@@ -196,8 +196,9 @@ end
 ---@param node State3D
 ---@param ignoreTrailer boolean don't check the trailer
 ---@param offFieldValid boolean consider nodes well off the field valid even in strict mode
-function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid)
-    if self.protectRigBoundary and self.fieldworkBoundary then
+---@param coarse boolean|nil grid search without vehicle/trailer steering geometry
+function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid, coarse)
+    if self.protectRigBoundary and self.fieldworkBoundary and not coarse then
         -- Goal validity is checked before a trailer heading exists. Test its aligned footprint; the completed
         -- route subsequently checks the actual articulated heading at every pose.
         local outside = self:getRigBoundaryProtrusion(node, ignoreTrailer and node.t)

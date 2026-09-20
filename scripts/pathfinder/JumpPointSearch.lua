@@ -113,7 +113,8 @@ function JumpPointSearch:initMotionPrimitives()
 end
 
 function JumpPointSearch:isValidNode(node)
-    return self.constraints:isValidNode(node, true, true)
+    -- This grid search has no drivable steering/trailer pose. Full rig containment belongs to the detailed search.
+    return self.constraints:isValidNode(node, true, true, true)
 end
 
 function JumpPointSearch:isPenaltyChanging(node, predecessor)

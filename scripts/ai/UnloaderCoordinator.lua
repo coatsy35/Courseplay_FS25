@@ -152,6 +152,8 @@ end
 function UnloaderCoordinator:getPredictedStagingWaypoint(harvester, strategy, secondsUntilNeeded)
     local currentIx = strategy:getClosestFieldworkWaypointIx()
     local course = strategy:getFieldworkCourse()
+    -- A temporary pocket course has no last-passed waypoint until its first reverse segment completes.
+    if not course or not currentIx then return nil end
     -- getSpeedLimit also returns a boolean; keep only its numeric first result.
     local speedLimit = harvester.getSpeedLimit and harvester:getSpeedLimit(true) or 0
     local speed = math.min(30, speedLimit) / 3.6
