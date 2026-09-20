@@ -1789,12 +1789,6 @@ function AIDriveStrategyUnloadCombine:call(combine, waypoint)
     end
 end
 
----@param harvester table
----@return boolean
-function AIDriveStrategyUnloadCombine:wasLastAssignedToHarvester(harvester)
-    return self.combineToUnload == harvester or self.combineJustUnloaded == harvester
-end
-
 --- An unloader waiting ahead of a harvester must not cut through crop to reach it. Keep the access-point pool until
 --- the harvester has passed, after which the coordinator may give it a fruit-free position behind the machine.
 ---@param harvester table

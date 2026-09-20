@@ -64,9 +64,6 @@ local function makeUnloader(name, x, available, activeHarvester, fill)
         isAvailableForStaging = function() return available end,
         getCombineToUnload = function() return activeHarvester end,
         getFillLevelPercentage = function() return fill or 0 end,
-        wasLastAssignedToHarvester = function(self, harvester)
-            return self.lastHarvester == harvester
-        end,
         isServingPosition = function() return true end,
         getDistanceAndEteToWaypoint = function(self, waypoint)
             local distance = math.abs(self.x - waypoint.x)
@@ -124,13 +121,12 @@ assert(UnloaderCoordinator:canBeCalledBy(nearForager, forager),
         'The reserved forage harvester must be able to promote its relief trailer')
 assert(not UnloaderCoordinator:canBeCalledBy(nearForager, combine),
         'Another harvester must not take a firm forage relief reservation')
-assert(not UnloaderCoordinator:canBeCalledBy(spare, combine),
-        'A combine with a reservation must not call an additional pool trailer')
+assert(UnloaderCoordinator:canBeCalledBy(spare, combine),
+        'Soft combine staging must not exclude a better trailer from a real call')
 
--- A partly filled trailer has continuity priority over a closer empty one.
+-- A partly filled trailer wins while it remains close enough to justify finishing its load.
 local continuityCombine = makeHarvester('Continuity combine', 500, false, 10, 500)
 local partial = makeUnloader('Part-filled trailer', 100, true, nil, 45)
-partial.lastHarvester = continuityCombine
 local empty = makeUnloader('Closer empty trailer', 480, true, nil, 0)
 AIDriveStrategyUnloadCombine.activeUnloaders = {
     [partial] = partial.vehicle,
@@ -141,8 +137,25 @@ g_currentMission.vehicleSystem.vehicles = { continuityCombine }
 UnloaderCoordinator.assignments = {}
 UnloaderCoordinator:rebalance(true)
 assert(partial.assignment and partial.assignment.reserved,
-        'A partly filled trailer must be reserved before a closer empty trailer')
+        'A nearby partly filled trailer must be reserved before a closer empty trailer')
 assert(not empty.assignment.reserved, 'Only one trailer may be reserved for a combine')
+
+-- Distance eventually outweighs the partial load, matching the normal Courseplay call score.
+local remotePartial = makeUnloader('Remote part-filled trailer', -1000, true, nil, 45)
+local localEmpty = makeUnloader('Local empty trailer', 480, true, nil, 0)
+AIDriveStrategyUnloadCombine.activeUnloaders = {
+    [remotePartial] = remotePartial.vehicle,
+    [localEmpty] = localEmpty.vehicle,
+}
+g_currentMission.time = 250000
+UnloaderCoordinator.assignments = {}
+UnloaderCoordinator:rebalance(true)
+assert(localEmpty.assignment and localEmpty.assignment.reserved,
+        'A distant partly filled trailer must not displace a nearby empty trailer')
+assert(UnloaderCoordinator:getCallScore(45, 400) > UnloaderCoordinator:getCallScore(0, 20),
+        'A nearby partial load must beat a slightly closer empty trailer')
+assert(UnloaderCoordinator:getCallScore(45, 1500) < UnloaderCoordinator:getCallScore(0, 20),
+        'A remote partial load must lose to a nearby empty trailer')
 
 -- A non-urgent reservation stays in a dynamically distant pool rather than chasing the combine.
 local distantDemandCombine = makeHarvester('Non-urgent combine', 800, false, 600, 800)

@@ -16,8 +16,9 @@ independent unloaders from clustering behind the nearest machine.
   trailers. A safe position reached from an AutoDrive field access point is held rather than continually moved.
 - A trailer waiting ahead with fruit avoidance enabled stays at its access-point pool until the harvester passes and
   a fruit-free route behind it becomes available.
-- A partly filled trailer has selection priority over an empty trailer, while combine reservations remain soft so
-  the only available trailer may still serve another combine.
+- A partly filled trailer receives the normal Courseplay distance-weighted preference, so nearby combines finish its
+  load before introducing an empty trailer. Distance eventually outweighs the partial load, and soft combine
+  reservations do not prevent another combine making that choice.
 
 Demands are ordered by predicted time until the trailer is needed. Combines use the measured harvest rate, their
 normal call percentage and, while unloading, the active trailer's predicted time to full. Forage harvesters use the

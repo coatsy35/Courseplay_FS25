@@ -187,38 +187,41 @@ function UnloaderCoordinator:canServeDemand(unloader, demand)
     return unloader:isServingPosition(x, z, 10)
 end
 
+--- Base Courseplay selection score: one percent of existing load offsets ten metres of travel.
+--- This favours finishing a nearby partly filled trailer without sending it across a large field unnecessarily.
+---@param fillLevelPercentage number
+---@param distance number
+---@return number
+function UnloaderCoordinator:getCallScore(fillLevelPercentage, distance)
+    return fillLevelPercentage - 0.1 * distance
+end
+
 ---@param unloader AIDriveStrategyUnloadCombine
 ---@param demand table
 ---@param now number
 ---@return number
 function UnloaderCoordinator:getAssignmentCost(unloader, demand, now)
-    local _, ete
+    local distance
     if demand.waypoint then
-        _, ete = unloader:getDistanceAndEteToWaypoint(demand.waypoint)
+        distance = unloader:getDistanceAndEteToWaypoint(demand.waypoint)
     else
-        _, ete = unloader:getDistanceAndEteToVehicle(demand.harvester)
+        distance = unloader:getDistanceAndEteToVehicle(demand.harvester)
     end
 
+    local cost = -self:getCallScore(unloader:getFillLevelPercentage(), distance)
+
     if unloader.shouldWaitAtPoolForHarvester and unloader:shouldWaitAtPoolForHarvester(demand.harvester) then
-        ete = ete + 50000
+        cost = cost + 50000
     end
 
     local existing = self.assignments[unloader]
-    -- Keep using a partly filled trailer before introducing an empty one. This preserves capacity continuity and
-    -- prevents an empty trailer parked ahead of the combine winning on straight-line distance alone.
-    if unloader:getFillLevelPercentage() > 0.1 then
-        ete = ete - 100000
-        if unloader.wasLastAssignedToHarvester and unloader:wasLastAssignedToHarvester(demand.harvester) then
-            ete = ete - 100000
-        end
-    end
     if existing and existing.harvester == demand.harvester then
-        ete = ete - self.existingAssignmentBiasSeconds
+        cost = cost - 0.1 * self.existingAssignmentBiasSeconds
         if now - existing.assignedAt < self.minimumAssignmentTimeMs then
-            ete = ete - self.newAssignmentBiasSeconds
+            cost = cost - 0.1 * self.newAssignmentBiasSeconds
         end
     end
-    return ete
+    return cost
 end
 
 ---@param unloader AIDriveStrategyUnloadCombine
@@ -483,25 +486,5 @@ function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
     if assignment and assignment.waitUntilHarvesterPasses then
         return false
     end
-    local reservedUnloader = self:getReservedUnloader(callingHarvester)
-    return not reservedUnloader or reservedUnloader == unloader
-end
-
----@param harvester table
----@return AIDriveStrategyUnloadCombine|nil
-function UnloaderCoordinator:getReservedUnloader(harvester)
-    for unloader, assignment in pairs(self.assignments) do
-        if assignment.reserved and assignment.harvester == harvester then
-            return unloader
-        end
-    end
-    return nil
-end
-
----@param unloader AIDriveStrategyUnloadCombine
----@param harvester table
----@return boolean
-function UnloaderCoordinator:isReservedFor(unloader, harvester)
-    local assignment = self.assignments[unloader]
-    return assignment and assignment.reserved and assignment.harvester == harvester or false
+    return true
 end
