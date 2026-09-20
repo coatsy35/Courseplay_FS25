@@ -86,4 +86,8 @@ assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wide
         FieldWorkerProximityController.turnSlowDownBand >= 86,
         'An 18 metre header must start slowing the following combine at least 86 metres away')
 
+wideLeading.getExpectedRearwardManeuverDistance = function() return 25 end
+assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wideLeading) >= 81,
+        'A following combine must reserve the lead combine pocket reversing distance')
+
 print('FieldWorkerTurnClearanceTest: OK')

@@ -16,6 +16,7 @@ UnloaderCoordinator.fallbackTrailerFillRatePercentPerSecond = 0.2
 UnloaderCoordinator.minimumPoolDistance = 100
 UnloaderCoordinator.poolDistanceStep = 45
 UnloaderCoordinator.maximumAdditionalPoolDistance = 150
+UnloaderCoordinator.stagingRetargetDistance = 25
 UnloaderCoordinator.assignments = {}
 UnloaderCoordinator.trailerFillSamples = {}
 UnloaderCoordinator.nextRebalanceAt = 0
@@ -232,7 +233,33 @@ function UnloaderCoordinator:getWaypointAtUnloader(unloader)
     if getWorldRotation then
         _, yRot, _ = getWorldRotation(unloader.vehicle.rootNode)
     end
-    return { x = x, y = y, z = z, yRot = yRot }
+    return {
+        x = x,
+        y = y,
+        z = z,
+        yRot = yRot,
+        angle = math.deg(yRot),
+        getIsReverse = function() return false end,
+    }
+end
+
+---@param harvester table
+---@param role string
+---@param waypoint Waypoint|nil
+---@param waypointIx number|nil
+---@param oldAssignment table|nil
+---@return Waypoint|nil, number|nil
+function UnloaderCoordinator:getStableStagingWaypoint(harvester, role, waypoint, waypointIx, oldAssignment)
+    if not waypoint or not oldAssignment or oldAssignment.harvester ~= harvester or
+            oldAssignment.role ~= role or not oldAssignment.waypoint or not oldAssignment.waypointIx then
+        return waypoint, waypointIx
+    end
+    local movement = MathUtil.vector2Length(waypoint.x - oldAssignment.waypoint.x,
+            waypoint.z - oldAssignment.waypoint.z)
+    if movement < self.stagingRetargetDistance then
+        return oldAssignment.waypoint, oldAssignment.waypointIx
+    end
+    return waypoint, waypointIx
 end
 
 ---@param demand table
@@ -276,21 +303,31 @@ function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAs
             unloader:shouldWaitAtPoolForHarvester(demand.harvester) or false
 
     if oldAssignment and oldAssignment.harvester == demand.harvester and oldAssignment.role == 'POOL' and
-            oldAssignment.waypoint then
-        if oldAssignment.waitUntilHarvesterPasses and waitUntilHarvesterPasses then
-            return oldAssignment.waypoint, oldAssignment.waypointIx, true
-        elseif not oldAssignment.waitUntilHarvesterPasses and distance >= 0.75 * poolDistance then
-            return oldAssignment.waypoint, oldAssignment.waypointIx, false
-        end
+            oldAssignment.waypoint and oldAssignment.waitUntilHarvesterPasses and waitUntilHarvesterPasses then
+        return oldAssignment.waypoint, oldAssignment.waypointIx, true
     end
 
-    -- A vehicle already far enough away, especially one waiting at another AutoDrive access point, should stay
-    -- where it is. When fruit avoidance puts it ahead of the combine it remains there until the combine passes.
-    if waitUntilHarvesterPasses or distance >= poolDistance then
+    -- A fruit-protected vehicle ahead of the harvester remains at its access point until the harvester passes.
+    if waitUntilHarvesterPasses then
         return self:getWaypointAtUnloader(unloader), nil, waitUntilHarvesterPasses
     end
+
     local waypoint, waypointIx = self:getStagingWaypoint(demand.harvester, poolDistance)
-    return waypoint or self:getWaypointAtUnloader(unloader), waypointIx, false
+    if not waypoint then
+        return oldAssignment and oldAssignment.waypoint or self:getWaypointAtUnloader(unloader),
+                oldAssignment and oldAssignment.waypointIx or nil, false
+    end
+
+    -- Hold within a distance band, but move progressively nearer when urgency contracts the pool distance. The
+    -- common target hysteresis prevents a moving harvester from causing a new path request every rebalance.
+    if distance >= poolDistance and distance <= poolDistance + self.stagingRetargetDistance and
+            oldAssignment and oldAssignment.harvester == demand.harvester and
+            oldAssignment.role == 'POOL' and oldAssignment.waypointIx then
+        return oldAssignment.waypoint, oldAssignment.waypointIx, false
+    end
+    waypoint, waypointIx = self:getStableStagingWaypoint(demand.harvester, 'POOL', waypoint, waypointIx,
+            oldAssignment)
+    return waypoint, waypointIx, false
 end
 
 ---@param demandA table
@@ -362,10 +399,8 @@ function UnloaderCoordinator:rebalance(force)
             local waypoint, waypointIx, waitUntilHarvesterPasses
             if deploy then
                 waypoint, waypointIx = demand.waypoint, demand.waypointIx
-                if oldAssignment and oldAssignment.harvester == demand.harvester and
-                        oldAssignment.role == 'STANDBY' and oldAssignment.waypoint then
-                    waypoint, waypointIx = oldAssignment.waypoint, oldAssignment.waypointIx
-                end
+                waypoint, waypointIx = self:getStableStagingWaypoint(demand.harvester, 'STANDBY', waypoint,
+                        waypointIx, oldAssignment)
             else
                 waypoint, waypointIx, waitUntilHarvesterPasses =
                         self:getPoolWaypoint(unloader, demand, 1, oldAssignment)
@@ -381,6 +416,7 @@ function UnloaderCoordinator:rebalance(force)
                         and oldAssignment.assignedAt or now,
                 secondsUntilNeeded = demand.secondsUntilNeeded,
                 waitUntilHarvesterPasses = waitUntilHarvesterPasses,
+                targetMovementThreshold = self.stagingRetargetDistance,
             }
         end
     end
@@ -425,6 +461,7 @@ function UnloaderCoordinator:rebalance(force)
                         and oldAssignment.assignedAt or now,
                 secondsUntilNeeded = math.huge,
                 waitUntilHarvesterPasses = bestWaitUntilHarvesterPasses,
+                targetMovementThreshold = self.stagingRetargetDistance,
             }
         end
     end

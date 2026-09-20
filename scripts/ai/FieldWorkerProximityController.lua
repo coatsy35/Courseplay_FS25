@@ -163,8 +163,11 @@ end
 function FieldWorkerProximityController:getPhysicalTurnClearance(otherVehicle, otherStrategy)
     local otherWorkWidth = otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or AIUtil.getWidth(otherVehicle)
     local widestHeader = math.max(self.workingWidth, otherWorkWidth)
+    local rearwardManeuverDistance = otherStrategy.getExpectedRearwardManeuverDistance and
+            otherStrategy:getExpectedRearwardManeuverDistance() or 0
     return math.max(self.minimumTurnClearance, 2 * widestHeader +
-            AIUtil.getLength(self.vehicle) / 2 + AIUtil.getLength(otherVehicle) / 2 + 10)
+            AIUtil.getLength(self.vehicle) / 2 + AIUtil.getLength(otherVehicle) / 2 + 10) +
+            rearwardManeuverDistance
 end
 
 --- Limit our speed if there are vehicles in front of us in the same or adjacent row

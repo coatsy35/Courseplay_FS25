@@ -2149,6 +2149,18 @@ function AIDriveStrategyCombineCourse:isManeuvering()
             )
 end
 
+--- Extra clearance required behind a combine while it reverses to create an unloading pocket. The following
+--- machine must reserve this travel before the lead combine starts consuming the gap.
+---@return number
+function AIDriveStrategyCombineCourse:getExpectedRearwardManeuverDistance()
+    if self.state == self.states.UNLOADING_ON_FIELD and
+            (self.unloadState == self.states.REVERSING_TO_MAKE_A_POCKET or
+                    self.unloadState == self.states.MAKING_POCKET) then
+        return self.pocketReverseDistance or 0
+    end
+    return 0
+end
+
 function AIDriveStrategyCombineCourse:isOnHeadland(n)
     return self.course:isOnHeadland(self.course:getCurrentWaypointIx(), n)
 end

@@ -116,6 +116,8 @@ assert(nearCombine.assignment and nearCombine.assignment.harvester == combine,
 assert(not nearCombine.assignment.isFirm, 'Combine staging must remain soft')
 assert(spare.assignment and spare.assignment.role == 'POOL',
         'A surplus trailer should receive a separate shared-pool staging position')
+assert(spare.assignment.targetMovementThreshold == UnloaderCoordinator.stagingRetargetDistance,
+        'Pool movement and drive-strategy retargeting must use the same hysteresis')
 assert(not spare.assignment.isFirm, 'Shared-pool positioning must remain interruptible')
 assert(UnloaderCoordinator:canBeCalledBy(nearForager, forager),
         'The reserved forage harvester must be able to promote its relief trailer')
@@ -150,6 +152,9 @@ local localEmpty = makeUnloader('Local empty trailer', 480, true, nil, 0)
 AIDriveStrategyUnloadCombine.activeUnloaders = {
     [remotePartial] = remotePartial.vehicle,
     [localEmpty] = localEmpty.vehicle,
+}
+MathUtil = {
+    vector2Length = function(x, z) return math.sqrt(x * x + z * z) end,
 }
 g_currentMission.time = 250000
 UnloaderCoordinator.assignments = {}
@@ -187,5 +192,46 @@ assert(onlyTrailer.assignment and onlyTrailer.assignment.harvester == firstCombi
         'The only trailer should cover the most urgent combine first')
 assert(UnloaderCoordinator:canBeCalledBy(onlyTrailer, secondCombine),
         'A second combine may call the only softly reserved trailer')
+
+-- Pool positions move progressively nearer as urgency rises, while small target changes retain the old position.
+local progressionCombine = makeHarvester('Progression combine', 0, false, 500, 0)
+local progressiveTrailer = makeUnloader('Progressive trailer', -250, true, nil, 0)
+local progressionDemand = {
+    harvester = progressionCombine,
+    harvesterStrategy = progressionCombine:getCpDriveStrategy(),
+    secondsUntilNeeded = 0,
+}
+local holdWaypoint = UnloaderCoordinator:getWaypointAtUnloader(progressiveTrailer)
+assert(type(holdWaypoint.angle) == 'number' and not holdWaypoint:getIsReverse(),
+        'Coordinator hold positions must be complete pathfinder waypoints')
+local oldPoolAssignment = {
+    harvester = progressionCombine,
+    role = 'POOL',
+    waypoint = holdWaypoint,
+}
+local nearerWaypoint, nearerWaypointIx = UnloaderCoordinator:getPoolWaypoint(progressiveTrailer, progressionDemand, 1,
+        oldPoolAssignment)
+assert(nearerWaypoint.x > holdWaypoint.x + 100,
+        'A distant pool trailer must move nearer when the combine becomes urgent')
+
+oldPoolAssignment.waypoint = nearerWaypoint
+oldPoolAssignment.waypointIx = nearerWaypointIx
+progressionDemand.secondsUntilNeeded = 40
+local stableWaypoint = UnloaderCoordinator:getPoolWaypoint(progressiveTrailer, progressionDemand, 1,
+        oldPoolAssignment)
+assert(stableWaypoint == nearerWaypoint,
+        'A small pool-target change must remain inside the movement hysteresis')
+
+local accessPointTrailer = makeUnloader('Access-point trailer', -110, true, nil, 0)
+local accessPointAssignment = {
+    harvester = progressionCombine,
+    role = 'POOL',
+    waypoint = UnloaderCoordinator:getWaypointAtUnloader(accessPointTrailer),
+}
+progressionDemand.secondsUntilNeeded = 0
+local fieldWaypoint, fieldWaypointIx = UnloaderCoordinator:getPoolWaypoint(accessPointTrailer,
+        progressionDemand, 1, accessPointAssignment)
+assert(fieldWaypointIx and fieldWaypoint ~= accessPointAssignment.waypoint,
+        'A trailer at an AutoDrive access point must enter an in-field staging layer')
 
 print('UnloaderCoordinatorTest: OK')

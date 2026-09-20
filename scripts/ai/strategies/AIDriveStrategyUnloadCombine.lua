@@ -1657,10 +1657,16 @@ end
 
 function AIDriveStrategyUnloadCombine:startMovingBackBeforePathfinding(pathfinderController, pathfinderContext)
     self:debug('There is an obstacle ahead, moving back before starting the pathfinding')
+    local reverseCourse, reverseDistance = self:createBoundaryContainedReverseCourse(1.5 * self.turningRadius)
+    if not reverseCourse then
+        self:debug('Cannot move back for pathfinding without crossing the field polygon; releasing combine for another unloader')
+        self:startWaitingForSomethingToDo()
+        return
+    end
     self:setNewState(self.states.MOVING_BACK_BEFORE_PATHFINDING)
     self.state.properties.pathfinderContext = pathfinderContext
     self.state.properties.pathfinderController = pathfinderController
-    local reverseCourse = Course.createStraightReverseCourse(self.vehicle, 1.5 * self.turningRadius)
+    self:debug('Moving back %.1f m before retrying pathfinding', reverseDistance)
     self:startCourse(reverseCourse, 1)
 end
 
@@ -1922,8 +1928,15 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
 
     local sameHarvester = oldAssignment and oldAssignment.harvester == assignment.harvester and
             oldAssignment.role == assignment.role
+    local targetMovementThreshold = assignment.targetMovementThreshold or 35
     local targetMoved = not self.standbyTargetX or
-            MathUtil.vector2Length(waypoint.x - self.standbyTargetX, waypoint.z - self.standbyTargetZ) > 35
+            MathUtil.vector2Length(waypoint.x - self.standbyTargetX,
+                    waypoint.z - self.standbyTargetZ) >= targetMovementThreshold
+    if sameHarvester and (self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
+            self.state == self.states.DRIVING_TO_STANDBY) then
+        -- Finish the current safe move before accepting the next progressively nearer target.
+        return
+    end
     if sameHarvester and not targetMoved and self:isInStandbyState() then
         return
     end
