@@ -968,7 +968,7 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
         end
     else
         if not self.waypointIxWhenCallUnloader then
-            self:debug('callUnloaderWhenNeeded: don\'t know yet where to meet the unloader')
+            self:callLeadForPocketWhenNeeded()
             return
         end
         -- Find a good waypoint to unload, as the calculated one may have issues, like pipe would be in the fruit,
@@ -1011,7 +1011,7 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
                 else
                     self:debug('callUnloaderWhenNeeded: still can\'t find a good waypoint to meet the unloader')
                 end
-            elseif bestEte + 5 > myEte then
+            elseif coordinatedStandby or bestEte + 5 > myEte then
                 -- do not call too early (like minutes before we get there), only when it needs at least as
                 -- much time to get there as the combine (-5 seconds)
                 self:callUnloader(bestUnloader, tentativeRendezvousWaypointIx, bestEte)
@@ -1027,7 +1027,7 @@ function AIDriveStrategyCombineCourse:callLeadForPocketWhenNeeded()
     if self.combineController:getFillLevelPercentage() < self.settings.callUnloaderPercent:getValue() then
         return false
     end
-    local callWaypoint = self.course:getWaypoint(self.waypointIxWhenCallUnloader)
+    local callWaypoint = self.course:getWaypoint(self.waypointIxWhenCallUnloader or self:getClosestFieldworkWaypointIx())
     local bestUnloader = self:findUnloader(nil, callWaypoint)
     if not bestUnloader then
         return false
@@ -1062,11 +1062,12 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
     if not assignedUnloader.getDistanceAndEteToVehicle or not assignedUnloader.yieldCallToCloserUnloader then
         return false
     end
-    local bestUnloader, bestEte = self:findUnloader(self.vehicle, nil, true)
+    local bestUnloader, bestEte = self:findUnloader(self.vehicle, nil)
     if not bestUnloader or not bestEte then
         return false
     end
     local _, assignedEte = assignedUnloader:getDistanceAndEteToVehicle(self.vehicle)
+    if assignedUnloader.pendingDepartureCall then return false end
     local assignedIsStuck = assignedUnloader.isInDeadlock and assignedUnloader:isInDeadlock()
     if not assignedIsStuck and (not assignedEte or
             bestEte + self.unloaderSwitchEteAdvantage >= assignedEte) then
@@ -1081,7 +1082,17 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
     self:debug('Switching from %s (ETE %.1fs%s) to %s (ETE %.1fs)',
             CpUtil.getName(assignedUnloader.vehicle or assignedUnloader), assignedEte,
             assignedIsStuck and ', stuck' or '', CpUtil.getName(bestUnloader), bestEte)
-    return bestUnloader:getCpDriveStrategy():call(self.vehicle, nil)
+    local replacement = bestUnloader:getCpDriveStrategy()
+    if self:isWaitingForUnload() then return replacement:call(self.vehicle, nil) end
+    local course = self:getFieldworkCourse()
+    local ix = course:getNextWaypointIxWithinDistance(self:getClosestFieldworkWaypointIx(),
+            bestEte * math.min(30, self.vehicle:getSpeedLimit(true)) / 3.6)
+    ix = ix and self:findBestWaypointToUnload(ix, false)
+    if ix then
+        self:callUnloader(bestUnloader, ix, bestEte)
+        return true
+    end
+    return replacement:callForPocket(self.vehicle)
 end
 
 ---@param vehicle table
@@ -1099,10 +1110,9 @@ end
 --- or a waypoint which the combine will reach in the future. Combine and waypoint parameters are mutually exclusive.
 ---@param combine table the combine vehicle if we need the unloader come to the combine, otherwise nil
 ---@param waypoint Waypoint the waypoint where the unloader should meet the combine, otherwise nil.
----@param prioritiseArrival boolean|nil use route time directly when replacing a trailer already called to a stopped combine
 ---@return table, number the best fitting unloader or nil, the estimated time en-route for the unloader to reach the
 --- target (combine or waypoint)
-function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint, prioritiseArrival)
+function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
     local bestScore = -math.huge
     local bestUnloader, bestEte
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
@@ -1119,17 +1129,13 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint, prioritise
                     if combine then
                         -- if already stopped, we want the unloader to come to us
                         unloaderDistance, unloaderEte = driveStrategy:getDistanceAndEteToVehicle(combine)
-                    elseif self.waypointIxWhenCallUnloader then
+                    elseif waypoint then
                         -- if still going, we want the unloader to meet us at the waypoint
                         unloaderDistance, unloaderEte = driveStrategy:getDistanceAndEteToWaypoint(waypoint)
                     end
-                    local score = prioritiseArrival and -unloaderEte or
-                            UnloaderCoordinator:getCallScore(unloaderFillLevelPercentage, unloaderDistance)
-                    if not prioritiseArrival and UnloaderCoordinator:isReservedFor(driveStrategy, self.vehicle) then
-                        -- Use the stable lead selected and pre-positioned by the field coordinator. Its initial
-                        -- selection already balances arrival time with continuity for a nearby partly filled trailer.
-                        score = score + UnloaderCoordinator.reservedLeadCallBonus
-                    end
+                    -- The same bounded load preference applies to both initial calls and replacements. A partial
+                    -- load can offset at most ten seconds of travel, never a journey across the field.
+                    local score = UnloaderCoordinator:getCallScore(unloaderFillLevelPercentage, unloaderDistance, unloaderEte)
                     self:debug('findUnloader: %s idle on my field, fill level %.1f, distance %.1f, ETE %.1f, score %.1f)',
                             CpUtil.getName(vehicle), unloaderFillLevelPercentage, unloaderDistance, unloaderEte, score)
                     if score > bestScore then
@@ -2138,6 +2144,7 @@ end
 --- Deregister a combine unload AI driver from notifications
 ---@param driver AIDriveStrategyUnloadCombine
 function AIDriveStrategyCombineCourse:deregisterUnloader(driver, noEventSend)
+    if self.unloader:get() and self.unloader:get() ~= driver then return end
     self:cancelRendezvous()
     self.unloader:reset()
 end

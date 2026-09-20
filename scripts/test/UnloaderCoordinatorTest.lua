@@ -1,4 +1,5 @@
 CpDebug = { DBG_UNLOAD_COMBINE = 1 }
+MathUtil = {vector2Length = function(x, z) return math.sqrt(x * x + z * z) end}
 CpUtil = {
     debugFormat = function() end,
     getName = function(vehicle) return vehicle.name end,
@@ -68,11 +69,11 @@ local function makeUnloader(name, x, available, activeHarvester, fill)
         isServingPosition = function() return true end,
         getDistanceAndEteToWaypoint = function(self, waypoint)
             local distance = math.abs(self.x - waypoint.x)
-            return distance, distance
+            return distance, distance / 5
         end,
         getDistanceAndEteToVehicle = function(self, vehicle)
             local distance = math.abs(self.x - vehicle.rootNode.x)
-            return distance, distance
+            return distance, distance / 5
         end,
         setStandbyAssignment = function(self, assignment) self.assignment = assignment end,
         clearStandbyAssignment = function(self) self.assignment = nil end,
@@ -169,7 +170,7 @@ UnloaderCoordinator.assignments = {}
 UnloaderCoordinator:rebalance(true)
 assert(localEmpty.assignment and localEmpty.assignment.reserved,
         'A distant partly filled trailer must not displace a nearby empty trailer')
-assert(UnloaderCoordinator:getCallScore(45, 400) > UnloaderCoordinator:getCallScore(0, 20),
+assert(UnloaderCoordinator:getCallScore(45, 35) > UnloaderCoordinator:getCallScore(0, 20),
         'A nearby partial load must beat a slightly closer empty trailer')
 assert(UnloaderCoordinator:getCallScore(45, 1500) < UnloaderCoordinator:getCallScore(0, 20),
         'A remote partial load must lose to a nearby empty trailer')
@@ -313,3 +314,38 @@ assert(fieldWaypointIx and fieldWaypoint ~= accessPointAssignment.waypoint,
         'A trailer at an AutoDrive access point must enter an in-field staging layer')
 
 print('UnloaderCoordinatorTest: OK')
+
+local forageA = makeHarvester('Reserved forager', 0, true, 0, 0, 0, 0)
+local forageB = makeHarvester('Earlier urgent forager', 10, true, 0, 10, 0, 100)
+local firmRelief = makeUnloader('Firm relief', 5, true, nil, 0)
+AIDriveStrategyUnloadCombine.activeUnloaders = {[firmRelief] = firmRelief.vehicle}
+g_currentMission.vehicleSystem.vehicles = {forageB, forageA}
+UnloaderCoordinator.assignments = {[firmRelief] = {harvester = forageA, isFirm = true, reserved = true,
+    role = 'STANDBY', assignedAt = g_currentMission.time}}
+UnloaderCoordinator:rebalance(true)
+assert(firmRelief.assignment.harvester == forageA,
+        'A demand processed earlier must not steal another forager relief during fleet allocation')
+
+local capacityCombine = makeHarvester('Capacity combine', 0, false, 0, 0, 30, 90)
+capacityCombine:getCpDriveStrategy().combineController = {getFillLevel = function() return 19000 end}
+local partialLead = makeUnloader('Partial lead', 0, false, capacityCombine, 60)
+partialLead.getFreeCapacityForHarvester = function() return 12000 end
+AIDriveStrategyUnloadCombine.activeUnloaders = {[partialLead] = partialLead.vehicle}
+assert(UnloaderCoordinator:createDemand(capacityCombine, g_currentMission.time).secondsUntilNeeded == 0,
+        'Relief must prepare before discharge when the active partial load cannot accommodate the tank')
+partialLead.getFreeCapacityForHarvester = function() return 30000 end
+assert(UnloaderCoordinator:createDemand(capacityCombine, g_currentMission.time).secondsUntilNeeded > 0)
+
+local predictive = makeHarvester('Moving staging target', 0, false, 120, 0)
+predictive.getSpeedLimit = function() return 18 end
+predictive:getCpDriveStrategy():getFieldworkCourse().getNextWaypointIxWithinDistance = function(_, ix, distance)
+    return ix + math.floor(distance)
+end
+PathfinderUtil = {hasFruit = function() return false end}
+local predictedWaypoint, predictedIx = UnloaderCoordinator:getPredictedStagingWaypoint(predictive, predictive:getCpDriveStrategy(), 20)
+assert(predictedIx == 1050 and predictedWaypoint.x == 50,
+        'The future staging target must account for the combine travel before the call')
+PathfinderUtil.hasFruit = function() return true end
+_, predictedIx = UnloaderCoordinator:getPredictedStagingWaypoint(predictive, predictive:getCpDriveStrategy(), 20)
+assert(predictedIx == 950, 'Predicted staging must fall back to harvested ground rather than park in future crop')
+print('Fleet reservation, capacity and prediction regressions: OK')

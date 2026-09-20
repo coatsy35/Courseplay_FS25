@@ -159,6 +159,7 @@ assert(not switchStrategy:shouldReconsiderAssignedUnloader(),
 switchStrategy.combineController.getFillLevelPercentage = function() return 80 end
 assert(switchStrategy:shouldReconsiderAssignedUnloader(),
         'An assigned lead must be reassessed as soon as the configured call percentage is reached')
+switchStrategy.isWaitingForUnload = function() return true end
 assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled,
         'A stopped combine must transfer a distant call to a materially quicker eligible trailer')
 

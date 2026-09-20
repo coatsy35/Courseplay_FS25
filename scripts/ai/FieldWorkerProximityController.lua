@@ -153,11 +153,11 @@ function FieldWorkerProximityController:resolveTurnConvoyOrder(otherVehicle, oth
     local myStrategy = self.vehicle:getCpDriveStrategy()
     local turnClearanceActive = isDrivingToWorkStart(myStrategy) or isDrivingToWorkStart(otherStrategy) or
             isTurningOrManeuvering(myStrategy) or isTurningOrManeuvering(otherStrategy)
-    if otherIsAheadOnTrail ~= selfIsAheadOnTrail then
-        self.otherVehicleAheadOnTrail[otherVehicle] = otherIsAheadOnTrail
-    elseif turnClearanceActive and self.otherVehicleAheadOnTrail[otherVehicle] ~= nil then
+    if turnClearanceActive and self.otherVehicleAheadOnTrail[otherVehicle] ~= nil then
         otherIsAheadOnTrail = self.otherVehicleAheadOnTrail[otherVehicle]
         selfIsAheadOnTrail = not otherIsAheadOnTrail
+    elseif otherIsAheadOnTrail ~= selfIsAheadOnTrail then
+        self.otherVehicleAheadOnTrail[otherVehicle] = otherIsAheadOnTrail
     elseif not turnClearanceActive then
         self.otherVehicleAheadOnTrail[otherVehicle] = nil
     end
@@ -188,6 +188,9 @@ function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehi
     if myManeuvering ~= otherManeuvering then
         return not myManeuvering
     end
+    if myManeuvering and otherManeuvering then
+        return self.vehicle.rootNode > otherVehicle.rootNode
+    end
     return false
 end
 
@@ -213,6 +216,9 @@ function FieldWorkerProximityController:hasPhysicalTurnPriority(otherVehicle, ot
     if myManeuvering ~= otherManeuvering then
         return myManeuvering
     end
+    if myManeuvering and otherManeuvering then
+        return self.vehicle.rootNode < otherVehicle.rootNode
+    end
     return false
 end
 
@@ -237,8 +243,9 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
     -- convoy distance setting.
     local maxConvoyDistance = distanceLimit
     for _, otherVehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
-        if otherVehicle ~= self.vehicle and self:hasSameCourse(otherVehicle) and
+        if otherVehicle ~= self.vehicle and
                 otherVehicle.getIsCpFieldWorkActive and otherVehicle:getIsCpFieldWorkActive() then
+            local sameCourse = self:hasSameCourse(otherVehicle)
             local otherStrategy = otherVehicle:getCpDriveStrategy()
             local otherIsDone = otherStrategy and otherStrategy.isDone and otherStrategy:isDone()
             --- TODO: Might be worth to have the communication between vehicle strategies
@@ -246,8 +253,8 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
             if otherStrategy and otherStrategy.getFieldWorkProximity and not otherIsDone then
                 local otherConvoyDistance = otherVehicle:getCpSettings().convoyDistance:getValue()
                 maxConvoyDistance = math.max(maxConvoyDistance, otherConvoyDistance)
-                local distanceFromOther = otherStrategy:getFieldWorkProximity(self.vehicle:getAIDirectionNode())
-                local distanceFromMe = self:getFieldWorkProximity(otherVehicle:getAIDirectionNode())
+                local distanceFromOther = sameCourse and otherStrategy:getFieldWorkProximity(self.vehicle:getAIDirectionNode()) or math.huge
+                local distanceFromMe = sameCourse and self:getFieldWorkProximity(otherVehicle:getAIDirectionNode()) or math.huge
                 local otherIsAheadOnTrail = distanceFromOther > 0 and distanceFromOther < math.huge
                 local selfIsAheadOnTrail = distanceFromMe > 0 and distanceFromMe < math.huge
                 otherIsAheadOnTrail, selfIsAheadOnTrail = self:resolveTurnConvoyOrder(otherVehicle, otherStrategy,

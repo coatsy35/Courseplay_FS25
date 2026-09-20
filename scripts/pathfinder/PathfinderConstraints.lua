@@ -57,6 +57,7 @@ function PathfinderConstraints:init(context)
     self.logger = Logger('PathfinderConstraints', Logger.level.debug, CpDebug.DBG_PATHFINDER)
     self.vehicle = context._vehicle
     self.fieldworkBoundary = context._fieldworkBoundary
+    self.protectRigBoundary = context._protectRigBoundary
     self.turnRadius = AIUtil.getTurningRadius(context._vehicle) or 10
     self.vehicleData = PathfinderUtil.VehicleData(context._vehicle, true, 0.25)
     self.trailerHitchLength = AIUtil.getTowBarLength(context._vehicle) or 3
@@ -196,7 +197,30 @@ end
 ---@param ignoreTrailer boolean don't check the trailer
 ---@param offFieldValid boolean consider nodes well off the field valid even in strict mode
 function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid)
-    if not FieldworkBoundary.contains(self.fieldworkBoundary, node.x, -node.y) then
+    if self.protectRigBoundary and self.fieldworkBoundary then
+        -- Goal validity is checked before a trailer heading exists. Test its aligned footprint; the completed
+        -- route subsequently checks the actual articulated heading at every pose.
+        local outside = self:getRigBoundaryProtrusion(node, ignoreTrailer and node.t)
+        if ignoreTrailer and outside > 0 then return false end
+        local previous = node.pred and self:getRigBoundaryProtrusion(node.pred) or
+                FieldworkBoundary.rigOutsideDistance(self.fieldworkBoundary, FieldworkBoundary.captureRig(self.vehicle))
+        if outside > previous + 0.0001 then return false end
+        -- Validate the swept segment, not just the two endpoint poses. This catches trailer corners cutting a
+        -- concave field edge while the tractor's centreline remains inside.
+        if node.pred then
+            local p = node.pred
+            local count = math.max(1, math.ceil(MathUtil.vector2Length(node.x - p.x, node.y - p.y) / 0.5))
+            local function angle(a, b, t) return a + ((b - a + math.pi) % (2 * math.pi) - math.pi) * t end
+            for i = 1, count do
+                local t = i / count
+                local pose = {x = p.x + (node.x - p.x) * t, y = p.y + (node.y - p.y) * t,
+                    t = angle(p.t, node.t, t), tTrailer = angle(p.tTrailer or p.t, node.tTrailer or node.t, t)}
+                outside = self:getRigBoundaryProtrusion(pose)
+                if outside > previous + 0.0001 then return false end
+                previous = outside
+            end
+        end
+    elseif not FieldworkBoundary.contains(self.fieldworkBoundary, node.x, -node.y) then
         return false
     end
     if not offFieldValid and self.strictMode then
@@ -231,6 +255,19 @@ function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid)
         self.collisionNodeCount = self.collisionNodeCount + 1
     end
     return isValid
+end
+
+function PathfinderConstraints:getRigBoundaryProtrusion(node, trailerHeading)
+    local heading = CpMathUtil.angleToGame(node.t)
+    local outside = FieldworkBoundary.boxOutsideDistance(self.fieldworkBoundary, node.x, -node.y, heading,
+            self.vehicleData:getVehicleOverlapBoxParams())
+    if self.vehicleData:getTowedImplement() then
+        local offset = self.vehicleData:getHitchOffset()
+        outside = math.max(outside, FieldworkBoundary.boxOutsideDistance(self.fieldworkBoundary,
+                node.x + math.sin(heading) * offset, -node.y + math.cos(heading) * offset,
+                CpMathUtil.angleToGame(trailerHeading or node.tTrailer or node.t), self.vehicleData:getTowedImplementOverlapBoxParams()))
+    end
+    return outside
 end
 
 --- In strict mode there is no off field penalty, anything far enough from the field is just invalid.

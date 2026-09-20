@@ -54,3 +54,53 @@ assert(not FieldworkBoundary.containsCourse(boundary, neverEnteringCourse, 1, 2,
         'A newly appended entry must finish inside the field')
 
 print('FieldworkBoundarySegmentTest: OK')
+
+-- A centreline inside the field does not make a tractor/trailer footprint safe.
+local box = {width = 2, length = 6, xOffset = 0, zOffset = 0}
+assert(FieldworkBoundary.boxOutsideDistance(boundary, 0.2, 20, 0, box) > 0,
+        'The vehicle side must remain inside the polygon, not just its reference node')
+assert(FieldworkBoundary.boxOutsideDistance(boundary, 10, 20, 0, box) == 0)
+assert(FieldworkBoundary.boxOutsideDistance(boundary, 50, 50, 0, {width = 10, length = 10}) > 0,
+        'An island entirely enclosed by a footprint must be detected even when all corners are inside the field')
+assert(not FieldworkBoundary.containsSegment(boundary, -5, 50, 70, 50, true),
+        'An entry segment must not enter the field, cross an island, then enter again')
+local articulated = {
+    {x = 10, z = 30, heading = 0, box = {width = 2, length = 3}},
+    {x = 3, z = 20, heading = math.pi / 4, box = {width = 2, length = 7}},
+}
+assert(FieldworkBoundary.rigOutsideDistance(boundary, articulated) > 0,
+        'The trailer corner must be checked independently of the safely positioned tractor')
+articulated[2].x = 15
+assert(FieldworkBoundary.rigOutsideDistance(boundary, articulated) == 0)
+math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
+assert(not FieldworkBoundary.sweepRigSegment(boundary,
+        {{x = 40, z = 50, heading = math.pi / 2, box = {width = 1, length = 2}}}, 60, 50, false, 5),
+        'A route must not sweep a body through an island between safe endpoints')
+print('FieldworkBoundary footprint and entry regressions: OK')
+
+function getWorldTranslation(n) return n.x, 0, n.z end
+function getWorldRotation(n) return 0, n.heading or 0, 0 end
+function localToLocal(from, to, x, _, z)
+    local fh, th = from.heading or 0, to.heading or 0
+    local wx = from.x + math.cos(fh) * x + math.sin(fh) * z - to.x
+    local wz = from.z - math.sin(fh) * x + math.cos(fh) * z - to.z
+    return math.cos(th) * wx - math.sin(th) * wz, 0, math.sin(th) * wx + math.cos(th) * wz
+end
+AIUtil = {getWidth = function(v) return v.size.width end, getLength = function(v) return v.size.length end}
+local tractor = {rootNode = {x = 20, z = 30}, size = {width = 3, length = 6}}
+tractor.getAIDirectionNode = function() return tractor.rootNode end
+local trailer = {rootNode = {x = 20, z = 20}, size = {width = 3, length = 10}, spec_wheels = {}}
+trailer.getAttacherVehicle = function() return tractor end
+trailer.getActiveInputAttacherJoint = function() return {node = {x = 20, z = 26}} end
+tractor.getChildVehicles = function() return {tractor, trailer} end
+local rig = FieldworkBoundary.captureRig(tractor)
+assert(#rig == 2 and rig[2].parent == rig[1] and rig[2].articulated,
+        'Capturing the complete rig must preserve the hitch hierarchy without counting the tractor twice')
+assert(FieldworkBoundary.containsRigSteering(boundary, tractor, 20, 50, false, 9))
+tractor.rootNode.z, trailer.rootNode.z = 4, -6
+trailer.getActiveInputAttacherJoint = function() return {node = {x = 20, z = 0}} end
+assert(FieldworkBoundary.containsRigSteering(boundary, tractor, 20, 30, false, 9),
+        'An AD entry with the trailer still outside must be allowed to move progressively inwards')
+assert(not FieldworkBoundary.containsRigSteering(boundary, tractor, 20, -30, true, 9),
+        'The same rig must not reverse further out of the field')
+print('Articulated live steering regressions: OK')

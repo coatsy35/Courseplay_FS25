@@ -125,3 +125,25 @@ assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wide
         'A following combine must reserve the lead combine pocket reversing distance')
 
 print('FieldWorkerTurnClearanceTest: OK')
+
+-- Real getMaxSpeed integration: different course names must still respect an overlapping physical turn area.
+workingVehicle.rootNode, turningVehicle.rootNode = 2, 1
+workingVehicle.getAIDirectionNode = function() return 2 end
+turningVehicle.getAIDirectionNode = function() return 1 end
+turningVehicle.getIsCpFieldWorkActive = function() return true end
+turningVehicle.getCpSettings = function() return {convoyDistance = {getValue = function() return 30 end}} end
+turning.getFieldWorkProximity = function() error('Unrelated course trails must not establish convoy ordering') end
+workingController.hasSameCourse = function() return false end
+workingController.getFieldWorkProximity = function() return math.huge end
+workingController.updateTrail = function() end
+workingController.debugSparse = function() end
+workingController.slowDownFactor = {update = function() end, get = function() return 1 end}
+g_currentMission = {vehicleSystem = {vehicles = {workingVehicle, turningVehicle}}}
+MathUtil = {vector2Length = function(x, z) return math.sqrt(x*x + z*z) end}
+CpMathUtil = {clamp = function(v, lo, hi) return math.max(lo, math.min(hi, v)) end}
+getWorldTranslation = function(node) return node == 1 and 40 or 0, 0, 0 end
+assert(workingController:getMaxSpeed(30, 10) == 0,
+        'A working combine must stop outside the turn envelope of a machine on an independently named course')
+local oppositeAhead, oppositeBehind = rearApproachingController:resolveTurnConvoyOrder(workingVehicle, working, false, true)
+assert(oppositeAhead and not oppositeBehind, 'Contradictory trail samples during the turn must not reverse established priority')
+print('Independent course turn regression: OK')

@@ -127,6 +127,7 @@ end
 --- Cancel an active request without invoking its completion callback.
 --- A later request will install its own context and listeners in the normal way.
 function PathfinderController:cancel()
+    self.requestGeneration = (self.requestGeneration or 0) + 1
     self.pathfinder = nil
     self.currentContext = nil
     self.currentPathfinderCall = nil
@@ -187,6 +188,7 @@ end
 --- Pathfinder was started
 ---@param context PathfinderContext
 function PathfinderController:start(context, numRetries, pathfinderCall)
+    self.requestGeneration = (self.requestGeneration or 0) + 1
     self.numRetries = numRetries or self.defaultNumRetries
     self:debug("Started pathfinding with context: %s, retries: %d.", tostring(context), self.numRetries)
     self.startedAt = g_time
@@ -234,6 +236,7 @@ end
 --- Path finding has finished
 ---@param result PathfinderResult
 function PathfinderController:onFinish(result)
+    local generation = self.requestGeneration
     self.pathfinder = nil
     self.timeTakenMs = g_time - self.startedAt
     local hasValidPath = result.path and #result.path > 2
@@ -241,7 +244,8 @@ function PathfinderController:onFinish(result)
         self:debug('Pathfinding done after %d ms, result: %s', self.timeTakenMs, result)
         self:callCallback(self.callbackSuccessFunction, true, self:getTemporaryCourseFromPath(result.path),
                 result.goalNodeInvalid)
-        self:reset()
+        -- The callback can start a recovery request synchronously. Do not reset that newer request's timing/retries.
+        if self.requestGeneration == generation then self:reset() end
     else
         self:error("No path found after %d ms, result: %s", self.timeTakenMs, result)
         self:handleFailedPathfinding(result)

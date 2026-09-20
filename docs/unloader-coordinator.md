@@ -22,9 +22,9 @@ independent unloaders from clustering behind the nearest machine.
   Fruit-protected access-point waits remain stationary until the combine passes, as configured.
 - A trailer waiting ahead with fruit avoidance enabled stays at its access-point pool until the harvester passes and
   a fruit-free route behind it becomes available.
-- A partly filled trailer receives the normal Courseplay distance-weighted preference, so nearby combines finish its
-  load before introducing an empty trailer. Distance eventually outweighs the partial load, and soft combine
-  reservations do not prevent another combine making that choice.
+- Initial calls and replacements use the same arrival score. A partial load offsets at most ten seconds of travel,
+  so nearby combines finish its load without preferring a distant trailer. Failed approaches have a 15-second
+  cooldown; abandoned pathfinders are cancelled and obsolete callbacks cannot affect a new assignment.
 
 Demands are ordered by predicted time until harvesting stops, then tank fill and predicted time until the trailer is
 needed. This retains priority between combines after several have passed their normal call percentages. Combines use
@@ -38,7 +38,10 @@ The nearest suitable trailer becomes the stable combine lead; a nearby partly fi
 time is within ten seconds of the nearest option. Before the configured call percentage, it only advances in
 deliberate staging moves to harvested positions and parks between moves. It does not actively follow the combine.
 At the configured percentage, Courseplay promotes that parked lead and starts its unloading approach. Rear pool
-trailers stay parked until the active lead's measured fill rate predicts that it will need relief.
+trailers stay parked until the active lead's measured fill rate predicts that it will need relief, or its compatible
+free capacity is already smaller than the crop in the combine's tank. Future staging points account for predicted
+travel along the course but must already be harvested; an obsolete en-route lead target can be refreshed in bounded
+steps. Failed staging is retried and does not count as arrival.
 
 Disabling moving unload on the first headland prevents only alongside unloading. The normal call still promotes the
 lead trailer, which follows behind at the configured distance until the combine reaches its pocket. A route being
@@ -47,12 +50,15 @@ While the combine reverses to create a pocket, the trailer remains clear and can
 course. It follows forward at the standby gap while the combine cuts into the pocket. Once the combine stops, the
 trailer builds a fresh forward pipe approach without applying moving-unload alignment rules.
 The optional final alignment extension is clipped at the field boundary instead of invalidating an otherwise valid
-route. At a shared field entry, standby and pool movements yield until a nearby actively called trailer has cleared
-the combined train and turning envelope, preventing simultaneous departures from crossing.
+route. At a shared field entry, subsequent active calls also queue until the departing trailer clears the combined
+train and turning envelope. Calls remain assigned while queued. A nearby forward approach joins the appropriate
+moving or stopped unload course without a needless global pathfinding loop.
 
 Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
-polygon. Standby, reverse-clearance and return routes use a full-rig inset. An active combine approach uses the field
-polygon itself so a valid pipe-side target near an edge is not rejected; a failed exact approach falls back to a
+polygon. Pathfinding checks oriented tractor/trailer footprints and their swept segments; completed courses and live
+steering also check attached bodies. Active combine approaches use the actual polygon with footprint checks rather
+than a circular inset. A rejected live movement schedules an in-field recovery route instead of an indefinite stop.
+A failed exact approach falls back to a
 harvested point behind the combine without stopping the AI worker. When a full trailer reports that AutoDrive can
 take control, Courseplay releases it at its current safe position so AutoDrive can join the surrounding road network
 directly. The older return-to-start fallback is also constrained to the complete rig's field corridor; if no
@@ -61,14 +67,16 @@ access point may only drive inwards.
 After unloading, the tractor reverses by a distance derived from header width and both vehicle lengths. Fieldwork
 traffic also applies the same physical turn envelope when trail-based convoy distance is unreliable during turns or
 the drive back to a work-start waypoint. A combine waiting in a pocket or pull-back holds until the unloader reaches
-that clearance position and deregisters, subject to the existing five-second minimum pause.
+that clearance position, subject to the existing five-second minimum pause. A separate clearance record survives
+call release and AutoDrive takeover. A shortened reverse route does not reduce the required clearance.
 Following-combine turn clearance scales at twice the wider header plus half of both vehicle lengths and a ten-metre
 margin, with a 50-metre minimum and a further 30-metre slowdown band. This gives approximately 50 metres stopped
 clearance for 15-metre headers and 56 metres for 18-metre headers.
 A lead combine retains its established convoy priority throughout a corner. A following combine approaching the same
 turn cannot reverse that order merely because it enters its own turn state; it stops outside the full physical turn
 clearance until the lead has cleared the corner. The lead ignores the follower's stale trail position, preventing
-mutual-yield deadlocks.
+mutual-yield deadlocks. Physical turn clearance also applies to machines using different course names; their course
+trails are not used to infer convoy order. Simultaneous turns without an established order use a stable vehicle order.
 
 ## Settings
 
@@ -82,8 +90,10 @@ and retain collision avoidance. Reached pool and staging targets remain fixed un
 
 ## Validation
 
-`scripts/test/UnloaderCoordinatorTest.lua` covers global one-to-one allocation, firm forage reservations, soft
-combine staging and surplus-unloader behaviour. In-game validation should cover:
+The focused Lua regressions cover allocation, capacity, direct approaches, callback cancellation, failed staging,
+departure queues, clearance ownership, boundary footprints, update dispatch and independent-course turn clearance.
+Packaging and translation checks run before each build. These are engine-stub regressions, not an in-game simulation.
+In-game validation should cover:
 
 1. One combine with one and then two unloaders on a large field.
 2. One forage harvester with an active and relief trailer, including a full-trailer handover.

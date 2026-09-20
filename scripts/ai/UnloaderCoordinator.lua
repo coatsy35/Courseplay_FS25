@@ -20,9 +20,9 @@ UnloaderCoordinator.stagingRetargetDistance = 25
 UnloaderCoordinator.poolAdvanceDistance = 40
 UnloaderCoordinator.poolAdvancePredictionSeconds = 45
 UnloaderCoordinator.leadContinuityEteTolerance = 10
-UnloaderCoordinator.reservedLeadCallBonus = 100000
 UnloaderCoordinator.assignments = {}
 UnloaderCoordinator.trailerFillSamples = {}
+UnloaderCoordinator.clearingUnloaders = {}
 UnloaderCoordinator.nextRebalanceAt = 0
 
 local function getCurrentTime()
@@ -132,6 +132,7 @@ function UnloaderCoordinator:getSecondsUntilTrailerFull(strategy, now)
     elseif now > sample.time then
         local elapsed = (now - sample.time) / 1000
         local instantaneousRate = (fill - sample.fill) / elapsed
+        if fill < sample.fill then sample.rate = 0 end
         if instantaneousRate > 0.001 then
             sample.rate = sample.rate > 0 and (sample.rate + instantaneousRate) / 2 or instantaneousRate
         end
@@ -150,6 +151,22 @@ end
 ---@return Waypoint|nil, number|nil
 function UnloaderCoordinator:getPredictedStagingWaypoint(harvester, strategy, secondsUntilNeeded)
     local currentIx = strategy:getClosestFieldworkWaypointIx()
+    local course = strategy:getFieldworkCourse()
+    local speed = harvester.getSpeedLimit and math.min(30, harvester:getSpeedLimit(true)) / 3.6 or 0
+    if course and course.getNextWaypointIxWithinDistance and secondsUntilNeeded > 0 and speed > 0 then
+        local predictedIx = course:getNextWaypointIxWithinDistance(currentIx, math.min(secondsUntilNeeded, 120) * speed)
+        if predictedIx then
+            -- Never stage through an intervening turn. A future point is usable only if already harvested (for
+            -- example, on an earlier headland); otherwise retain a safe target and refresh it as the crop is cut.
+            for ix = currentIx, predictedIx do
+                if course:isTurnStartAtIx(ix) or course:isReverseAt(ix) then predictedIx = ix - 1; break end
+            end
+            local waypoint, ix = self:getStagingWaypoint(harvester, nil, predictedIx)
+            if waypoint and PathfinderUtil and not PathfinderUtil.hasFruit(waypoint.x, waypoint.z, 4, 4) then
+                return waypoint, ix
+            end
+        end
+    end
     return self:getStagingWaypoint(harvester, nil, currentIx)
 end
 
@@ -184,6 +201,13 @@ function UnloaderCoordinator:createDemand(harvester, now)
         -- The called trailer is already the combine's lead. Keep the next trailer in the rear pool until the lead's
         -- measured fill rate shows that it will need relief; the combine's own call percentage is already covered.
         secondsUntilNeeded = self:getSecondsUntilTrailerFull(activeUnloader, now)
+        if activeUnloader.getFreeCapacityForHarvester and strategy.combineController then
+            local free = activeUnloader:getFreeCapacityForHarvester(harvester)
+            if free < strategy.combineController:getFillLevel() then
+                -- Capacity is already committed to the crop in this tank. Prepare relief before discharge starts.
+                secondsUntilNeeded = 0
+            end
+        end
     elseif strategy.getSecondsUntilUnloaderCall then
         secondsUntilNeeded = strategy:getSecondsUntilUnloaderCall()
     else
@@ -213,17 +237,24 @@ function UnloaderCoordinator:canServeDemand(unloader, demand)
     if not unloader:isAvailableForStaging() then
         return false
     end
+    local reservation = self.assignments[unloader]
+    if reservation and reservation.isFirm and reservation.harvester ~= demand.harvester and
+            self:getHarvesterStrategy(reservation.harvester) and
+            self:getRequestedStandbyCount(reservation.harvester) > 0 then
+        return false
+    end
+    if unloader.canRetryCombineApproach and not unloader:canRetryCombineApproach(demand.harvester) then return false end
+    if unloader.getFreeCapacityForHarvester and unloader:getFreeCapacityForHarvester(demand.harvester) <= 0 then return false end
     local x, _, z = getWorldTranslation(demand.harvester.rootNode)
     return unloader:isServingPosition(x, z, 10)
 end
 
---- Base Courseplay selection score: one percent of existing load offsets ten metres of travel.
---- This favours finishing a nearby partly filled trailer without sending it across a large field unnecessarily.
+--- Arrival time with a bounded preference for completing a nearby partial load.
 ---@param fillLevelPercentage number
 ---@param distance number
 ---@return number
-function UnloaderCoordinator:getCallScore(fillLevelPercentage, distance)
-    return fillLevelPercentage - 0.1 * distance
+function UnloaderCoordinator:getCallScore(fillLevelPercentage, distance, ete)
+    return math.min(10, math.max(0, fillLevelPercentage) / 10) - (ete or distance / 5)
 end
 
 ---@param unloader AIDriveStrategyUnloadCombine
@@ -324,6 +355,11 @@ function UnloaderCoordinator:getStableStagingWaypoint(harvester, role, waypoint,
             -- tightens so the lead is genuinely nearby when the combine makes its pocket or requests unloading.
             return waypoint, waypointIx
         end
+    elseif role == 'STANDBY' and demand and oldAssignment.secondsUntilNeeded and
+            demand.secondsUntilNeeded <= self:getEteToDemand(unloader, demand) + self.combineSafetyMarginSeconds then
+        local movement = MathUtil.vector2Length(waypoint.x - oldAssignment.waypoint.x,
+                waypoint.z - oldAssignment.waypoint.z)
+        if movement >= math.max(50, self:getStandbyDistance(harvester)) then return waypoint, waypointIx end
     elseif role == 'POOL' and unloader and unloader.hasReachedStandbyPosition and
             unloader:hasReachedStandbyPosition() and demand then
         local stagedAt = oldAssignment.stagedAtSecondsUntilNeeded
@@ -500,7 +536,7 @@ function UnloaderCoordinator:rebalance(force)
                     if ete <= fastestEte + self.leadContinuityEteTolerance then
                         local distance = demand.waypoint and unloader:getDistanceAndEteToWaypoint(demand.waypoint)
                                 or unloader:getDistanceAndEteToVehicle(demand.harvester)
-                        local score = self:getCallScore(unloader:getFillLevelPercentage(), distance)
+                        local score = self:getCallScore(unloader:getFillLevelPercentage(), distance, ete)
                         if score > bestScore then
                             bestIndex, bestScore = i, score
                         end
@@ -652,7 +688,8 @@ end
 ---@return boolean
 function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
     local assignment = self.assignments[unloader]
-    if assignment and assignment.isFirm and assignment.harvester ~= callingHarvester then
+    if assignment and assignment.isFirm and assignment.harvester ~= callingHarvester and
+            self:getHarvesterStrategy(assignment.harvester) and self:getRequestedStandbyCount(assignment.harvester) > 0 then
         return false
     end
     if assignment and assignment.waitUntilHarvesterPasses then
@@ -671,11 +708,25 @@ function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
     return true
 end
 
---- The combine keeps the unloader registered while it reverses to its calculated clearance position.
---- Waiting for deregistration prevents a pocket or pull-back return starting after an arbitrary short timer.
+--- Clearance ownership survives assignment release and AD takeover until the rig is physically clear.
 ---@param unloader AIDriveStrategyUnloadCombine|nil
 ---@param harvester table
 ---@return boolean
 function UnloaderCoordinator:isStillClearingHarvester(unloader, harvester)
+    for vehicle, record in pairs(self.clearingUnloaders) do
+        if not entityExists(vehicle.rootNode) or not entityExists(record.harvester.rootNode) then
+            self.clearingUnloaders[vehicle] = nil
+        elseif record.harvester == harvester then
+            local x, _, z = getWorldTranslation(vehicle.rootNode)
+            local hx, _, hz = getWorldTranslation(harvester.rootNode)
+            if MathUtil.vector2Length(x - hx, z - hz) < record.distance then return true end
+            self.clearingUnloaders[vehicle] = nil
+        end
+    end
     return unloader and unloader.getCombineToUnload and unloader:getCombineToUnload() == harvester or false
+end
+
+function UnloaderCoordinator:registerClearingUnloader(unloader, harvester, distance)
+    if not harvester then return end
+    self.clearingUnloaders[unloader.vehicle] = {harvester = harvester, distance = distance}
 end

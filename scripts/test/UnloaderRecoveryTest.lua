@@ -213,6 +213,8 @@ MathUtil.vector2Length = function(x, z) return math.sqrt(x * x + z * z) end
 CpMathUtil = CpMathUtil or {}
 CpMathUtil.isSameDirection = function() return true end
 FieldworkBoundary.containsSegment = function() return true end
+FieldworkBoundary.captureRig = function() return {} end
+FieldworkBoundary.sweepRigSegment = function() return true end
 assert(strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
         'A target 14 metres ahead with a modest lateral correction must bypass the global pathfinder')
 directDz = -13
@@ -234,6 +236,8 @@ local originalHoldNearbyStandbyUnloadersForDeparture =
 strategy.holdNearbyStandbyUnloadersForDeparture = function() end
 strategy.isOkToStartUnloadingCombine = function() return false end
 strategy.startUnloadingStoppedCombine = function() directApproachStarted = true end
+strategy.startUnloadingCombine = AIDriveStrategyUnloadCombine.startUnloadingCombine
+strategy.queueForDeparture = function() return false end
 strategy.isPathfindingNeeded = function() error('The direct approach must not invoke the global pathfinder') end
 UnloaderCoordinator.release = function() end
 assert(strategy:call(strategy.combineToUnload, nil) and directApproachStarted,
