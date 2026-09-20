@@ -82,4 +82,30 @@ strategy.inDeadlock = nil
 assert(not strategy:isInDeadlock(),
         'A stationary tractor calculating a route must not be treated as blocked and repeatedly reassigned')
 
+-- A called trailer must not copy the temporary reverse course while the combine is creating its pocket.
+local startedPocketUnload = false
+local heldBehindPocket = false
+local pocketCombineStrategy = {
+    isWaitingForUnload = function() return false end,
+    canUnloadWhileMovingAtCurrentPosition = function() return true end,
+    isManeuvering = function() return true end,
+}
+local pocketCombine = { getCpDriveStrategy = function() return pocketCombineStrategy end }
+strategy.combineToUnload = pocketCombine
+strategy.setFieldSpeed = function() end
+strategy.isOkToStartUnloadingCombine = function() return true end
+strategy.startUnloadingCombine = function() startedPocketUnload = true end
+strategy.getDistanceFromCombine = function() return 20 end
+strategy.getHarvesterTurnClearanceDistance = function() return 50 end
+strategy.setMaxSpeed = function(_, speed) heldBehindPocket = speed == 0 end
+UnloaderCoordinator = { getStandbyDistance = function() return 30 end }
+strategy:followCombineToPocket()
+assert(not startedPocketUnload and heldBehindPocket,
+        'A trailer must hold behind instead of copying the combine reverse course while a pocket is being made')
+
+pocketCombineStrategy.isManeuvering = function() return false end
+strategy:followCombineToPocket()
+assert(startedPocketUnload,
+        'A trailer may start its forward approach once the combine is no longer manoeuvring')
+
 print('UnloaderRecoveryTest: OK')

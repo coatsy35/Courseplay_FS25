@@ -1561,9 +1561,15 @@ function AIDriveStrategyUnloadCombine:followCombineToPocket()
     local combineStrategy = self.combineToUnload:getCpDriveStrategy()
     self:setFieldSpeed()
 
-    if (combineStrategy:isWaitingForUnload() or combineStrategy:canUnloadWhileMovingAtCurrentPosition()) and
+    -- A pocket is a manoeuvre, not a moving-unload opportunity. Copying the combine course while it is reversing
+    -- to make the pocket also copies those temporary reverse waypoints and sends the trailer backwards into the
+    -- following traffic. Hold behind until the pocket is complete; the stopped-combine approach is then rebuilt
+    -- directly to the pipe.
+    local canStartMovingUnload = not combineStrategy:isManeuvering() and
+            combineStrategy:canUnloadWhileMovingAtCurrentPosition()
+    if (combineStrategy:isWaitingForUnload() or canStartMovingUnload) and
             self:isOkToStartUnloadingCombine() then
-        self:debug('Pocket is ready or headland restriction ended; moving under the pipe')
+        self:debug('Pocket is ready or safe moving unload is available; moving under the pipe')
         self:startUnloadingCombine()
         return
     end
