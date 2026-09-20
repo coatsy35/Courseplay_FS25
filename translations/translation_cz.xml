@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Umožňuje používat generování trasy v zatáčkách, například k vyhýbání se překážkám a plodinám."/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Smyčka na souvrati"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Místo provedení normálního otáčení na souvrati vozidlo projede smyčkou. První souvrat by měla mít zaoblené rohy!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Složit nářadí na konci trasy"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Zapnout/vypnout složení nářadí do transportní pozice po ukončení práce."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Návrat na počáteční bod"/>

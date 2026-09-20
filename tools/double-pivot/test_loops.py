@@ -259,7 +259,8 @@ class LoopTests(unittest.TestCase):
                 v.stopCurrentAIJob=function() stopped=true end
                 AIMessageCpErrorNoPathFound={new=function() return {} end}
                 local t=setmetatable({vehicle=v,turnContext=c,workWidth=25.6,turningRadius=10,steeringLength=9.8,
-                    settings={loopTurnsOnHeadland={getValue=function() return true end},turnSpeed={getValue=function() return 17 end}},
+                    getUseLoopTurnsOnHeadland=function() return true end,
+                    settings={turnSpeed={getValue=function() return 17 end}},
                     driveStrategy={getLoweringDurationMs=function() return 1500 end},
                     states={TURNING={}},ppc={setCourse=function() error('must not install rejected course') end}},CourseTurn)
                 t.debug=function() end
@@ -282,7 +283,8 @@ class LoopTests(unittest.TestCase):
                 local v,c=fixture()
                 c.isHeadlandCorner=function() return true end
                 local t=setmetatable({vehicle=v,turnContext=c,workWidth=25.6,turningRadius=10,steeringLength=9.8,
-                    settings={loopTurnsOnHeadland={getValue=function() return true end},turnSpeed={getValue=function() return speed end}},
+                    getUseLoopTurnsOnHeadland=function() return true end,
+                    settings={turnSpeed={getValue=function() return speed end}},
                     driveStrategy={getLoweringDurationMs=function() return 1500 end}},CourseTurn)
                 t.debug=function() end
                 t:generateCalculatedTurn()
@@ -669,7 +671,8 @@ class LoopTests(unittest.TestCase):
             closeIntervalTimer=function() closed=closed+1 end
             AITurn.canTurnOnField=function() return true end
             local t=setmetatable({vehicle=v,turnContext=c,workWidth=25.6,turningRadius=10,steeringLength=9.8,
-                settings={loopTurnsOnHeadland={getValue=function() return true end},turnSpeed={getValue=function() return 17 end}},
+                getUseLoopTurnsOnHeadland=function() return true end,
+                settings={turnSpeed={getValue=function() return 17 end}},
                 driveStrategy={getLoweringDurationMs=function() return 1500 end},states={TURNING={}},
                 ppc={setCourse=function(_,course) assert(course); installed=installed+1 end,initialize=function() end}},CourseTurn)
             t.debug=function() end

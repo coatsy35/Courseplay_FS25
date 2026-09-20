@@ -496,6 +496,11 @@ function CourseTurn:init(vehicle, driveStrategy, ppc, proximityController, turnC
             self.driveStrategy:getLoweringDurationMs(), self.settings.turnSpeed:getValue())
 end
 
+--- The active course owns this choice so changing vehicles does not change its turn style.
+function CourseTurn:getUseLoopTurnsOnHeadland()
+    return self.fieldWorkCourse and self.fieldWorkCourse:getLoopTurnsOnHeadland()
+end
+
 function CourseTurn:getForwardSpeed()
     -- A chain-planned loop stays at the user's turn speed throughout. Switching
     -- to field speed in its middle would change the behaviour of the tested turn.
@@ -554,7 +559,7 @@ end
 --
 function CourseTurn:startTurn()
     if not self.loopSearchAttempted and self.turnContext:isHeadlandCorner() and
-            self.settings.loopTurnsOnHeadland:getValue() and HeadlandLoopGeometry.detect(self.vehicle) then
+            self:getUseLoopTurnsOnHeadland() and HeadlandLoopGeometry.detect(self.vehicle) then
         self.loopSearchAttempted = true
         self:addState('WAITING_FOR_LOOP')
         self.state = self.states.WAITING_FOR_LOOP
@@ -811,7 +816,7 @@ end
 --- Keep the user's forward-loop choice, but try alternative placements before
 --- giving up. Radius, corner coverage and boundary clearance stay unchanged.
 function CourseTurn:fitForwardHeadlandLoop(boundary)
-    if not self.settings.loopTurnsOnHeadland:getValue() then return false end
+    if not self:getUseLoopTurnsOnHeadland() then return false end
     local context = self.turnContext
     local originalCourse = self.turnCourse
     local oldPull, oldEntry = context.loopTurnPullForward, context.loopTurnEntryDistance
@@ -839,7 +844,7 @@ function CourseTurn:generateCalculatedTurn()
     self.headlandLoopWidthChecked = false
     if self.turnContext:isHeadlandCorner() then
         self:debug('This is a headland turn')
-        if self.settings.loopTurnsOnHeadland:getValue() then
+        if self:getUseLoopTurnsOnHeadland() then
             -- do a 270° turn forward only
             local loweringDistance = 0.5
             if self.driveStrategy and self.driveStrategy.getLoweringDurationMs then

@@ -41,10 +41,13 @@ function CpCourseGeneratorSettings.prerequisitesPresent(specializations)
 end
 
 function CpCourseGeneratorSettings.registerEvents(vehicleType)
- --   SpecializationUtil.registerEvent(vehicleType,"cpUpdateGui")
+    SpecializationUtil.registerEvent(vehicleType, 'onCpHeadlandsWithRoundCornersChanged')
+    SpecializationUtil.registerEvent(vehicleType, 'onCpLoopTurnsOnHeadlandChanged')
 end
 
 function CpCourseGeneratorSettings.registerEventListeners(vehicleType)	
+	SpecializationUtil.registerEventListener(vehicleType, 'onCpHeadlandsWithRoundCornersChanged', CpCourseGeneratorSettings)
+	SpecializationUtil.registerEventListener(vehicleType, 'onCpLoopTurnsOnHeadlandChanged', CpCourseGeneratorSettings)
 	SpecializationUtil.registerEventListener(vehicleType, "onLoad", CpCourseGeneratorSettings)
     SpecializationUtil.registerEventListener(vehicleType, "onUpdate", CpCourseGeneratorSettings)
     SpecializationUtil.registerEventListener(vehicleType, "onLoadFinished",CpCourseGeneratorSettings)
@@ -210,6 +213,22 @@ function CpCourseGeneratorSettings.getVineSettingSetup(vehicle)
         CpCourseGeneratorSettings.vineSettings.pageTitle
 end
 
+--- Import the former vehicle-owned value once. New saves write only the
+-- generator setting, while old savegames keep their established preference.
+function CpCourseGeneratorSettings.loadLegacyLoopTurnsSetting(vehicle, savegame)
+    local spec = CpCourseGeneratorSettings.getSpec(vehicle)
+    if spec.loopTurnsOnHeadland.loadedValue ~= nil then return end
+    local function loadLegacy(baseKey)
+        savegame.xmlFile:iterate(baseKey, function (_, key)
+            if savegame.xmlFile:getValue(key .. '#name') == 'loopTurnsOnHeadland' then
+                spec.loopTurnsOnHeadland:loadFromXMLFile(savegame.xmlFile, key)
+            end
+        end)
+    end
+    loadLegacy(savegame.key .. CpVehicleSettings.KEY)
+    loadLegacy(savegame.key .. CpVehicleSettings.KEY .. CpVehicleSettings.SETTINGS_KEY)
+end
+
 function CpCourseGeneratorSettings:loadSettings(savegame)
     if savegame == nil or savegame.resetVehicles then return end
     local spec = CpCourseGeneratorSettings.getSpec(self)  
@@ -226,6 +245,8 @@ function CpCourseGeneratorSettings:loadSettings(savegame)
     --- Loads the normal course generator settings.
     CpSettingsUtil.loadFromXmlFile(spec, savegame.xmlFile, 
                         savegame.key .. CpCourseGeneratorSettings.KEY ..  CpCourseGeneratorSettings.SETTINGS_KEY, self)
+
+    CpCourseGeneratorSettings.loadLegacyLoopTurnsSetting(self, savegame)
 
     --- Loads the vine course generator settings.
     CpSettingsUtil.loadFromXmlFile(spec.vineSettings, savegame.xmlFile, 
@@ -287,6 +308,51 @@ end
 function CpCourseGeneratorSettings:hasHeadlandsSelected()
     local spec = CpCourseGeneratorSettings.getSpec(self)  
     return spec.numberOfHeadlands:getValue() > 0
+end
+
+--- A loaded headland course can be adjusted even when the next generation has zero headlands.
+function CpCourseGeneratorSettings:isHeadlandSectionVisible()
+    if CpCourseGeneratorSettings.hasHeadlandsSelected(self) then return true end
+    local course = self.getFieldWorkCourse and self:getFieldWorkCourse()
+    return course ~= nil and (course:getNumberOfHeadlands() or 0) > 0
+end
+
+function CpCourseGeneratorSettings:isLoopTurnsOnHeadlandDisabled()
+    return CpCourseGeneratorSettings.getSpec(self).headlandsWithRoundCorners:getValue() < 1
+end
+
+--- Restore the course-owned choice into the editable working setting. A saved
+-- loop course predates or satisfies the rounded-headland prerequisite.
+function CpCourseGeneratorSettings.applyCourseHeadlandTurn(vehicle, course)
+    local settings = vehicle:getCourseGeneratorSettings()
+    if course.loopTurnsOnHeadland == nil then
+        course.loopTurnsOnHeadland = settings.loopTurnsOnHeadland:getValue()
+    else
+        if course.loopTurnsOnHeadland and settings.headlandsWithRoundCorners:getValue() < 1 then
+            settings.headlandsWithRoundCorners:setValue(1, true)
+        end
+        settings.loopTurnsOnHeadland:setValue(course.loopTurnsOnHeadland, true)
+    end
+end
+
+--- Keep the loaded course in step with the fieldwork control. Course waypoints
+-- are untouched; saving the course persists this driving preference.
+function CpCourseGeneratorSettings:onCpLoopTurnsOnHeadlandChanged(setting)
+    local settings = CpCourseGeneratorSettings.getSpec(self)
+    if setting:getValue() and settings.headlandsWithRoundCorners:getValue() < 1 then
+        setting:setValue(false)
+        return
+    end
+    local course = self.getFieldWorkCourse and self:getFieldWorkCourse()
+    if course then course.loopTurnsOnHeadland = setting:getValue() end
+end
+
+--- A loop needs at least one rounded headland pass. Keep the active course and
+-- networked working value consistent when the prerequisite is removed.
+function CpCourseGeneratorSettings:onCpHeadlandsWithRoundCornersChanged(setting)
+    if setting:getValue() < 1 then
+        CpCourseGeneratorSettings.getSpec(self).loopTurnsOnHeadland:setValue(false)
+    end
 end
 
 function CpCourseGeneratorSettings:isNarrowFieldEnabled()

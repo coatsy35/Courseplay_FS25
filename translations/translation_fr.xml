@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Si nécessaire, autorise le pathfinding à générer des trajets avec des détours, par exemple pour éviter des obstacles ou des cultures"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Virage en boucle sur fourrière"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Au lieu d'effectuer un virage normal sur la fourrière, le véhicule effectuera une boucle. La première fourrière doit avoir des angles arrondis !"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Replier l'outil à la fin de la course"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Active/Désactive le repli automatique de l'outil à la fin de la course."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Retourner au point de départ"/>

@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Maakt het mogelijk om de padvinder in bochten te gebruiken, bijvoorbeeld om obstakels en fruit te vermijden"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Loop turn on headland"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="Instead of performing a normal turn on headland, the vehicle will drive a loop. The first headland should have round corners!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Klap werktuigen aan het einde van de koers in"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Schakelt automatisch inklappen van werktuigen aan het einde van de koers in/uit."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Return to starting point"/>

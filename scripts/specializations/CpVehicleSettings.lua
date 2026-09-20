@@ -54,7 +54,7 @@ function CpVehicleSettings.registerEvents(vehicleType)
 end
 
 
-function CpVehicleSettings.registerEventListeners(vehicleType)	
+function CpVehicleSettings.registerEventListeners(vehicleType)
     SpecializationUtil.registerEventListener(vehicleType, "onPreLoad", CpVehicleSettings)
 	SpecializationUtil.registerEventListener(vehicleType, "onLoad", CpVehicleSettings)
     SpecializationUtil.registerEventListener(vehicleType, "onUpdate", CpVehicleSettings)

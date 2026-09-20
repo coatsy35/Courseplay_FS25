@@ -187,6 +187,7 @@
     <text name="CP_vehicle_setting_allowPathfinderTurns_tooltip" text="Gör det möjligt att använda Pathfinder i svängar, t.ex. för att undvika hinder och frukt."/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_title" text="Slinga på udden"/>
     <text name="CP_vehicle_setting_loopTurnsOnHeadland_tooltip" text="I stället för att göra en normal sväng på vändtegen kommer fordonet att köra en slinga. Den första vändtegen bör ha runda hörn!"/>
+    <text name="CP_vehicle_setting_loopTurnsOnHeadland_courseTooltip" text="Drive a forward loop at headland corners. The first headland should have rounded corners. Saved with the course; loading a course restores its choice. After changing this setting, save the course again to keep the change."/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_title" text="Vik verktyg i slutet av kursen"/>
     <text name="CP_vehicle_setting_foldImplementAtEnd_tooltip" text="Aktiverar/avaktiverar automatisk hopfällning av redskapen i slutet av kursen."/>
     <text name="CP_vehicle_setting_returnToStart_title" text="Återgå till startpunkten"/>

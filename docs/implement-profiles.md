@@ -124,6 +124,11 @@ installations by copying the library file while the game is closed; merging libr
 
 ## Fieldwork setup flow
 
+**Loop turn on headland** is on the Fieldwork Settings page under Headland, and no longer on the
+vehicle page. Profiles supply the working preference; saved courses retain and restore their own
+on/off choice. Changing the control adjusts the loaded working course without regenerating its
+waypoints. Save the course again to retain the adjustment. See [course-specific loop turns](course-headland-loop-setting.md).
+
 Open Course generation > Fieldwork Settings. The first row is an implement profile selector,
 filtered to exact matches for the attached equipment or complete combination. Select a profile and
 choose Load profile (or press the selector centre), adjust the fieldwork settings, then generate.

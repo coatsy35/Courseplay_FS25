@@ -35,7 +35,7 @@ function ImplementProfileEvent.readValues(streamId)
         local value = ImplementProfile.decode(streamReadString(streamId))
         if value == nil or values[name] ~= nil then valid = false else values[name] = value end
     end
-    return valid and count <= ImplementProfile.MAX_SETTINGS and values or nil
+    return valid and count <= ImplementProfile.MAX_SETTINGS and ImplementProfile.migrateSettings(values) or nil
 end
 
 function ImplementProfileEvent.writeProfile(streamId, profile)

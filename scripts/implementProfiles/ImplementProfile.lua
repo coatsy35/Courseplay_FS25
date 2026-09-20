@@ -7,14 +7,14 @@ ImplementProfile.MAX_SETTINGS = 80
 -- An explicit allow-list keeps HUD, debug, job positions and tractor geometry out of profiles.
 ImplementProfile.SETTINGS = {
     vehicle = {
-        'turnOnField', 'allowReversePathfinding', 'allowPathfinderTurns', 'loopTurnsOnHeadland',
+        'turnOnField', 'allowReversePathfinding', 'allowPathfinderTurns',
         'foldImplementAtEnd', 'raiseImplementLate', 'lowerImplementEarly', 'toolOffsetX',
         'baleCollectorOffset', 'useAdditiveFillUnit', 'refillOnTheField',
         'ridgeMarkersAutomatic', 'sowingMachineFertilizerEnabled', 'optionalSowingMachineEnabled',
         'fieldWorkSpeed', 'turnSpeed', 'reverseSpeed'
     },
     generator = {
-        'workWidth', 'numberOfHeadlands', 'startOnHeadland', 'sharpenCorners',
+        'workWidth', 'numberOfHeadlands', 'startOnHeadland', 'sharpenCorners', 'loopTurnsOnHeadland',
         'headlandsWithRoundCorners', 'headlandClockwise', 'headlandOverlapPercent',
         'centerMode', 'centerClockwise', 'evenRowWidth', 'rowsToSkip', 'numberOfCircles',
         'rowsPerLand', 'spiralFromInside', 'bypassIslands', 'nIslandHeadlands', 'islandHeadlandClockwise'
@@ -35,6 +35,18 @@ function ImplementProfile.copy(value)
     local result = {}
     for key, item in pairs(value) do result[key] = ImplementProfile.copy(item) end
     return result
+end
+
+--- Move the former vehicle-owned key into the generator group. Migration at
+-- persistence and network boundaries leaves one canonical owner internally.
+function ImplementProfile.migrateSettings(values)
+    if type(values) ~= 'table' then return values end
+    local legacy = values['vehicle.loopTurnsOnHeadland']
+    if values['generator.loopTurnsOnHeadland'] == nil and legacy ~= nil then
+        values['generator.loopTurnsOnHeadland'] = legacy
+    end
+    values['vehicle.loopTurnsOnHeadland'] = nil
+    return values
 end
 
 function ImplementProfile.group(object)
@@ -211,7 +223,13 @@ function ImplementProfile.validateSettings(vehicle, values)
         count = count + 1
         local setting = ImplementProfile.setting(vehicle, key)
         if not setting then return false, key end
-        if setting:getIsDisabled() and setting:getValue() ~= value then return false, key end
+        if setting:getIsDisabled() and setting:getValue() ~= value then
+            -- A profile may enable the prerequisite in the same transaction. Validation
+            -- must use the complete target state rather than table iteration order.
+            local enablesRoundedHeadland = key == 'generator.loopTurnsOnHeadland' and value == true and
+                (values['generator.headlandsWithRoundCorners'] or 0) >= 1
+            if not enablesRoundedHeadland then return false, key end
+        end
         local valid = false
         for _, option in ipairs(setting.values) do
             if option == value or (type(option) == 'number' and type(value) == 'number' and
@@ -229,6 +247,10 @@ function ImplementProfile.setSettings(vehicle, values)
             if type(value) == 'boolean' then setting:setValue(value, true)
             else setting:setFloatValue(value, 0.002, true) end
         end
+    end
+    local generator = vehicle:getCourseGeneratorSettings()
+    if generator.headlandsWithRoundCorners and generator.headlandsWithRoundCorners:getValue() < 1 then
+        generator.loopTurnsOnHeadland:setValue(false, true)
     end
 end
 
