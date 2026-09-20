@@ -84,6 +84,9 @@ AIDriveStrategyUnloadCombine.maxDistanceWhenMovingOutOfWay = 25
 AIDriveStrategyUnloadCombine.minimumHarvesterTurnClearance = 30
 AIDriveStrategyUnloadCombine.safeManeuveringDistance = 30 -- distance to keep from a combine not ready to unload
 AIDriveStrategyUnloadCombine.pathfindingRange = 5 -- won't do pathfinding if target is closer than this
+-- A stopped combine can be approached directly when the tractor is already pointing towards the pipe-side course.
+-- Scale this with the tractor's turning radius so a short lateral correction does not become a full Dubins loop.
+AIDriveStrategyUnloadCombine.directStoppedApproachTurningRadiusFactor = 3
 -- The normal limit to apply a penalty for the pathfinder. This is relatively low to keep the unloader further
 -- away from the fruit.
 AIDriveStrategyUnloadCombine.maxFruitPercent = 10
@@ -1570,6 +1573,43 @@ function AIDriveStrategyUnloadCombine:startCourseFollowingCombine()
     self:setNewState(self.states.UNLOADING_MOVING_COMBINE)
 end
 
+--- A nearby tractor already facing the combine must join the stopped-combine unload course directly. The global
+--- pathfinder tries to satisfy the exact final heading and can turn a short forward move into a large loop.
+---@param target number|Waypoint
+---@param xOffset number
+---@param zOffset number
+---@return boolean
+function AIDriveStrategyUnloadCombine:canStartDirectStoppedCombineApproach(target, xOffset, zOffset)
+    local combineStrategy = self.combineToUnload and self.combineToUnload:getCpDriveStrategy()
+    if not combineStrategy or not combineStrategy:willWaitForUnloadToFinish() or
+            not combineStrategy:isReadyToUnload(true) then
+        return false
+    end
+    local targetNode = self:getTargetNode(target)
+    if not targetNode then
+        return false
+    end
+    local startNode = self.vehicle:getAIDirectionNode()
+    local dx, _, dz = localToLocal(targetNode, startNode, xOffset, 0, zOffset)
+    local distance = MathUtil.vector2Length(dx, dz)
+    local maximumDistance = self.turningRadius * self.directStoppedApproachTurningRadiusFactor
+    local maximumLateralOffset = self.turningRadius
+    if dz <= 0 or distance > maximumDistance or math.abs(dx) > maximumLateralOffset or
+            not CpMathUtil.isSameDirection(startNode, targetNode,
+                    AIDriveStrategyUnloadCombine.maxDirectionDifferenceDeg) then
+        return false
+    end
+    local x, _, z = getWorldTranslation(startNode)
+    local goalX, _, goalZ = localToWorld(targetNode, xOffset, 0, zOffset)
+    local boundary = self:getFieldworkBoundaryForCombineApproach()
+    if not FieldworkBoundary.containsSegment(boundary, x, z, goalX, goalZ, true) then
+        self:debug('Direct stopped-combine approach rejected at the field boundary')
+        return false
+    end
+    self:debug('Using direct stopped-combine approach: %.1f m ahead, lateral correction %.1f m', dz, dx)
+    return true
+end
+
 --- Follow the combine on its own course while remaining behind it. This is used after a first-headland pre-call:
 --- the vehicle setting still forbids unloading alongside, but the lead trailer is already present when the combine
 --- reaches its pocket.
@@ -2028,6 +2068,10 @@ function AIDriveStrategyUnloadCombine:call(combine, waypoint)
         end
         if self:isOkToStartUnloadingCombine() then
             self:startUnloadingCombine()
+        elseif self:canStartDirectStoppedCombineApproach(self:getPipeOffsetReferenceNode(), xOffset, zOffset) then
+            -- The normal stopped-combine course begins behind the pipe and continues forwards. Joining it here keeps
+            -- the active assignment locked while the tractor makes the small correction and drives under the pipe.
+            self:startUnloadingStoppedCombine()
         elseif self:isPathfindingNeeded(self.vehicle, self:getPipeOffsetReferenceNode(), xOffset, zOffset) then
             self:setNewState(self.states.WAITING_FOR_PATHFINDER)
             self:startPathfindingToWaitingCombine(xOffset, zOffset)

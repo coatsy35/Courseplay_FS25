@@ -191,6 +191,55 @@ local approachCourse = {
 assert(strategy:extendCombineApproachWithinField(approachCourse, 10, 1, 0) == 4 and extendedBy == 4,
         'The final alignment extension must be clipped at the boundary instead of discarding the valid route')
 
+-- A short, forward pipe-side correction must join the normal stopped-combine unload course directly. Running the
+-- exact-heading pathfinder for this geometry creates a needless loop and can leave a full combine waiting.
+local directCombineStrategy = {
+    willWaitForUnloadToFinish = function() return true end,
+    isReadyToUnload = function() return true end,
+}
+local directTarget = {}
+strategy.combineToUnload = { getCpDriveStrategy = function() return directCombineStrategy end }
+strategy.vehicle = { getAIDirectionNode = function() return 'tractorDirection' end }
+strategy.turningRadius = 9
+strategy.directStoppedApproachTurningRadiusFactor = 3
+strategy.getTargetNode = function() return directTarget end
+strategy.getFieldworkBoundaryForCombineApproach = function() return {} end
+local directDx, directDz = 5, 13
+localToLocal = function() return directDx, 0, directDz end
+getWorldTranslation = function() return 0, 0, 0 end
+localToWorld = function() return directDx, 0, directDz end
+MathUtil = MathUtil or {}
+MathUtil.vector2Length = function(x, z) return math.sqrt(x * x + z * z) end
+CpMathUtil = CpMathUtil or {}
+CpMathUtil.isSameDirection = function() return true end
+FieldworkBoundary.containsSegment = function() return true end
+assert(strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
+        'A target 14 metres ahead with a modest lateral correction must bypass the global pathfinder')
+directDz = -13
+assert(not strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
+        'A target behind the tractor must still use a manoeuvring route')
+directDz = 13
+FieldworkBoundary.containsSegment = function() return false end
+assert(not strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
+        'A direct approach must never cross the field boundary')
+FieldworkBoundary.containsSegment = function() return true end
+directCombineStrategy.isWaitingForUnloadAfterPulledBack = function() return false end
+directCombineStrategy.hasAutoAimPipe = function() return false end
+directCombineStrategy.getMeasuredBackDistance = function() return 6 end
+local directApproachStarted = false
+strategy.getPipeOffset = function() return 11, -6 end
+strategy.getPipeOffsetReferenceNode = function() return directTarget end
+local originalHoldNearbyStandbyUnloadersForDeparture =
+        AIDriveStrategyUnloadCombine.holdNearbyStandbyUnloadersForDeparture
+strategy.holdNearbyStandbyUnloadersForDeparture = function() end
+strategy.isOkToStartUnloadingCombine = function() return false end
+strategy.startUnloadingStoppedCombine = function() directApproachStarted = true end
+strategy.isPathfindingNeeded = function() error('The direct approach must not invoke the global pathfinder') end
+UnloaderCoordinator.release = function() end
+assert(strategy:call(strategy.combineToUnload, nil) and directApproachStarted,
+        'A stopped combine call with close forward geometry must start the unload course immediately')
+strategy.holdNearbyStandbyUnloadersForDeparture = originalHoldNearbyStandbyUnloadersForDeparture
+
 -- A standby at a shared entry holds while a nearby active trailer departs. Clearance scales with both complete
 -- tractor/trailer trains and their turning radii rather than a fixed user-facing distance.
 local function makeVehicle(x, z)
