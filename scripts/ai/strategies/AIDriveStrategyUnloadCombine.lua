@@ -1692,18 +1692,19 @@ end
 function AIDriveStrategyUnloadCombine:onPathfindingDoneToMovingCombine(controller, success, course, goalNodeInvalid)
     if success and self.state == self.states.WAITING_FOR_PATHFINDER then
         self:debug('Pathfinding to moving combine successful.')
+        if not FieldworkBoundary.containsCourse(self.combinePathBoundary, course) then
+            self:debug('Path to moving combine would cross the field polygon; waiting for another call')
+            self:startWaitingForSomethingToDo()
+            return false
+        end
         -- add a short straight section to align in case we get there before the combine
         -- pathfinding does not guarantee the last section points into the target direction so we may
         -- end up not parallel to the combine's course when we extend the pathfinder course in the direction of the
         -- last waypoint. Therefore, use the rendezvousWaypoint's direction instead
         local dx = self.rendezvousWaypoint and self.rendezvousWaypoint.dx
         local dz = self.rendezvousWaypoint and self.rendezvousWaypoint.dz
-        course:extend(AIDriveStrategyUnloadCombine.driveToCombineCourseExtensionLength, dx, dz)
-        if not FieldworkBoundary.containsCourse(self.combinePathBoundary, course) then
-            self:debug('Path to moving combine would cross the field polygon; waiting for another call')
-            self:startWaitingForSomethingToDo()
-            return false
-        end
+        self:extendCombineApproachWithinField(course,
+                AIDriveStrategyUnloadCombine.driveToCombineCourseExtensionLength, dx, dz)
         self:startCourse(course, 1)
         self:setNewState(self.states.DRIVING_TO_MOVING_COMBINE)
         return true
@@ -1748,6 +1749,34 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToWaitingCombine(controll
         self:debug('Pathfinding to waiting combine failed; retaining the job and trying a safe approach')
         return self:recoverFromFailedCombineApproach()
     end
+end
+
+--- Append only the part of the final alignment that remains inside the active approach boundary. The pathfinder
+--- course is already valid; an optional straight extension must never invalidate and discard that route.
+---@param course Course
+---@param requestedLength number
+---@param dx number|nil
+---@param dz number|nil
+---@return number appliedLength
+function AIDriveStrategyUnloadCombine:extendCombineApproachWithinField(course, requestedLength, dx, dz)
+    if not dx or not dz then
+        return 0
+    end
+    local ix = course:getNumberOfWaypoints()
+    local x, _, z = course:getWaypointPosition(ix)
+    local length = requestedLength
+    while length > 0 and not FieldworkBoundary.containsSegment(self.combinePathBoundary,
+            x, z, x + dx * length, z + dz * length, false) do
+        length = length - 1
+    end
+    if length > 0 then
+        course:extend(length, dx, dz)
+    end
+    if length < requestedLength then
+        self:debug('Clipped final combine approach extension from %.1f m to %.1f m at the field boundary',
+                requestedLength, length)
+    end
+    return length
 end
 
 --- A failed exact pipe approach must not dismiss the tractor. Move to a harvested point behind the assigned
@@ -1932,6 +1961,7 @@ function AIDriveStrategyUnloadCombine:callForPocket(combine)
     end
     UnloaderCoordinator:release(self)
     self.combineToUnload = combine
+    self:holdNearbyStandbyUnloadersForDeparture()
     self.rendezvousWaypoint = waypoint
     self.approachingPocketStandby = true
     self:setNewState(self.states.WAITING_FOR_PATHFINDER)
@@ -1956,6 +1986,7 @@ function AIDriveStrategyUnloadCombine:call(combine, waypoint)
         if self:isPathfindingNeeded(self.vehicle, waypoint, xOffset, zOffset, 25) then
             self.rendezvousWaypoint = waypoint
             self.combineToUnload = combine
+            self:holdNearbyStandbyUnloadersForDeparture()
             -- just in case, as the combine may give us a rendezvous waypoint
             -- where it is full, make sure we are behind the combine
             zOffset = -self:getCombinesMeasuredBackDistance() - 5
@@ -1972,6 +2003,7 @@ function AIDriveStrategyUnloadCombine:call(combine, waypoint)
         -- combine wants us to drive directly to it
         self:debug('call: Combine is waiting for unload, start finding path to combine')
         self.combineToUnload = combine
+        self:holdNearbyStandbyUnloadersForDeparture()
         if self.combineToUnload:getCpDriveStrategy():isWaitingForUnloadAfterPulledBack() then
             -- combine pulled back so it's pipe is now out of the fruit. In this case, if the unloader is in front
             -- of the combine, it sometimes finds a path between the combine and the fruit to the pipe, we are trying to
@@ -2121,6 +2153,13 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
 
     local oldAssignment = self.standbyAssignment
     self.standbyAssignment = assignment
+    local departingUnloader = self:getNearbyDepartingUnloader()
+    if departingUnloader then
+        self:debugSparse('Holding standby move while %s leaves the shared field entry',
+                CpUtil.getName(departingUnloader.vehicle))
+        self:holdAtStandbyPosition()
+        return
+    end
     local waypoint = assignment.waypoint
     if not waypoint then
         -- During turns the already reached position is safer than chasing a moving target through the manoeuvre.
@@ -2833,6 +2872,69 @@ function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle)
         UnloaderCoordinator:release(self)
     end
     self:onBlockingVehicle(vehicle)
+end
+
+---@param strategy AIDriveStrategyUnloadCombine
+---@return boolean
+function AIDriveStrategyUnloadCombine.isDepartingForActiveCall(strategy)
+    return strategy.combineToUnload ~= nil and (strategy.state == strategy.states.WAITING_FOR_PATHFINDER or
+            strategy.state == strategy.states.DRIVING_TO_COMBINE or
+            strategy.state == strategy.states.DRIVING_TO_MOVING_COMBINE)
+end
+
+---@param vehicle table
+---@return number
+function AIDriveStrategyUnloadCombine.getTrainLength(vehicle)
+    local length = AIUtil.getLength(vehicle)
+    for _, childVehicle in ipairs(vehicle:getChildVehicles()) do
+        length = length + AIUtil.getLength(childVehicle)
+    end
+    return length
+end
+
+---@param other AIDriveStrategyUnloadCombine
+---@return number
+function AIDriveStrategyUnloadCombine:getUnloaderDepartureClearance(other)
+    return math.max(30,
+            (self.getTrainLength(self.vehicle) + self.getTrainLength(other.vehicle)) / 2 +
+                    math.max(self.turningRadius, other.turningRadius))
+end
+
+--- Standby and pool moves yield to an active trailer leaving the same entry cluster. Once the active trailer has
+--- cleared the dynamically sized train envelope, normal coordinator movement resumes.
+---@return AIDriveStrategyUnloadCombine|nil
+function AIDriveStrategyUnloadCombine:getNearbyDepartingUnloader()
+    local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+    local ownLength = self.getTrainLength(self.vehicle)
+    for strategy, _ in pairs(self.activeUnloaders or {}) do
+        if strategy ~= self and self.isDepartingForActiveCall(strategy) then
+            local otherX, _, otherZ = getWorldTranslation(strategy.vehicle.rootNode)
+            local clearance = math.max(30,
+                    (ownLength + self.getTrainLength(strategy.vehicle)) / 2 +
+                            math.max(self.turningRadius, strategy.turningRadius))
+            if MathUtil.vector2Length(otherX - x, otherZ - z) < clearance then
+                return strategy
+            end
+        end
+    end
+    return nil
+end
+
+
+--- Promotion to an active call is immediate. Stop nearby provisional movements now rather than waiting for the next
+--- coordinator tick, so two courses cannot begin crossing inside a shared entry cluster.
+function AIDriveStrategyUnloadCombine:holdNearbyStandbyUnloadersForDeparture()
+    local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+    for strategy, _ in pairs(self.activeUnloaders or {}) do
+        if strategy ~= self and strategy.isInStandbyState and strategy:isInStandbyState() then
+            local otherX, _, otherZ = getWorldTranslation(strategy.vehicle.rootNode)
+            if MathUtil.vector2Length(otherX - x, otherZ - z) < self:getUnloaderDepartureClearance(strategy) then
+                self:debug('Holding nearby standby %s while this active call leaves the shared field entry',
+                        CpUtil.getName(strategy.vehicle))
+                strategy:holdAtStandbyPosition()
+            end
+        end
+    end
 end
 
 function AIDriveStrategyUnloadCombine:requestToMoveForward(requestingVehicle)

@@ -46,6 +46,9 @@ calculated is not treated as a blockage, so Courseplay cannot repeatedly swap tr
 While the combine reverses to create a pocket, the trailer remains clear and cannot copy the temporary reverse
 course. It follows forward at the standby gap while the combine cuts into the pocket. Once the combine stops, the
 trailer builds a fresh forward pipe approach without applying moving-unload alignment rules.
+The optional final alignment extension is clipped at the field boundary instead of invalidating an otherwise valid
+route. At a shared field entry, standby and pool movements yield until a nearby actively called trailer has cleared
+the combined train and turning envelope, preventing simultaneous departures from crossing.
 
 Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
 polygon. Standby, reverse-clearance and return routes use a full-rig inset. An active combine approach uses the field

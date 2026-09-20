@@ -177,4 +177,66 @@ assert(strategy:recoverFromFailedCombineApproach(),
 assert(recoveryStarted and strategy.combineToUnload == combine,
         'Approach recovery must retain the active combine assignment')
 
+-- A valid pathfinder course remains usable when only its optional straight alignment extension reaches the edge.
+local extendedBy
+strategy.combinePathBoundary = {}
+FieldworkBoundary = {
+    containsSegment = function(_, _, _, goalX) return goalX <= 14 end,
+}
+local approachCourse = {
+    getNumberOfWaypoints = function() return 5 end,
+    getWaypointPosition = function() return 10, 0, 20 end,
+    extend = function(_, length) extendedBy = length end,
+}
+assert(strategy:extendCombineApproachWithinField(approachCourse, 10, 1, 0) == 4 and extendedBy == 4,
+        'The final alignment extension must be clipped at the boundary instead of discarding the valid route')
+
+-- A standby at a shared entry holds while a nearby active trailer departs. Clearance scales with both complete
+-- tractor/trailer trains and their turning radii rather than a fixed user-facing distance.
+local function makeVehicle(x, z)
+    return {
+        rootNode = { x = x, z = z },
+        getChildVehicles = function() return { { length = 9 } } end,
+        length = 6,
+    }
+end
+AIUtil.getLength = function(vehicle) return vehicle.length end
+getWorldTranslation = function(node) return node.x, 0, node.z end
+MathUtil = MathUtil or {}
+MathUtil.vector2Length = function(x, z) return math.sqrt(x * x + z * z) end
+strategy.vehicle = makeVehicle(0, 0)
+strategy.turningRadius = 9
+strategy.combineToUnload = nil
+local departing = {
+    vehicle = makeVehicle(12, 0),
+    turningRadius = 9,
+    combineToUnload = combine,
+    states = strategy.states,
+    state = strategy.states.WAITING_FOR_PATHFINDER,
+}
+AIDriveStrategyUnloadCombine.activeUnloaders = { [strategy] = strategy.vehicle, [departing] = departing.vehicle }
+assert(strategy:getNearbyDepartingUnloader() == departing,
+        'A nearby active departure must be detected before another standby movement begins')
+local heldForDeparture = false
+strategy.isAvailableForStaging = function() return true end
+strategy.holdAtStandbyPosition = function() heldForDeparture = true end
+strategy.debugSparse = function() end
+strategy:setStandbyAssignment({ harvester = combine, waypoint = { x = 30, z = 30 } })
+assert(heldForDeparture, 'A standby movement must yield while a nearby active trailer clears the shared entry')
+
+local nearbyStandbyHeld = false
+local nearbyStandby = {
+    vehicle = makeVehicle(10, 0),
+    turningRadius = 9,
+    isInStandbyState = function() return true end,
+    holdAtStandbyPosition = function() nearbyStandbyHeld = true end,
+}
+AIDriveStrategyUnloadCombine.activeUnloaders = {
+    [strategy] = strategy.vehicle,
+    [nearbyStandby] = nearbyStandby.vehicle,
+}
+strategy:holdNearbyStandbyUnloadersForDeparture()
+assert(nearbyStandbyHeld,
+        'Promoting an active call must immediately stop a nearby provisional movement at the shared entry')
+
 print('UnloaderRecoveryTest: OK')
