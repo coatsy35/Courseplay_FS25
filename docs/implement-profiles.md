@@ -1,6 +1,6 @@
 # Implement profiles
 
-Current development branch: `implement-directory`. Keep it separate from implement-envelope turn development.
+Current development branch: `codex/implement-directory`. Keep it separate from implement-envelope turn development.
 
 ## Local test build naming
 
@@ -20,10 +20,23 @@ does not add the test title suffix.
 
 Open CP's **Implement profiles** page. **Attached equipment** shows exact and partial matches;
 **All equipment** allows browsing without entering a tractor. Expand an implement type, then a model
-or combination, to see its saved profiles. Combinations
-also appear under their component implement types; these are links to one saved profile. Harvester and header
-setups appear only under Harvesters, without separate Headers or Implement combinations entries. This changes
-only directory grouping; matching still checks the complete equipment setup.
+or combination, to see its saved profiles. Each profile appears under exactly one category.
+Saving asks you to choose from the equipment's actual FS25 shop categories or create a custom
+category. Existing custom categories can be reused. Every chain asks, even when all its implements
+have the same shop category; there are no equipment-specific rules or inferred working categories.
+
+Category IDs and translated titles come from the game's StoreManager, including mod categories.
+Custom names are stored as entered. The chosen category is library metadata, separate from equipment
+identity and multiplayer working settings. Renaming or updating retains it. **Edit > Save changes**
+lets you change it. Cancelling either category dialogue leaves the library unchanged.
+
+Older profiles are resolved against the current shop without rewriting their equipment. Single-item
+profiles with exactly one shop category appear there; chains and unresolved equipment appear once
+under **Uncategorised** until you choose a category. Old CP-inferred category keys are not reused.
+Explicit shop choices survive a missing mod, displaying the shop ID until its translated title is
+available again. The full equipment match still includes every item: removing a seed bin prevents
+an exact match. Root working-machine specialisations only distinguish a self-propelled implement
+from an interchangeable tractor; they do not assign directory categories.
 
 With the tractor and CP stopped, adjust vehicle and course generation settings, then select
 **Save as new**. Select a matching profile and choose **Load profile** to reuse it. **Update profile**

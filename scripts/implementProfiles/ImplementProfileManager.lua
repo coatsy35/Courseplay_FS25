@@ -6,6 +6,7 @@ function ImplementProfileManager.registerProfileSchema(schema, key)
     schema:register(XMLValueType.STRING, key .. '#id')
     schema:register(XMLValueType.STRING, key .. '#name')
     schema:register(XMLValueType.INT, key .. '#revision')
+    schema:register(XMLValueType.STRING, key .. '#category')
     for _, field in ipairs({'model', 'configuration', 'mount', 'parent', 'name', 'group'}) do
         schema:register(XMLValueType.STRING, key .. '.equipment.item(?)#' .. field)
     end
@@ -50,6 +51,7 @@ function ImplementProfileManager.writeProfile(xml, key, profile)
     xml:setValue(key .. '#id', profile.id)
     xml:setValue(key .. '#name', profile.name)
     xml:setValue(key .. '#revision', profile.revision)
+    if profile.category then xml:setValue(key .. '#category', profile.category) end
     for i, item in ipairs(profile.equipment) do
         local entry = string.format('%s.equipment.item(%d)', key, i - 1)
         for _, field in ipairs({'model', 'configuration', 'mount', 'parent', 'name', 'group'}) do
@@ -61,7 +63,7 @@ end
 
 function ImplementProfileManager.readProfile(xml, key)
     local profile = {id = xml:getValue(key .. '#id'), name = xml:getValue(key .. '#name'),
-        revision = xml:getValue(key .. '#revision'), equipment = {}}
+        revision = xml:getValue(key .. '#revision'), category = xml:getValue(key .. '#category'), equipment = {}}
     xml:iterate(key .. '.equipment.item', function(_, entry)
         local item = {}
         for _, field in ipairs({'model', 'configuration', 'mount', 'parent', 'name', 'group'}) do
@@ -174,7 +176,7 @@ function ImplementProfileManager:persist(profiles, nextId)
 end
 
 -- Library editing. Work on copies so failed writes and edits never mutate an applied vehicle setup.
-function ImplementProfileManager:save(vehicle, name, existing)
+function ImplementProfileManager:save(vehicle, name, existing, category)
     if not self:canChange(vehicle) then return nil, 'stopFirst' end
     if not g_currentMission.accessHandler:canPlayerAccess(vehicle) then return nil, 'noAccess' end
     name = (name or ''):match('^%s*(.-)%s*$')
@@ -189,6 +191,7 @@ function ImplementProfileManager:save(vehicle, name, existing)
     end
     local profile = {id = existing and existing.id or (self.libraryId .. '-' .. self.nextId), name = name,
         revision = existing and existing.revision + 1 or 1, equipment = equipment,
+        category = category or (existing and self.profiles[existing.id].category),
         settings = ImplementProfile.capture(vehicle)}
     if not ImplementProfile.valid(profile) then return nil, 'invalidSettings' end
     local profiles = ImplementProfile.copy(self.profiles)
@@ -198,7 +201,7 @@ function ImplementProfileManager:save(vehicle, name, existing)
 end
 
 --- Edit a library copy independently of any tractor or running job.
-function ImplementProfileManager:edit(profile, values)
+function ImplementProfileManager:edit(profile, values, category)
     local current = self.profiles[profile.id]
     if not current or current.revision ~= profile.revision then return nil, 'mismatch' end
     local definitions = {vehicle = CpVehicleSettings, generator = CpCourseGeneratorSettings}
@@ -221,6 +224,7 @@ function ImplementProfileManager:edit(profile, values)
     local profiles = ImplementProfile.copy(self.profiles)
     local edited = profiles[profile.id]
     edited.settings, edited.revision = ImplementProfile.copy(values), current.revision + 1
+    edited.category = category or current.category
     if not ImplementProfile.valid(edited) then return nil, 'invalidSettings' end
     local ok, reason = self:persist(profiles, self.nextId)
     return ok and edited or nil, reason

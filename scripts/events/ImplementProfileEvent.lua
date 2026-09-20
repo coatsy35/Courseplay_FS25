@@ -38,6 +38,7 @@ function ImplementProfileEvent.readValues(streamId)
     return valid and count <= ImplementProfile.MAX_SETTINGS and ImplementProfile.migrateSettings(values) or nil
 end
 
+-- Directory category stays in the personal library; it has no effect on replicated working settings.
 function ImplementProfileEvent.writeProfile(streamId, profile)
     streamWriteString(streamId, profile.id)
     streamWriteString(streamId, profile.name)

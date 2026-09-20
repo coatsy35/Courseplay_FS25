@@ -51,10 +51,11 @@ function CpImplementProfilesFrame:onFrameOpen()
     FocusManager:setFocus(self.profileList)
 end
 
--- Directory model. A combination can have several tree links, all referring to the same saved profile.
+-- Directory model. Each profile belongs to one selected shop or custom category.
 function CpImplementProfilesFrame:buildGroups()
     local manager = g_Courseplay.implementProfiles
     local groups = {}
+    local catalogue = ImplementProfile.shopCategories()
     for _, profile in pairs(manager.profiles) do
         local match = ImplementProfile.match(profile, self.equipment)
         local equipmentNames = {}
@@ -67,23 +68,12 @@ function CpImplementProfilesFrame:buildGroups()
             for _, item in ipairs(profile.equipment) do table.insert(models, item.model) end
             table.sort(models)
             local modelKey = table.concat(models, '|')
-            local categories = {}
-            for _, item in ipairs(profile.equipment) do categories[item.group] = true end
-            -- Keep harvesting setups together, without duplicate header or combination entries.
-            -- This affects browsing only; matching still uses every saved equipment item.
-            if categories.harvesters or categories.headers then
-                categories = {harvesters = true}
-            elseif #profile.equipment > 1 then
-                categories.combinations = true
-            end
-            -- Multiple directory links refer to the same profile ID, never duplicate saved data.
-            for group in pairs(categories) do
-                groups[group] = groups[group] or {title = g_i18n:getText('CP_implementProfiles_group_' .. group), models = {}, count = 0}
-                local category = groups[group]
-                category.models[modelKey] = category.models[modelKey] or {title = modelName, profiles = {}}
-                table.insert(category.models[modelKey].profiles, {profile = profile, match = match})
-                category.count = category.count + 1
-            end
+            local group = ImplementProfile.directoryGroup(profile.equipment, profile.category, catalogue)
+            groups[group] = groups[group] or {title = ImplementProfile.categoryTitle(group), models = {}, count = 0}
+            local category = groups[group]
+            category.models[modelKey] = category.models[modelKey] or {title = modelName, profiles = {}}
+            table.insert(category.models[modelKey].profiles, {profile = profile, match = match})
+            category.count = category.count + 1
         end
     end
     return groups
@@ -339,8 +329,15 @@ end
 function CpImplementProfilesFrame:finishEdit(save)
     if not self.editDraft then return end
     if save then
-        local saved, reason = g_Courseplay.implementProfiles:edit(self.editDraft, self.editDraft.settings)
-        if not saved then self:showError(reason); return end
+        local draft = self.editDraft
+        -- Saving edits also lets older profiles choose a shop or custom category.
+        CpImplementProfileGui.chooseCategory(draft.equipment, function(category)
+            if self.editDraft ~= draft then return end
+            local saved, reason = g_Courseplay.implementProfiles:edit(draft, draft.settings, category)
+            if not saved then self:showError(reason); return end
+            self:finishEdit(false)
+        end, draft.category)
+        return
     end
     self.editDraft = nil
     self.draftSettings = nil

@@ -20,13 +20,12 @@ ImplementProfile.SETTINGS = {
         'rowsPerLand', 'spiralFromInside', 'bypassIslands', 'nIslandHeadlands', 'islandHeadlandClockwise'
     }
 }
-ImplementProfile.GROUPS = {
-    {'ploughs', 'spec_plow'}, {'seedDrills', 'spec_sowingMachine'},
-    {'cultivators', 'spec_cultivator'}, {'mowers', 'spec_mower'},
-    {'sprayers', 'spec_sprayer'}, {'balers', 'spec_baler'},
-    {'wrappers', 'spec_baleWrapper'}, {'windrowers', 'spec_windrower'},
-    {'tedders', 'spec_tedder'}, {'forageWagons', 'spec_forageWagon'},
-    {'harvesters', 'spec_combine'}, {'headers', 'spec_cutter'}
+-- Capabilities only decide whether the root vehicle belongs in the equipment identity.
+-- They never assign directory categories: tractors must remain interchangeable.
+ImplementProfile.WORKING_SPECIALISATIONS = {
+    'spec_plow', 'spec_sowingMachine', 'spec_cultivator', 'spec_mower', 'spec_sprayer',
+    'spec_baler', 'spec_baleWrapper', 'spec_windrower', 'spec_tedder', 'spec_forageWagon',
+    'spec_combine', 'spec_cutter'
 }
 
 -- Data helpers and equipment identity. Stable keys allow profiles to move between maps and machines.
@@ -49,11 +48,62 @@ function ImplementProfile.migrateSettings(values)
     return values
 end
 
-function ImplementProfile.group(object)
-    for _, group in ipairs(ImplementProfile.GROUPS) do
-        if object[group[2]] then return group[1] end
+--- Resolve portable saved models against the current shop, including mod and DLC categories.
+-- Build once per directory refresh/chooser; do not cache across store reloads or language changes.
+function ImplementProfile.shopCategories()
+    local catalogue = {}
+    for _, item in ipairs(g_storeManager and g_storeManager:getItems() or {}) do
+        -- Match Vehicle's clean filename too: DLC paths may not contain their customEnvironment name.
+        local model = ImplementProfile.model({configFileName = item.xmlFilename,
+            configFileNameClean = Utils.getFilenameInfo(item.xmlFilename, true), customEnvironment = item.customEnvironment})
+        local categories = {}
+        for _, name in ipairs(item.categoryNames or {item.categoryName}) do
+            local category = g_storeManager:getCategoryByName(name)
+            if category then categories['shop:' .. category.name] = true end
+        end
+        catalogue[model] = categories
     end
-    return 'other'
+    return catalogue
+end
+
+--- Shop IDs are stable across languages; custom names are user data, never translation keys.
+function ImplementProfile.categoryTitle(key)
+    local name = key:match('^shop:(.+)$')
+    if name then
+        local category = g_storeManager and g_storeManager:getCategoryByName(name)
+        return category and category.title or name
+    end
+    return key:match('^custom:(.+)$') or g_i18n:getText('CP_implementProfiles_uncategorised')
+end
+
+function ImplementProfile.directoryGroups(equipment, catalogue)
+    catalogue = catalogue or ImplementProfile.shopCategories()
+    local found, choices = {}, {}
+    for _, item in ipairs(equipment) do
+        for key in pairs(catalogue[item.model] or {}) do found[key] = true end
+    end
+    for key in pairs(found) do table.insert(choices, key) end
+    table.sort(choices, function(a, b)
+        local left, right = ImplementProfile.categoryTitle(a), ImplementProfile.categoryTitle(b)
+        return left == right and a < b or left < right
+    end)
+    return choices
+end
+
+--- Legacy chains remain accessible without guessing their owner's preferred category.
+-- Choosing a category later changes only library metadata, never equipment matching.
+function ImplementProfile.directoryGroup(equipment, preferred, catalogue)
+    if preferred and (preferred:match('^shop:.+$') or preferred:match('^custom:.+$')) then return preferred end
+    local choices = ImplementProfile.directoryGroups(equipment, catalogue)
+    if #equipment == 1 and #choices == 1 then return choices[1] end
+    return 'uncategorised'
+end
+
+function ImplementProfile.customCategory(name)
+    if type(name) ~= 'string' then return nil end
+    name = name:match('^%s*(.-)%s*$')
+    if name == '' or #name > 200 or name:find('%c') then return nil end
+    return 'custom:' .. name
 end
 
 local function normalise(path)
@@ -115,6 +165,7 @@ function ImplementProfile.signature(equipment)
 end
 
 function ImplementProfile.describe(vehicle)
+    -- Retain the legacy group field for XML/network compatibility; display categories come from the shop.
     local equipment = {}
     local function visit(parent, parentKey)
         for _, attachment in ipairs(parent:getAttachedImplements()) do
@@ -129,18 +180,21 @@ function ImplementProfile.describe(vehicle)
             end
             local item = {
                 model = ImplementProfile.model(object), configuration = ImplementProfile.configuration(object),
-                mount = mount, parent = parentKey, name = object:getName(), group = ImplementProfile.group(object)
+                mount = mount, parent = parentKey, name = object:getName(), group = ''
             }
             table.insert(equipment, item)
             visit(object, ImplementProfile.equipmentKey(item))
         end
     end
     -- Self-propelled working machines also have an implement identity; ordinary tractors do not.
-    local rootGroup = ImplementProfile.group(vehicle)
+    local isWorkingMachine = false
+    for _, name in ipairs(ImplementProfile.WORKING_SPECIALISATIONS) do
+        if vehicle[name] then isWorkingMachine = true; break end
+    end
     local rootKey = ''
-    if rootGroup ~= 'other' then
+    if isWorkingMachine then
         local item = {model = ImplementProfile.model(vehicle), configuration = ImplementProfile.configuration(vehicle),
-            mount = 'self', parent = '', name = vehicle:getName(), group = rootGroup}
+            mount = 'self', parent = '', name = vehicle:getName(), group = ''}
         table.insert(equipment, item)
         rootKey = ImplementProfile.equipmentKey(item)
     end
@@ -265,6 +319,13 @@ function ImplementProfile.valid(profile)
         for _, field in ipairs({'model', 'configuration', 'mount', 'parent', 'name', 'group'}) do
             if type(item[field]) ~= 'string' or #item[field] > 8192 then return false end
         end
+    end
+    -- Permit old category keys and temporarily unavailable shop entries so existing libraries still load.
+    local category = profile.category
+    if category ~= nil then
+        if type(category) ~= 'string' or #category == 0 or #category > 207 or category:find('%c') then return false end
+        if category:sub(1, 7) == 'custom:' and ImplementProfile.customCategory(category:sub(8)) ~= category then return false end
+        if category == 'shop:' then return false end
     end
     local count = 0
     for key, value in pairs(profile.settings) do
