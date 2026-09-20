@@ -121,6 +121,38 @@ lead.vehicle.rootNode.x = 100
 queued:resumeDepartureCall()
 assert(queued.pathfinderController.active and queued.state == queued.states.WAITING_FOR_PATHFINDER)
 
+-- A staged lead can use the pocket-follow course immediately without driving a new loop to its own position.
+local pocketLead, pocketHarvester = unloader(0), harvester(100)
+local pocketStrategy = pocketHarvester:getCpDriveStrategy()
+pocketStrategy.isWaitingForUnload = function() return false end
+pocketStrategy.isManeuvering = function() return true end
+pocketLead.state = pocketLead.states.WAITING_IN_STANDBY
+pocketLead.standbyAssignment = {harvester = pocketHarvester, waypoint = {x = 0, z = 0}, role = 'STANDBY'}
+UnloaderCoordinator.assignments[pocketLead] = pocketLead.standbyAssignment
+AIDriveStrategyUnloadCombine.activeUnloaders = {[pocketLead] = pocketLead.vehicle}
+pocketLead.isPathfindingNeeded = function() return false end
+local followedPocket = false
+pocketLead.startFollowingCombineToPocket = function() followedPocket = true end
+pocketLead.startPathfindingToMovingCombine = function() error('A parked lead must not start a needless route') end
+assert(pocketLead:callForPocket(pocketHarvester) and followedPocket and pocketLead.combineToUnload == pocketHarvester)
+pocketStrategy.isWaitingForUnload = function() return true end
+local calledReadyPocket = false
+pocketLead.call = function(_, combine, waypoint)
+    calledReadyPocket = combine == pocketHarvester and waypoint == nil; return true
+end
+assert(pocketLead:callForPocket(pocketHarvester) and calledReadyPocket,
+        'A ready pocket must use the pipe approach immediately rather than return to staging')
+
+local thresholdTrailer = unloader(0)
+thresholdTrailer.settings = {fullThreshold = setting(85)}
+thresholdTrailer.getAllTrailersFull = function(_, threshold) assert(threshold == 85); return true end
+assert(not thresholdTrailer:isAllowedToBeCalled(a), 'A trailer due to leave at its threshold must not take a new call')
+local train, attached = vehicle(0), vehicle(0)
+train.length, attached.length = 6, 10
+train.getChildVehicles = function() return {train, attached, attached} end
+assert(AIDriveStrategyUnloadCombine.getTrainLength(train) == 16,
+        'Clearance dimensions must count each attached vehicle once, including APIs that return the tractor')
+
 -- The full trailer retains ownership throughout its reverse, and the separate record survives AD handover.
 local full = unloader(100)
 full.combineToUnload = a

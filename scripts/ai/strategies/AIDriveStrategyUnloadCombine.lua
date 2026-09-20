@@ -2114,6 +2114,7 @@ end
 
 ---@param callingHarvester table|nil
 function AIDriveStrategyUnloadCombine:isAllowedToBeCalled(callingHarvester)
+    if self:getAllTrailersFull(self.settings.fullThreshold:getValue()) then return false end
     local available = self:isIdle() or self:hasToWaitForAssignedCombine() or self:isAvailableForStaging()
     return available and self:canRetryCombineApproach(callingHarvester) and
             (not callingHarvester or self:getFreeCapacityForHarvester(callingHarvester) > 0) and
@@ -2150,6 +2151,7 @@ end
 ---@param combine table
 ---@return boolean
 function AIDriveStrategyUnloadCombine:callForPocket(combine)
+    if combine:getCpDriveStrategy():isWaitingForUnload() then return self:call(combine, nil) end
     local assignment = UnloaderCoordinator.assignments[self]
     local waypoint = UnloaderCoordinator:getStagingWaypoint(combine) or
             assignment and assignment.harvester == combine and assignment.waypoint
@@ -2165,6 +2167,10 @@ function AIDriveStrategyUnloadCombine:callForPocket(combine)
     self:holdNearbyStandbyUnloadersForDeparture()
     self.rendezvousWaypoint = waypoint
     self.approachingPocketStandby = true
+    if not self:isPathfindingNeeded(self.vehicle, waypoint, 0, 0, 25) then
+        self:startFollowingCombineToPocket()
+        return true
+    end
     self:setNewState(self.states.WAITING_FOR_PATHFINDER)
     self:debug('callForPocket: approaching the lead position behind %s', CpUtil.getName(combine))
     self:startPathfindingToMovingCombine(waypoint, 0, 0)
@@ -3131,8 +3137,12 @@ end
 ---@return number
 function AIDriveStrategyUnloadCombine.getTrainLength(vehicle)
     local length = AIUtil.getLength(vehicle)
+    local seen = {[vehicle] = true}
     for _, childVehicle in ipairs(vehicle:getChildVehicles()) do
-        length = length + AIUtil.getLength(childVehicle)
+        if not seen[childVehicle] then
+            length = length + AIUtil.getLength(childVehicle)
+            seen[childVehicle] = true
+        end
     end
     return length
 end

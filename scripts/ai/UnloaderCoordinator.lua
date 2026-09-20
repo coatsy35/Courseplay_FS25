@@ -187,6 +187,27 @@ function UnloaderCoordinator:getSecondsUntilDowntime(harvester)
     return math.max(0, (100 - strategy:getFillLevelPercentage()) * 6)
 end
 
+--- Once a lead is assigned, further demand is for relief, not another lead for the same tank.
+function UnloaderCoordinator:getSecondsUntilRelief(harvester, strategy, activeUnloader, now)
+    local seconds = self:getSecondsUntilTrailerFull(activeUnloader, now)
+    if not strategy:alwaysNeedsUnloader() and activeUnloader.getFreeCapacityForHarvester and strategy.combineController then
+        local remaining = activeUnloader:getFreeCapacityForHarvester(harvester) - strategy.combineController:getFillLevel()
+        if remaining <= 0 then return 0 end
+        if strategy.litersPerSecond and strategy.litersPerSecond > 0.1 then
+            -- Include the crop still being harvested while the lead travels and unloads.
+            seconds = math.min(seconds, remaining / strategy.litersPerSecond)
+        end
+    end
+    return seconds
+end
+
+function UnloaderCoordinator:getSecondsUntilUncovered(harvester)
+    local strategy = self:getHarvesterStrategy(harvester)
+    local active = strategy and self:getActiveUnloader(harvester)
+    if active then return self:getSecondsUntilRelief(harvester, strategy, active, getCurrentTime()) end
+    return self:getSecondsUntilDowntime(harvester)
+end
+
 ---@param harvester table
 ---@param now number
 ---@return table|nil
@@ -199,19 +220,10 @@ function UnloaderCoordinator:createDemand(harvester, now)
     local isForager = strategy:alwaysNeedsUnloader()
     local activeUnloader = self:getActiveUnloader(harvester)
     local secondsUntilNeeded
-    if isForager then
-        secondsUntilNeeded = activeUnloader and self:getSecondsUntilTrailerFull(activeUnloader, now) or 0
-    elseif activeUnloader then
-        -- The called trailer is already the combine's lead. Keep the next trailer in the rear pool until the lead's
-        -- measured fill rate shows that it will need relief; the combine's own call percentage is already covered.
-        secondsUntilNeeded = self:getSecondsUntilTrailerFull(activeUnloader, now)
-        if activeUnloader.getFreeCapacityForHarvester and strategy.combineController then
-            local free = activeUnloader:getFreeCapacityForHarvester(harvester)
-            if free < strategy.combineController:getFillLevel() then
-                -- Capacity is already committed to the crop in this tank. Prepare relief before discharge starts.
-                secondsUntilNeeded = 0
-            end
-        end
+    if activeUnloader then
+        secondsUntilNeeded = self:getSecondsUntilRelief(harvester, strategy, activeUnloader, now)
+    elseif isForager then
+        secondsUntilNeeded = 0
     elseif strategy.getSecondsUntilUnloaderCall then
         secondsUntilNeeded = strategy:getSecondsUntilUnloaderCall()
     else
@@ -227,7 +239,7 @@ function UnloaderCoordinator:createDemand(harvester, now)
         activeUnloader = activeUnloader,
         isFirm = isForager,
         secondsUntilNeeded = secondsUntilNeeded,
-        secondsUntilDowntime = self:getSecondsUntilDowntime(harvester),
+        secondsUntilDowntime = activeUnloader and secondsUntilNeeded or self:getSecondsUntilDowntime(harvester),
         fillLevelPercentage = strategy:getFillLevelPercentage(),
         waypoint = waypoint,
         waypointIx = waypointIx,
@@ -351,8 +363,11 @@ function UnloaderCoordinator:getStableStagingWaypoint(harvester, role, waypoint,
         local workWidth = demand and demand.harvesterStrategy.getWorkWidth and
                 demand.harvesterStrategy:getWorkWidth() or 0
         local callPercentage = harvester:getCpSettings().callUnloaderPercent:getValue()
-        local atCallPercentage = demand and not demand.isFirm and
-                demand.fillLevelPercentage >= callPercentage
+        local atCallPercentage = demand and not demand.isFirm and not demand.activeUnloader and
+                (demand.fillLevelPercentage or 0) >= callPercentage
+        if demand and not atCallPercentage and not self:shouldDeploy(unloader, demand, oldAssignment) then
+            return oldAssignment.waypoint, oldAssignment.waypointIx
+        end
         local movementBand = atCallPercentage and math.max(15, workWidth) or math.max(50, 2 * workWidth)
         if distance > self:getStandbyDistance(harvester) + movementBand then
             -- Advance in deliberate hops. Before the call percentage the band is broad; at the call percentage it
@@ -404,11 +419,22 @@ function UnloaderCoordinator:shouldDeploy(unloader, demand, oldAssignment)
     if unloader.shouldWaitAtPoolForHarvester and unloader:shouldWaitAtPoolForHarvester(demand.harvester) then
         return false
     end
-    local _, ete
+    local distance, ete
     if demand.waypoint then
-        _, ete = unloader:getDistanceAndEteToWaypoint(demand.waypoint)
+        distance, ete = unloader:getDistanceAndEteToWaypoint(demand.waypoint)
     else
-        _, ete = unloader:getDistanceAndEteToVehicle(demand.harvester)
+        distance, ete = unloader:getDistanceAndEteToVehicle(demand.harvester)
+    end
+    -- The harvested staging point trails a moving combine. Allow time to close that moving gap, rather than
+    -- planning as if the combine will stay where it is throughout the journey.
+    if not demand.activeUnloader and demand.harvester.getSpeedLimit and distance > 0 then
+        local speedLimit = demand.harvester:getSpeedLimit(true)
+        local settings = demand.harvesterStrategy.settings
+        local workSpeed = settings and settings.fieldWorkSpeed and settings.fieldWorkSpeed:getValue() or speedLimit
+        local harvestSpeed = math.min(30, speedLimit, workSpeed) / 3.6
+        local trailerSpeed = unloader.settings and unloader.settings.fieldSpeed and
+                unloader.settings.fieldSpeed:getValue() / 3.6 or distance / math.max(1, ete)
+        ete = math.max(ete, distance / math.max(1, trailerSpeed - harvestSpeed))
     end
     local safetyMargin = demand.isFirm and self.foragerSafetyMarginSeconds or self.combineSafetyMarginSeconds
     if oldAssignment and oldAssignment.harvester == demand.harvester and oldAssignment.role == 'STANDBY' then
@@ -696,11 +722,14 @@ function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
             self:getHarvesterStrategy(assignment.harvester) and self:getRequestedStandbyCount(assignment.harvester) > 0 then
         return false
     end
-    if assignment and assignment.waitUntilHarvesterPasses then
+    if assignment and assignment.waitUntilHarvesterPasses and
+            (not callingHarvester or not unloader.shouldWaitAtPoolForHarvester or
+                    unloader:shouldWaitAtPoolForHarvester(callingHarvester)) then
         return false
     end
     if assignment and assignment.reserved and assignment.harvester ~= callingHarvester and callingHarvester then
-        local assignedSeconds = self:getSecondsUntilDowntime(assignment.harvester)
+        local assignedSeconds = self:getSecondsUntilUncovered(assignment.harvester)
+        -- An actual call may be replacing a delayed lead. Its urgency is the harvester's remaining tank time.
         local callingSeconds = self:getSecondsUntilDowntime(callingHarvester)
         if assignedSeconds + self.combineSafetyMarginSeconds < callingSeconds then
             self:debug('Keeping %s reserved for %s: downtime in %.1fs versus %.1fs for %s',

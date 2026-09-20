@@ -26,8 +26,9 @@ independent unloaders from clustering behind the nearest machine.
   so nearby combines finish its load without preferring a distant trailer. Failed approaches have a 15-second
   cooldown; abandoned pathfinders are cancelled and obsolete callbacks cannot affect a new assignment.
 
-Demands are ordered by predicted time until harvesting stops, then tank fill and predicted time until the trailer is
-needed. This retains priority between combines after several have passed their normal call percentages. Combines use
+Demands are ordered by predicted time until harvesting loses trailer coverage, then tank fill and predicted time until
+the trailer is needed. An uncovered combine competes against the relief deadline of an already covered combine, not
+that covered combine's still-full tank. This retains priority after several pass their normal call percentages. Combines use
 the measured harvest rate, their normal call percentage and, while unloading, the active trailer's predicted time to
 full. Forage harvesters use the active trailer's measured fill rate, with a larger safety margin because they have no
 holding tank. Existing assignments receive a temporary score advantage to prevent repeated target changes. A real
@@ -39,9 +40,14 @@ time is within ten seconds of the nearest option. Before the configured call per
 deliberate staging moves to harvested positions and parks between moves. It does not actively follow the combine.
 At the configured percentage, Courseplay promotes that parked lead and starts its unloading approach. Rear pool
 trailers stay parked until the active lead's measured fill rate predicts that it will need relief, or its compatible
-free capacity is already smaller than the crop in the combine's tank. Future staging points account for predicted
-travel along the course but must already be harvested; an obsolete en-route lead target can be refreshed in bounded
-steps. Failed staging is retried and does not count as arrival.
+free capacity is already smaller than the crop in the combine's tank. Relief prediction also accounts for ongoing
+harvest consuming the capacity left after that tank. Future staging points account for predicted travel along the
+course but must already be harvested. Departure timing allows for closing the gap to a moving harvester. A parked
+lead remains still when its predicted need is distant. Failed staging is retried and does not count as arrival.
+
+The configured call percentage governs normal harvesting calls. A combine already waiting for unloading, including
+a finished row or course below that percentage, can always request a trailer. A queued departure can yield to a
+materially quicker eligible trailer. A trailer at its configured departure fill threshold cannot accept a new call.
 
 Disabling moving unload on the first headland prevents only alongside unloading. The normal call still promotes the
 lead trailer, which follows behind at the configured distance until the combine reaches its pocket. A route being
@@ -49,13 +55,16 @@ calculated is not treated as a blockage, so Courseplay cannot repeatedly swap tr
 While the combine reverses to create a pocket, the trailer remains clear and cannot copy the temporary reverse
 course. It follows forward at the standby gap while the combine cuts into the pocket. Once the combine stops, the
 trailer builds a fresh forward pipe approach without applying moving-unload alignment rules.
+An already staged and aligned lead joins the pocket-follow course directly. A completed pocket uses the pipe approach
+immediately, even if it becomes ready while a departure was queued.
 The optional final alignment extension is clipped at the field boundary instead of invalidating an otherwise valid
 route. At a shared field entry, subsequent active calls also queue until the departing trailer clears the combined
 train and turning envelope. Calls remain assigned while queued. A nearby forward approach joins the appropriate
 moving or stopped unload course without a needless global pathfinding loop.
 
 Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
-polygon. Pathfinding checks oriented tractor/trailer footprints and their swept segments; completed courses and live
+polygon. Coarse grid routing checks the field corridor; the detailed search checks oriented tractor/trailer footprints
+and their swept segments. Completed courses and live
 steering also check attached bodies. Active combine approaches use the actual polygon with footprint checks rather
 than a circular inset. A rejected live movement schedules an in-field recovery route instead of an indefinite stop.
 A failed exact approach falls back to a
@@ -88,7 +97,24 @@ Each combine or forage harvester has an **Unloader coordination** section:
 Staging pauses during turns and manoeuvres. Targets must be on fruit-free ground, remain inside the field polygon,
 and retain collision avoidance. Reached pool and staging targets remain fixed until coverage or urgency changes.
 
-## Validation
+## Behaviour checklist for test build 2924
+
+| Requirement | Automated coverage | In-game acceptance |
+| --- | --- | --- |
+| Lead waits, then approaches by the configured call percentage | Moving-gap estimate, parked lead, 65% and 80% calls | Observe one lead entering and parking before each configured threshold |
+| Rear trailers enter and park clear | Stable pool targets, progressive demand, four combines/five trailers | Check separate entry points and parked rigs on the harvested strip |
+| Finish nearby partial loads; share trailers across combines | Partial-load arrival score, uncovered-machine priority, caller-specific fruit wait | One partial trailer serves two nearby combines without a loop |
+| Pocket and first-headland unloading | Actual call dispatcher, ready-pocket promotion, reverse hold and forward approach | Lead waits clear while the pocket is cut, then unloads promptly |
+| Forager relief | Firm reservations, measured trailer fill and capacity | Full trailer clears and relief takes the pipe with minimal interruption |
+| Safe turns and recovery | Header-derived clearances, convoy order, blocked-call recovery | Wide headers clear corners and pocket returns without contacting following vehicles |
+| Field boundary and AD handover | Swept rig containment, entry direction, persistent clearance ownership | No rig leaves the polygon before AD control; verify AD joins its network |
+| Stable calls and routes | Departure queue, nearer replacement, stale callbacks and long searches | First tractor completes departure; others wait and then depart in order |
+
+These checks exercise the real Lua decision functions with engine stubs. They do not simulate GIANTS vehicle physics,
+fruit maps, collision shapes or AutoDrive. Live-game acceptance remains necessary; the latest captured log predates
+builds 2923 and 2924.
+
+## Further validation
 
 The focused Lua regressions cover allocation, capacity, direct approaches, callback cancellation, failed staging,
 departure queues, clearance ownership, boundary footprints, update dispatch and independent-course turn clearance.

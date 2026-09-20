@@ -953,7 +953,7 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
     -- parked nearby and preserve the vehicle setting as the actual promotion point.
     local coordinatedStandby = self.settings.nearbyStandbyUnloaders and
             self.settings.nearbyStandbyUnloaders:getValue() > 0
-    if coordinatedStandby and not self:alwaysNeedsUnloader() and
+    if coordinatedStandby and not self:alwaysNeedsUnloader() and not self:isWaitingForUnload() and
             self.combineController:getFillLevelPercentage() < self.settings.callUnloaderPercent:getValue() then
         self:debug('callUnloaderWhenNeeded: lead is staged; waiting for configured call percentage')
         return
@@ -1067,7 +1067,7 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
         return false
     end
     local _, assignedEte = assignedUnloader:getDistanceAndEteToVehicle(self.vehicle)
-    if assignedUnloader.pendingDepartureCall then return false end
+    -- A queued departure retains its call, but can still yield to a materially quicker trailer outside the queue.
     local assignedIsStuck = assignedUnloader.isInDeadlock and assignedUnloader:isInDeadlock()
     if not assignedIsStuck and (not assignedEte or
             bestEte + self.unloaderSwitchEteAdvantage >= assignedEte) then

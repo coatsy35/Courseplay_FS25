@@ -353,3 +353,75 @@ predictive:getCpDriveStrategy().getClosestFieldworkWaypointIx = function() retur
 assert(UnloaderCoordinator:getPredictedStagingWaypoint(predictive, predictive:getCpDriveStrategy(), 20) == nil,
         'Starting a temporary pocket course without a passed waypoint must not crash fleet staging')
 print('Fleet reservation, capacity and prediction regressions: OK')
+
+-- Coverage, not the still-full tank of a served combine, determines who gets the remaining trailer.
+local covered = makeHarvester('Covered full combine', 0, false, 0, 0, 0, 100)
+local uncovered = makeHarvester('Uncovered combine', 100, false, 0, 100, 10, 98)
+covered:getCpDriveStrategy().combineController = {getFillLevel = function() return 20000 end}
+local serving = makeUnloader('Active lead', 0, false, covered, 0)
+serving.getFreeCapacityForHarvester = function() return 32000 end
+local remaining = makeUnloader('Remaining trailer', 10, true, nil, 0)
+AIDriveStrategyUnloadCombine.activeUnloaders = {[serving] = serving.vehicle, [remaining] = remaining.vehicle}
+g_currentMission.vehicleSystem.vehicles = {covered, uncovered}
+UnloaderCoordinator.assignments = {[remaining] = {harvester = covered, reserved = true, isFirm = false,
+    role = 'POOL', assignedAt = g_currentMission.time}}
+assert(UnloaderCoordinator:canBeCalledBy(remaining, uncovered),
+        'An unnecessary relief reservation must not deny a call from an uncovered combine')
+UnloaderCoordinator:rebalance(true)
+assert(remaining.assignment.harvester == uncovered and remaining.assignment.reserved,
+        'An uncovered nearly-full combine must receive the trailer before a covered combine receives relief')
+covered:getCpDriveStrategy().litersPerSecond = 20
+serving.getFreeCapacityForHarvester = function() return 21000 end
+assert(UnloaderCoordinator:createDemand(covered, g_currentMission.time).secondsUntilNeeded == 50,
+        'Relief must account for crop arriving after the tank fills the active trailer')
+
+-- A moving harvester extends the journey to close staging; a distant demand must not cause constant following.
+local movingHarvester = makeHarvester('Moving harvester', 350, false, 110, 350)
+movingHarvester.getSpeedLimit = function() return 7.2, true end
+local approaching = makeUnloader('Approaching trailer', 0, true, nil, 0)
+local movingDemand = UnloaderCoordinator:createDemand(movingHarvester, g_currentMission.time)
+assert(UnloaderCoordinator:shouldDeploy(approaching, movingDemand),
+        'The lead must leave early enough to close the gap to a moving combine by the call setting')
+movingHarvester.getSpeedLimit = function() return 0, false end
+assert(not UnloaderCoordinator:shouldDeploy(approaching, movingDemand),
+        'Without harvester movement this same journey is not due yet')
+local parkedAssignment = {harvester = movingHarvester, role = 'STANDBY', waypoint = {x = 0, z = 0}, waypointIx = 600}
+approaching.reachedStandby = true
+movingDemand.secondsUntilNeeded = 600
+local parkedPoint = UnloaderCoordinator:getStableStagingWaypoint(movingHarvester, 'STANDBY',
+        {x = 300, z = 0}, 950, parkedAssignment, approaching, movingDemand)
+assert(parkedPoint == parkedAssignment.waypoint, 'A parked lead must not chase a combine with distant demand')
+
+-- Four independent combines receive one reservation each; surplus trailers stay in the rear pool.
+local fleetHarvesters, fleetTrailers = {}, {}
+AIDriveStrategyUnloadCombine.activeUnloaders = {}
+UnloaderCoordinator.assignments = {}
+for i = 1, 4 do
+    fleetHarvesters[i] = makeHarvester('Combine ' .. i, i * 1000, false, 100, i * 1000)
+    fleetTrailers[i] = makeUnloader('Trailer ' .. i, i * 1000 - 50, true, nil, 0)
+    AIDriveStrategyUnloadCombine.activeUnloaders[fleetTrailers[i]] = fleetTrailers[i].vehicle
+end
+local extra = makeUnloader('Extra trailer', 1950, true, nil, 0)
+AIDriveStrategyUnloadCombine.activeUnloaders[extra] = extra.vehicle
+g_currentMission.vehicleSystem.vehicles = fleetHarvesters
+UnloaderCoordinator:rebalance(true)
+local reservations, pools = {}, 0
+for _, assignment in pairs(UnloaderCoordinator.assignments) do
+    if assignment.reserved then
+        assert(not reservations[assignment.harvester], 'A combine must never have two reserved leads')
+        reservations[assignment.harvester] = true
+    else
+        assert(assignment.role == 'POOL'); pools = pools + 1
+    end
+end
+for _, harvester in ipairs(fleetHarvesters) do assert(reservations[harvester]) end
+assert(pools == 1, 'The spare trailer must be pooled rather than becoming a second lead')
+local aheadTrailer = makeUnloader('Ahead waiting trailer', 2000, true, nil, 40)
+UnloaderCoordinator.assignments[aheadTrailer] = {harvester = fleetHarvesters[1], role = 'POOL',
+    reserved = false, waitUntilHarvesterPasses = true}
+aheadTrailer.shouldWaitAtPoolForHarvester = function(_, harvester) return harvester == fleetHarvesters[1] end
+assert(not UnloaderCoordinator:canBeCalledBy(aheadTrailer, fleetHarvesters[1]),
+        'An ahead trailer must retain its fruit-protected wait for a harvester that has not passed')
+assert(UnloaderCoordinator:canBeCalledBy(aheadTrailer, fleetHarvesters[2]),
+        'A wait for one harvester must not exclude a safe call from another that has already passed')
+print('Fleet coverage, call timing and parked-lead acceptance regressions: OK')

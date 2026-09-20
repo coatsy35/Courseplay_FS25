@@ -162,6 +162,11 @@ assert(switchStrategy:shouldReconsiderAssignedUnloader(),
 switchStrategy.isWaitingForUnload = function() return true end
 assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled,
         'A stopped combine must transfer a distant call to a materially quicker eligible trailer')
+candidateCalled = false
+assigned.pendingDepartureCall = {combine = switchStrategy.vehicle}
+assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled,
+        'A queued distant call must also yield to a materially quicker trailer that can respond')
+assigned.pendingDepartureCall = nil
 
 candidateCalled = false
 assigned.getDistanceAndEteToVehicle = function() return 25, 25 end
@@ -219,5 +224,33 @@ assert(not pocketCallStrategy:callLeadForPocketWhenNeeded() and not pocketCallAc
 pocketCallStrategy.combineController.getFillLevelPercentage = function() return 80 end
 assert(pocketCallStrategy:callLeadForPocketWhenNeeded() and pocketCallAccepted,
         'A first-headland restriction must still call the parked lead at the configured call percentage')
+
+-- Exercise the public call dispatcher, including a finished row below the normal call percentage.
+local fill, callPercent, waiting, directCalls, pocketCalls = 74, 80, true, 0, 0
+pocketCallStrategy.timeToCallUnloader = {get = function() return true end, set = function() end}
+pocketCallStrategy.unloader = {get = function() return nil end}
+pocketCallStrategy.debug = function() end
+pocketCallStrategy.alwaysNeedsUnloader = function() return false end
+pocketCallStrategy.isWaitingForUnload = function() return waiting end
+pocketCallStrategy.findBestWaypointToUnload = function() return nil end
+pocketCallStrategy.combineController.getFillLevelPercentage = function() return fill end
+pocketCallStrategy.settings.nearbyStandbyUnloaders = {getValue = function() return 1 end}
+pocketCallStrategy.settings.callUnloaderPercent.getValue = function() return callPercent end
+pocketLeadStrategy.call = function() directCalls = directCalls + 1; return true end
+pocketLeadStrategy.callForPocket = function() pocketCalls = pocketCalls + 1; return true end
+pocketCallStrategy:callUnloaderWhenNeeded()
+assert(directCalls == 1, 'A combine already waiting below the threshold must still call a trailer')
+waiting, fill = false, 79
+pocketCallStrategy:callUnloaderWhenNeeded()
+assert(pocketCalls == 0, 'A working combine below its setting must leave its staged lead parked')
+fill = 80
+pocketCallStrategy:callUnloaderWhenNeeded()
+assert(pocketCalls == 1, 'At the call setting the first-headland pocket lead must be called')
+callPercent, fill = 65, 64
+pocketCallStrategy:callUnloaderWhenNeeded()
+assert(pocketCalls == 1)
+fill = 65
+pocketCallStrategy:callUnloaderWhenNeeded()
+assert(pocketCalls == 2, 'The trigger must follow the setting rather than a hard-coded 80 percent')
 
 print('PocketCoursePlanningTest: OK')
