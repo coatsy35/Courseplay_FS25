@@ -40,23 +40,34 @@ function FieldworkBoundary.fitOffset(boundary, x, z, heading, wanted)
     return fitted
 end
 
---- Check segments as well as waypoints, including any appended entry adjustment.
-function FieldworkBoundary.containsCourse(boundary, course)
+--- Check segments as well as waypoints. An optional sub-range lets callers validate only a newly appended section
+--- without rejecting an existing generated headland course that legitimately uses the full working width.
+---@param firstIx number|nil
+---@param lastIx number|nil
+---@param allowEntry boolean|nil allow the range to start outside the corridor provided it enters and never leaves
+function FieldworkBoundary.containsCourse(boundary, course, firstIx, lastIx, allowEntry)
     if not boundary then return true end
     if not course then return false end
-    local px, _, pz = course:getWaypointPosition(1)
-    if not FieldworkBoundary.contains(boundary, px, pz) then return false end
-    for i = 2, course:getNumberOfWaypoints() do
+    firstIx = math.max(1, firstIx or 1)
+    lastIx = math.min(course:getNumberOfWaypoints(), lastIx or course:getNumberOfWaypoints())
+    if firstIx > lastIx then return false end
+    local px, _, pz = course:getWaypointPosition(firstIx)
+    local hasEntered = FieldworkBoundary.contains(boundary, px, pz)
+    if not hasEntered and not allowEntry then return false end
+    for i = firstIx + 1, lastIx do
         local x, _, z = course:getWaypointPosition(i)
         local count = math.max(1, math.ceil(MathUtil.vector2Length(x - px, z - pz) / 0.5))
         for j = 1, count do
-            if not FieldworkBoundary.contains(boundary, px + (x - px) * j / count, pz + (z - pz) * j / count) then
+            local inside = FieldworkBoundary.contains(boundary,
+                    px + (x - px) * j / count, pz + (z - pz) * j / count)
+            if hasEntered and not inside then
                 return false
             end
+            hasEntered = hasEntered or inside
         end
         px, pz = x, z
     end
-    return true
+    return hasEntered
 end
 
 --- Check a live steering segment. An AutoDrive handover may begin just outside the corridor, but can then only

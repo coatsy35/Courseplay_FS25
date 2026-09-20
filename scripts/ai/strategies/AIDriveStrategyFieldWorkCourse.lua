@@ -620,6 +620,20 @@ end
 -----------------------------------------------------------------------------------------------------------------------
 --- Connecting path
 -----------------------------------------------------------------------------------------------------------------------
+--- The pathfinder is useful for a local joining manoeuvre. For a long route it duplicates the generated connector,
+--- holds the worker stationary and can exhaust its global search before selecting that connector as its fallback.
+---@param course Course
+---@return boolean
+function AIDriveStrategyFieldWorkCourse:canDriveConnectingPathDirectly(course)
+    if not course then return false end
+    local localManeuverDistance = math.max(4 * self.turningRadius, 2 * self:getWorkWidth())
+    if course:getLength() <= localManeuverDistance then return false end
+    -- The generated field course already accounts for the implement. This check protects the combine's own physical
+    -- envelope and prevents a direct connector from crossing the field polygon or an island.
+    local boundary = FieldworkBoundary.forVehicle(self.vehicle, 0)
+    return FieldworkBoundary.containsCourse(boundary, course)
+end
+
 function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
     -- ix was the last waypoint to work before the connecting path, ix + 1 is the first on the connecting path
     self:debug('Row finished before starting on a connecting path at waypoint %d.', ix + 1)
@@ -654,6 +668,12 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
             self.workStarterCourse = self:createAlignmentCourse(self.fieldWorkCourse, targetWaypointIx)
         else
             self.workStarterCourse = Course(self.vehicle, connectingPath, true)
+        end
+        if #connectingPath >= 2 and self:canDriveConnectingPathDirectly(self.workStarterCourse) then
+            self:debug('Connecting path is a %.1f m generated route; drive it directly instead of pathfinding to its end',
+                    self.workStarterCourse:getLength())
+            self:startCourseToWorkStart(self.workStarterCourse)
+            return
         end
         self.pathfinderController:registerListeners(self, self.onPathfindingDoneToConnectingPathEnd,
                 self.onPathfindingFailedToConnectingPathEnd)

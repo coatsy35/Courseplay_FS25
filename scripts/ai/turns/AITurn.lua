@@ -1243,12 +1243,17 @@ function StartRowOnly:init(vehicle, driveStrategy, ppc, turnContext, startRowCou
     -- TODO: do we need tight turn offset here?
     self.turnCourse:setUseTightTurnOffsetForLastWaypoints(15)
     -- add a turn ending section into the row to make sure the implements are lowered correctly
+    local entryStartIx = self.turnCourse:getNumberOfWaypoints()
     local endingTurnLength = self.turnContext:appendEndingTurnCourse(self.turnCourse, 3, true)
     self.turnCourse:setUseTightTurnOffsetForLastWaypoints(endingTurnLength)
     TurnManeuver.setLowerImplements(self.turnCourse, endingTurnLength, true)
     self.turnCourse:adjustForReversing(2)
+    -- The supplied route may be a generated headland connector and therefore legitimately runs closer to the
+    -- polygon than half the header width. It has already been generated or path-found; validate only the straight
+    -- entry appended here, allowing it to enter the working-width corridor but never to leave again.
     self.entryOutsideBoundary = not FieldworkBoundary.containsCourse(
-            FieldworkBoundary.forVehicle(vehicle, turnContext.workWidth), self.turnCourse)
+            FieldworkBoundary.forVehicle(vehicle, turnContext.workWidth), self.turnCourse,
+            entryStartIx, self.turnCourse:getNumberOfWaypoints(), true)
     self.state = self.states.DRIVING_TO_ROW
 end
 

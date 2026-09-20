@@ -36,4 +36,21 @@ assert(not FieldworkBoundary.containsSegment(boundary, -5, 10, -1, 10, true),
 assert(not FieldworkBoundary.containsSegment(boundary, 40, 50, 60, 50, true),
         'A live steering segment must not cross a field island')
 
+local function course(points)
+    return {
+        getNumberOfWaypoints = function() return #points end,
+        getWaypointPosition = function(_, ix) return points[ix].x, 0, points[ix].z end,
+    }
+end
+
+local enteringCourse = course({{x = -5, z = 20}, {x = 5, z = 20}, {x = 20, z = 20}})
+assert(FieldworkBoundary.containsCourse(boundary, enteringCourse, 1, 3, true),
+        'A newly appended entry may begin outside and continue into the field')
+local leavingCourse = course({{x = 20, z = 20}, {x = 95, z = 20}, {x = 105, z = 20}})
+assert(not FieldworkBoundary.containsCourse(boundary, leavingCourse, 1, 3, true),
+        'A newly appended entry must not leave the field after entering')
+local neverEnteringCourse = course({{x = -10, z = 20}, {x = -5, z = 20}})
+assert(not FieldworkBoundary.containsCourse(boundary, neverEnteringCourse, 1, 2, true),
+        'A newly appended entry must finish inside the field')
+
 print('FieldworkBoundarySegmentTest: OK')
