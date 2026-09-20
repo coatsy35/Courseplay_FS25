@@ -68,6 +68,8 @@ assert(not workingController:mustYieldPhysicalTurnClearance(startingVehicle, sta
         'The working combine must retain priority over a combine returning to work')
 assert(workingController:mustYieldPhysicalTurnClearance(turningVehicle, turning),
         'A working combine must yield to another combine already turning')
+assert(not workingController:hasPhysicalTurnPriority(turningVehicle, turning),
+        'A working follower must not take priority from a turning combine')
 assert(workingController:mustYieldPhysicalTurnClearance(approachingTurnVehicle, approachingTurn),
         'A following combine must yield before the combine ahead begins its turn')
 assert(workingController:getPhysicalTurnClearance(turningVehicle, turning) >= 50,
@@ -85,6 +87,15 @@ assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wide
 assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wideLeading) +
         FieldWorkerProximityController.turnSlowDownBand >= 86,
         'An 18 metre header must start slowing the following combine at least 86 metres away')
+
+local turningController = {
+    vehicle = turningVehicle,
+    workingWidth = 14,
+    minimumTurnClearance = FieldWorkerProximityController.minimumTurnClearance,
+}
+setmetatable(turningController, { __index = FieldWorkerProximityController })
+assert(turningController:hasPhysicalTurnPriority(workingVehicle, working),
+        'A turning lead combine must ignore the follower trail that would otherwise create mutual yielding')
 
 wideLeading.getExpectedRearwardManeuverDistance = function() return 25 end
 assert(wideFollowingController:getPhysicalTurnClearance(wideLeadingVehicle, wideLeading) >= 81,

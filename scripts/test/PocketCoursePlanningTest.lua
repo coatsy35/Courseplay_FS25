@@ -149,7 +149,16 @@ local switchStrategy = setmetatable({
     vehicle = {},
     debug = function() end,
     findUnloader = function() return candidate, 20 end,
+    alwaysNeedsUnloader = function() return false end,
+    isWaitingForUnload = function() return false end,
+    combineController = { getFillLevelPercentage = function() return 79 end },
+    settings = { callUnloaderPercent = { getValue = function() return 80 end } },
 }, { __index = AIDriveStrategyCombineCourse })
+assert(not switchStrategy:shouldReconsiderAssignedUnloader(),
+        'An assigned lead must remain stable before the configured call percentage')
+switchStrategy.combineController.getFillLevelPercentage = function() return 80 end
+assert(switchStrategy:shouldReconsiderAssignedUnloader(),
+        'An assigned lead must be reassessed as soon as the configured call percentage is reached')
 assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled,
         'A stopped combine must transfer a distant call to a materially quicker eligible trailer')
 

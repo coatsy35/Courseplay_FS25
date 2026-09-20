@@ -940,7 +940,7 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
 
     local assignedUnloader = self.unloader:get()
     if assignedUnloader then
-        if self:isWaitingForUnload() and not self:alwaysNeedsUnloader() then
+        if self:shouldReconsiderAssignedUnloader() then
             self:trySwitchToCloserUnloader(assignedUnloader)
         else
             self:debug('callUnloaderWhenNeeded: already has an unloader assigned (%s)',
@@ -1006,6 +1006,12 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
     end
 end
 
+---@return boolean
+function AIDriveStrategyCombineCourse:shouldReconsiderAssignedUnloader()
+    return not self:alwaysNeedsUnloader() and (self:isWaitingForUnload() or
+            self.combineController:getFillLevelPercentage() >= self.settings.callUnloaderPercent:getValue())
+end
+
 function AIDriveStrategyCombineCourse:callUnloader(bestUnloader, tentativeRendezvousWaypointIx, bestEte)
     if bestUnloader:getCpDriveStrategy():call(self.vehicle,
             self.course:getWaypoint(tentativeRendezvousWaypointIx)) then
@@ -1017,8 +1023,9 @@ function AIDriveStrategyCombineCourse:callUnloader(bestUnloader, tentativeRendez
     end
 end
 
---- A stopped combine must not remain tied to a distant en-route trailer when another eligible trailer can arrive
---- materially sooner. The ETE margin prevents repeated target swapping for insignificant gains.
+--- A combine at or beyond its call percentage must not remain tied to a distant en-route trailer when another
+--- eligible trailer can arrive materially sooner. The ETE margin prevents repeated target swapping for insignificant
+--- gains.
 ---@param assignedUnloader AIDriveStrategyUnloadCombine
 ---@return boolean
 function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader)
@@ -1088,6 +1095,11 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint, prioritise
                     end
                     local score = prioritiseArrival and -unloaderEte or
                             UnloaderCoordinator:getCallScore(unloaderFillLevelPercentage, unloaderDistance)
+                    if not prioritiseArrival and UnloaderCoordinator:isReservedFor(driveStrategy, self.vehicle) then
+                        -- Use the stable lead selected and pre-positioned by the field coordinator. Its initial
+                        -- selection already balances arrival time with continuity for a nearby partly filled trailer.
+                        score = score + UnloaderCoordinator.reservedLeadCallBonus
+                    end
                     self:debug('findUnloader: %s idle on my field, fill level %.1f, distance %.1f, ETE %.1f, score %.1f)',
                             CpUtil.getName(vehicle), unloaderFillLevelPercentage, unloaderDistance, unloaderEte, score)
                     if score > bestScore then

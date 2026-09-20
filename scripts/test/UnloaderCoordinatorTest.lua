@@ -19,8 +19,8 @@ end
 local function makeHarvester(name, x, isForager, secondsUntilCall, stageX, secondsUntilFull, fillLevelPercentage)
     local currentIx = 1000
     local course = {
-        getPreviousWaypointIxWithinDistance = function(_, _, distance)
-            return currentIx - math.floor(distance)
+        getPreviousWaypointIxWithinDistance = function(_, ix, distance)
+            return ix - math.floor(distance)
         end,
         isTurnStartAtIx = function() return false end,
         isTurnEndAtIx = function() return false end,
@@ -130,11 +130,17 @@ assert(UnloaderCoordinator:isStillClearingHarvester(active, forager),
         'A registered unloader must keep its harvester waiting while it clears')
 assert(not UnloaderCoordinator:isStillClearingHarvester(active, combine),
         'An unloader serving another harvester must not delay this combine')
+local spareHarvester = spare.assignment.harvester
+g_currentMission.time = g_currentMission.time + UnloaderCoordinator.rebalanceIntervalMs
+spare.x = spareHarvester == forager and 190 or 10
+UnloaderCoordinator:rebalance(true)
+assert(spare.assignment.harvester == spareHarvester and spare.assignment.waypoint,
+        'A rear pool trailer must keep its harvester and fixed parking assignment')
 
 -- A partly filled trailer wins while it remains close enough to justify finishing its load.
 local continuityCombine = makeHarvester('Continuity combine', 500, false, 10, 500)
-local partial = makeUnloader('Part-filled trailer', 100, true, nil, 45)
-local empty = makeUnloader('Closer empty trailer', 480, true, nil, 0)
+local partial = makeUnloader('Part-filled trailer', 430, true, nil, 45)
+local empty = makeUnloader('Closer empty trailer', 440, true, nil, 0)
 AIDriveStrategyUnloadCombine.activeUnloaders = {
     [partial] = partial.vehicle,
     [empty] = empty.vehicle,
@@ -180,6 +186,13 @@ assert(pooled.assignment and pooled.assignment.reserved and pooled.assignment.ro
 assert(math.abs(pooled.assignment.waypoint.x - distantDemandCombine.rootNode.x) >= 100,
         'The pool target must remain well clear of the combine')
 
+-- Lead staging is based on the configured call prediction, so it is close when that percentage is reached.
+local predictedCombine = makeHarvester('Predicted combine', 0, false, 120, 0)
+predictedCombine:getCpDriveStrategy().waypointIxWhenCallUnloader = 1100
+local predictedDemand = UnloaderCoordinator:createDemand(predictedCombine, g_currentMission.time)
+assert(predictedDemand.waypointIx == 1050 and predictedDemand.waypoint.x == 50,
+        'The close standby target must sit behind the predicted call waypoint, not the current combine position')
+
 -- A soft reservation protects clearly earlier downtime, but yields to a more urgent real call.
 local firstCombine = makeHarvester('First combine', 0, false, 5, 0)
 local secondCombine = makeHarvester('Second combine', 500, false, 50, 500)
@@ -205,7 +218,7 @@ local merelyDueDemand = UnloaderCoordinator:createDemand(merelyDue, g_currentMis
 assert(UnloaderCoordinator.sortDemands(nearlyFullDemand, merelyDueDemand),
         'The combine closest to downtime must rank first after both call thresholds have passed')
 
--- Pool positions move progressively nearer as urgency rises, while small target changes retain the old position.
+-- A pool trailer enters the field once, then remains parked until promotion.
 local progressionCombine = makeHarvester('Progression combine', 0, false, 500, 0)
 local progressiveTrailer = makeUnloader('Progressive trailer', -250, true, nil, 0)
 local progressionDemand = {
@@ -228,11 +241,27 @@ assert(nearerWaypoint.x > holdWaypoint.x + 100,
 
 oldPoolAssignment.waypoint = nearerWaypoint
 oldPoolAssignment.waypointIx = nearerWaypointIx
-progressionDemand.secondsUntilNeeded = 40
+progressionDemand.secondsUntilNeeded = 500
 local stableWaypoint = UnloaderCoordinator:getPoolWaypoint(progressiveTrailer, progressionDemand, 1,
         oldPoolAssignment)
 assert(stableWaypoint == nearerWaypoint,
-        'A small pool-target change must remain inside the movement hysteresis')
+        'A reached pool position must remain fixed instead of following urgency changes')
+
+local promotedWaypoint = { x = 25, z = 0 }
+local firstStandbyWaypoint = UnloaderCoordinator:getStableStagingWaypoint(progressionCombine, 'STANDBY',
+        promotedWaypoint, 25, oldPoolAssignment)
+assert(firstStandbyWaypoint == promotedWaypoint,
+        'Promotion from pool to lead standby must allow one deliberate move nearer')
+local standbyAssignment = {
+    harvester = progressionCombine,
+    role = 'STANDBY',
+    waypoint = promotedWaypoint,
+    waypointIx = 25,
+}
+local fixedStandbyWaypoint = UnloaderCoordinator:getStableStagingWaypoint(progressionCombine, 'STANDBY',
+        { x = 100, z = 0 }, 100, standbyAssignment)
+assert(fixedStandbyWaypoint == promotedWaypoint,
+        'A lead standby must park at its predicted call position rather than chase the combine')
 
 local accessPointTrailer = makeUnloader('Access-point trailer', -110, true, nil, 0)
 local accessPointAssignment = {

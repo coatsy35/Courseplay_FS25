@@ -752,7 +752,12 @@ function AIDriveStrategyUnloadCombine:isInDeadlock()
         if self.inDeadlock == nil then
             self.inDeadlock = CpDelayedBoolean()
         end
-        return self.inDeadlock:get(combineStrategy:isWaitingForUnload() and AIUtil.isStopped(self.vehicle), 10000)
+        local urgentlyNeeded = combineStrategy:isWaitingForUnload()
+        if not urgentlyNeeded and not combineStrategy:alwaysNeedsUnloader() then
+            local settings = self.combineToUnload:getCpSettings()
+            urgentlyNeeded = combineStrategy:getFillLevelPercentage() >= settings.callUnloaderPercent:getValue()
+        end
+        return self.inDeadlock:get(urgentlyNeeded and AIUtil.isStopped(self.vehicle), 10000)
     else
         return false
     end

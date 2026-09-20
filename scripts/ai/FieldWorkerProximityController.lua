@@ -159,6 +159,24 @@ end
 
 ---@param otherVehicle table
 ---@param otherStrategy table
+---@return boolean
+function FieldWorkerProximityController:hasPhysicalTurnPriority(otherVehicle, otherStrategy)
+    local myStrategy = self.vehicle:getCpDriveStrategy()
+    local myStarting = isDrivingToWorkStart(myStrategy)
+    local otherStarting = isDrivingToWorkStart(otherStrategy)
+    if myStarting ~= otherStarting then
+        return otherStarting
+    end
+    local myManeuvering = isTurningOrManeuvering(myStrategy)
+    local otherManeuvering = isTurningOrManeuvering(otherStrategy)
+    if myManeuvering ~= otherManeuvering then
+        return myManeuvering
+    end
+    return false
+end
+
+---@param otherVehicle table
+---@param otherStrategy table
 ---@return number
 function FieldWorkerProximityController:getPhysicalTurnClearance(otherVehicle, otherStrategy)
     local otherWorkWidth = otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or AIUtil.getWidth(otherVehicle)
@@ -190,10 +208,14 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 local distanceFromOther = otherStrategy:getFieldWorkProximity(self.vehicle:getAIDirectionNode())
                 self:debugSparse('have same course as %s (done %s, convoy distance %.1f), distance %.1f',
                         CpUtil.getName(otherVehicle), otherIsDone, otherConvoyDistance, distanceFromOther)
-                if distanceFromOther > 0 and distanceFromOther < distanceLimit then
+                local hasTurnPriority = self:hasPhysicalTurnPriority(otherVehicle, otherStrategy)
+                if distanceFromOther > 0 and distanceFromOther < distanceLimit and not hasTurnPriority then
                     self:debugSparse('too close (%.1f m < %.1f) to %s in front of me, slowing down.',
                     distanceFromOther, distanceLimit, CpUtil.getName(otherVehicle))
                     minDistanceFromOthers = math.min(minDistanceFromOthers, distanceFromOther)
+                elseif distanceFromOther > 0 and distanceFromOther < distanceLimit and hasTurnPriority then
+                    self:debugSparse('ignoring stale trail distance %.1f m from %s while retaining turn priority',
+                            distanceFromOther, CpUtil.getName(otherVehicle))
                 end
                 -- Trail distance becomes misleading while another machine turns or drives back to its work-start
                 -- waypoint. The yielding machine therefore also observes the real separation and stops outside an

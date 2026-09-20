@@ -11,12 +11,12 @@ independent unloaders from clustering behind the nearest machine.
 - A forage harvester receives firm relief coverage. Its standby cannot be called by another harvester while the
   reservation remains valid.
 - A real unload call promotes the assigned standby and uses the existing rendezvous and unloading behaviour.
-- A stopped combine replaces an en-route trailer when another eligible trailer can arrive at least ten seconds
-  sooner. If the assigned trailer has remained stopped for ten seconds, the replacement also releases it onto a
-  boundary-contained reverse escape course.
-- Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. The
-  distance starts at roughly 100 metres and grows with time until demand, header width and the number of pool
-  trailers. A safe position reached from an AutoDrive field access point is held rather than continually moved.
+- A combine at or beyond its configured call percentage replaces an en-route trailer when another eligible trailer
+  can arrive at least ten seconds sooner. If the assigned trailer has remained stopped for ten seconds, the
+  replacement also releases it onto a boundary-contained reverse escape course.
+- Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. Each
+  trailer enters the field once and remains parked at its safe pool position instead of following harvesters or
+  exchanging targets. Pool distance grows with time until demand, header width and the number of waiting trailers.
 - A pooled trailer inside an approaching combine's swept path moves clear before the normal blocked-vehicle timeout.
   Fruit-protected access-point waits remain stationary until the combine passes, as configured.
 - A trailer waiting ahead with fruit avoidance enabled stays at its access-point pool until the harvester passes and
@@ -33,6 +33,11 @@ holding tank. Existing assignments receive a temporary score advantage to preven
 combine call may take a soft reservation only when its predicted downtime is within the safety margin of the reserved
 combine.
 
+The nearest suitable trailer becomes the stable combine lead; a nearby partly filled trailer may win when its arrival
+time is within ten seconds of the nearest option. It moves once from its pool to a point the configured standby
+distance behind the combine's predicted call-percentage position, then waits. Rear pool trailers stay parked until
+the lead lacks enough capacity or a separate active or relief demand requires them.
+
 Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
 polygon. Courseplay stops at the last safe position when no contained route exists; leaving the field remains the
 AutoDrive handover. A tractor handed over just outside an access point may only drive inwards.
@@ -43,6 +48,8 @@ that clearance position and deregisters, subject to the existing five-second min
 Following-combine turn clearance scales at twice the wider header plus half of both vehicle lengths and a ten-metre
 margin, with a 50-metre minimum and a further 30-metre slowdown band. This gives approximately 50 metres stopped
 clearance for 15-metre headers and 56 metres for 18-metre headers.
+A lead combine starting a turn or manoeuvre retains priority over a following combine and ignores the follower's stale
+trail position. The follower continues to respect the full physical turn clearance, preventing mutual-yield deadlocks.
 
 ## Settings
 
