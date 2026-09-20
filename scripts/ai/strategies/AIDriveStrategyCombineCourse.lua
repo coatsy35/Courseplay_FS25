@@ -24,6 +24,7 @@ AIDriveStrategyCombineCourse.pocketFillLevelFullPercentage = 95
 AIDriveStrategyCombineCourse.pocketCurveToleranceFactor = 0.05
 AIDriveStrategyCombineCourse.safeUnloadDistanceBeforeEndOfRow = 30
 AIDriveStrategyCombineCourse.turnClearanceLookAhead = 30
+AIDriveStrategyCombineCourse.unloaderSwitchEteAdvantage = 10
 -- when fill level is above this threshold, don't start the next row if the pipe would be
 -- in the fruit
 AIDriveStrategyCombineCourse.waitForUnloadAtEndOfRowFillLevelThreshold = 95
@@ -851,6 +852,23 @@ function AIDriveStrategyCombineCourse:getSecondsUntilUnloaderCall()
     return percentageRemaining * 6
 end
 
+--- Estimated seconds until the harvester tank is full. Unlike the normal call estimate, this remains useful after
+--- the configured call percentage has been passed and lets the fleet coordinator prioritise imminent downtime.
+---@return number
+function AIDriveStrategyCombineCourse:getSecondsUntilFull()
+    if self:alwaysNeedsUnloader() then
+        return 0
+    end
+    local fillLevel = self.combineController:getFillLevel()
+    local capacity = self.combineController:getCapacity()
+    local litresRemaining = math.max(0, capacity - fillLevel)
+    if self.litersPerSecond and self.litersPerSecond > 0.1 then
+        return litresRemaining / self.litersPerSecond
+    end
+    local percentageRemaining = math.max(0, 100 - self.combineController:getFillLevelPercentage())
+    return percentageRemaining * 6
+end
+
 function AIDriveStrategyCombineCourse:shouldWaitAtEndOfRow()
     if self.settings.selfUnload:getValue() then
         -- don't wait for anyone when self unloading
@@ -920,8 +938,14 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
     -- check back again in a few seconds
     self.timeToCallUnloader:set(false, 3000)
 
-    if self.unloader:get() then
-        self:debug('callUnloaderWhenNeeded: already has an unloader assigned (%s)', CpUtil.getName(self.unloader:get()))
+    local assignedUnloader = self.unloader:get()
+    if assignedUnloader then
+        if self:isWaitingForUnload() and not self:alwaysNeedsUnloader() then
+            self:trySwitchToCloserUnloader(assignedUnloader)
+        else
+            self:debug('callUnloaderWhenNeeded: already has an unloader assigned (%s)',
+                    CpUtil.getName(assignedUnloader.vehicle or assignedUnloader))
+        end
         return
     end
 
@@ -993,6 +1017,36 @@ function AIDriveStrategyCombineCourse:callUnloader(bestUnloader, tentativeRendez
     end
 end
 
+--- A stopped combine must not remain tied to a distant en-route trailer when another eligible trailer can arrive
+--- materially sooner. The ETE margin prevents repeated target swapping for insignificant gains.
+---@param assignedUnloader AIDriveStrategyUnloadCombine
+---@return boolean
+function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader)
+    if not assignedUnloader.getDistanceAndEteToVehicle or not assignedUnloader.yieldCallToCloserUnloader then
+        return false
+    end
+    local bestUnloader, bestEte = self:findUnloader(self.vehicle, nil, true)
+    if not bestUnloader or not bestEte then
+        return false
+    end
+    local _, assignedEte = assignedUnloader:getDistanceAndEteToVehicle(self.vehicle)
+    local assignedIsStuck = assignedUnloader.isInDeadlock and assignedUnloader:isInDeadlock()
+    if not assignedIsStuck and (not assignedEte or
+            bestEte + self.unloaderSwitchEteAdvantage >= assignedEte) then
+        self:debug('Keeping assigned unloader %s: ETE %.1fs, alternative %s %.1fs',
+                CpUtil.getName(assignedUnloader.vehicle or assignedUnloader), assignedEte or -1,
+                CpUtil.getName(bestUnloader), bestEte)
+        return false
+    end
+    if not assignedUnloader:yieldCallToCloserUnloader(self.vehicle, assignedIsStuck) then
+        return false
+    end
+    self:debug('Switching from %s (ETE %.1fs%s) to %s (ETE %.1fs)',
+            CpUtil.getName(assignedUnloader.vehicle or assignedUnloader), assignedEte,
+            assignedIsStuck and ', stuck' or '', CpUtil.getName(bestUnloader), bestEte)
+    return bestUnloader:getCpDriveStrategy():call(self.vehicle, nil)
+end
+
 ---@param vehicle table
 ---@return boolean true if vehicle is an active Courseplay controlled combine/harvester
 function AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle)
@@ -1008,9 +1062,10 @@ end
 --- or a waypoint which the combine will reach in the future. Combine and waypoint parameters are mutually exclusive.
 ---@param combine table the combine vehicle if we need the unloader come to the combine, otherwise nil
 ---@param waypoint Waypoint the waypoint where the unloader should meet the combine, otherwise nil.
+---@param prioritiseArrival boolean|nil use route time directly when replacing a trailer already called to a stopped combine
 ---@return table, number the best fitting unloader or nil, the estimated time en-route for the unloader to reach the
 --- target (combine or waypoint)
-function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
+function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint, prioritiseArrival)
     local bestScore = -math.huge
     local bestUnloader, bestEte
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
@@ -1031,7 +1086,8 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
                         -- if still going, we want the unloader to meet us at the waypoint
                         unloaderDistance, unloaderEte = driveStrategy:getDistanceAndEteToWaypoint(waypoint)
                     end
-                    local score = UnloaderCoordinator:getCallScore(unloaderFillLevelPercentage, unloaderDistance)
+                    local score = prioritiseArrival and -unloaderEte or
+                            UnloaderCoordinator:getCallScore(unloaderFillLevelPercentage, unloaderDistance)
                     self:debug('findUnloader: %s idle on my field, fill level %.1f, distance %.1f, ETE %.1f, score %.1f)',
                             CpUtil.getName(vehicle), unloaderFillLevelPercentage, unloaderDistance, unloaderEte, score)
                     if score > bestScore then

@@ -138,6 +138,19 @@ function UnloaderCoordinator:getSecondsUntilTrailerFull(strategy, now)
 end
 
 ---@param harvester table
+---@return number
+function UnloaderCoordinator:getSecondsUntilDowntime(harvester)
+    local strategy = self:getHarvesterStrategy(harvester)
+    if not strategy or strategy:alwaysNeedsUnloader() then
+        return 0
+    end
+    if strategy.getSecondsUntilFull then
+        return strategy:getSecondsUntilFull()
+    end
+    return math.max(0, (100 - strategy:getFillLevelPercentage()) * 6)
+end
+
+---@param harvester table
 ---@param now number
 ---@return table|nil
 function UnloaderCoordinator:createDemand(harvester, now)
@@ -172,6 +185,8 @@ function UnloaderCoordinator:createDemand(harvester, now)
         activeUnloader = activeUnloader,
         isFirm = isForager,
         secondsUntilNeeded = secondsUntilNeeded,
+        secondsUntilDowntime = self:getSecondsUntilDowntime(harvester),
+        fillLevelPercentage = strategy:getFillLevelPercentage(),
         waypoint = waypoint,
         waypointIx = waypointIx,
     }
@@ -334,10 +349,16 @@ end
 ---@param demandB table
 ---@return boolean
 function UnloaderCoordinator.sortDemands(demandA, demandB)
-    if demandA.secondsUntilNeeded == demandB.secondsUntilNeeded then
-        return tostring(demandA.harvester) < tostring(demandB.harvester)
+    if demandA.secondsUntilDowntime ~= demandB.secondsUntilDowntime then
+        return demandA.secondsUntilDowntime < demandB.secondsUntilDowntime
     end
-    return demandA.secondsUntilNeeded < demandB.secondsUntilNeeded
+    if demandA.fillLevelPercentage ~= demandB.fillLevelPercentage then
+        return demandA.fillLevelPercentage > demandB.fillLevelPercentage
+    end
+    if demandA.secondsUntilNeeded ~= demandB.secondsUntilNeeded then
+        return demandA.secondsUntilNeeded < demandB.secondsUntilNeeded
+    end
+    return tostring(demandA.harvester) < tostring(demandB.harvester)
 end
 
 ---@return table
@@ -415,6 +436,7 @@ function UnloaderCoordinator:rebalance(force)
                 assignedAt = oldAssignment and oldAssignment.harvester == demand.harvester
                         and oldAssignment.assignedAt or now,
                 secondsUntilNeeded = demand.secondsUntilNeeded,
+                secondsUntilDowntime = demand.secondsUntilDowntime,
                 waitUntilHarvesterPasses = waitUntilHarvesterPasses,
                 targetMovementThreshold = self.stagingRetargetDistance,
             }
@@ -522,6 +544,16 @@ function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
     end
     if assignment and assignment.waitUntilHarvesterPasses then
         return false
+    end
+    if assignment and assignment.reserved and assignment.harvester ~= callingHarvester and callingHarvester then
+        local assignedSeconds = self:getSecondsUntilDowntime(assignment.harvester)
+        local callingSeconds = self:getSecondsUntilDowntime(callingHarvester)
+        if assignedSeconds + self.combineSafetyMarginSeconds < callingSeconds then
+            self:debug('Keeping %s reserved for %s: downtime in %.1fs versus %.1fs for %s',
+                    getVehicleName(unloader.vehicle), getVehicleName(assignment.harvester), assignedSeconds,
+                    callingSeconds, getVehicleName(callingHarvester))
+            return false
+        end
     end
     return true
 end

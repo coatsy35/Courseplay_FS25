@@ -16,7 +16,7 @@ local function setting(value)
     return { getValue = function() return value end }
 end
 
-local function makeHarvester(name, x, isForager, secondsUntilCall, stageX)
+local function makeHarvester(name, x, isForager, secondsUntilCall, stageX, secondsUntilFull, fillLevelPercentage)
     local currentIx = 1000
     local course = {
         getPreviousWaypointIxWithinDistance = function(_, _, distance)
@@ -40,7 +40,8 @@ local function makeHarvester(name, x, isForager, secondsUntilCall, stageX)
         getWorkWidth = function() return 15 end,
         alwaysNeedsUnloader = function() return isForager end,
         getSecondsUntilUnloaderCall = function() return secondsUntilCall end,
-        getFillLevelPercentage = function() return 50 end,
+        getSecondsUntilFull = function() return secondsUntilFull or secondsUntilCall + 60 end,
+        getFillLevelPercentage = function() return fillLevelPercentage or 50 end,
     }
     local harvester = {
         name = name,
@@ -179,7 +180,7 @@ assert(pooled.assignment and pooled.assignment.reserved and pooled.assignment.ro
 assert(math.abs(pooled.assignment.waypoint.x - distantDemandCombine.rootNode.x) >= 100,
         'The pool target must remain well clear of the combine')
 
--- A soft combine reservation may still be overridden when it is the only trailer available to another combine.
+-- A soft reservation protects clearly earlier downtime, but yields to a more urgent real call.
 local firstCombine = makeHarvester('First combine', 0, false, 5, 0)
 local secondCombine = makeHarvester('Second combine', 500, false, 50, 500)
 local onlyTrailer = makeUnloader('Only trailer', 20, true, nil, 30)
@@ -190,8 +191,19 @@ UnloaderCoordinator.assignments = {}
 UnloaderCoordinator:rebalance(true)
 assert(onlyTrailer.assignment and onlyTrailer.assignment.harvester == firstCombine,
         'The only trailer should cover the most urgent combine first')
-assert(UnloaderCoordinator:canBeCalledBy(onlyTrailer, secondCombine),
-        'A second combine may call the only softly reserved trailer')
+assert(not UnloaderCoordinator:canBeCalledBy(onlyTrailer, secondCombine),
+        'A less urgent combine must not take the only trailer from an imminent downtime reservation')
+local urgentSecondCombine = makeHarvester('Urgent second combine', 500, false, 0, 500, 2, 99)
+assert(UnloaderCoordinator:canBeCalledBy(onlyTrailer, urgentSecondCombine),
+        'A more urgent combine may override a soft reservation')
+
+-- Once normal call thresholds are passed, actual time until full and fill level must retain deterministic priority.
+local nearlyFull = makeHarvester('Nearly full combine', 0, false, 0, 0, 5, 98)
+local merelyDue = makeHarvester('Merely due combine', 100, false, 0, 100, 60, 85)
+local nearlyFullDemand = UnloaderCoordinator:createDemand(nearlyFull, g_currentMission.time)
+local merelyDueDemand = UnloaderCoordinator:createDemand(merelyDue, g_currentMission.time)
+assert(UnloaderCoordinator.sortDemands(nearlyFullDemand, merelyDueDemand),
+        'The combine closest to downtime must rank first after both call thresholds have passed')
 
 -- Pool positions move progressively nearer as urgency rises, while small target changes retain the old position.
 local progressionCombine = makeHarvester('Progression combine', 0, false, 500, 0)

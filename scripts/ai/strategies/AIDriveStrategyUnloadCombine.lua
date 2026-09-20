@@ -618,6 +618,34 @@ function AIDriveStrategyUnloadCombine:startWaitingForSomethingToDo()
     end
 end
 
+--- Release an en-route call so a stopped combine can use an eligible trailer with a materially shorter ETE.
+--- Never transfer while unloading is already under way.
+---@param combine table
+---@param recoverFromBlock boolean|nil
+---@return boolean
+function AIDriveStrategyUnloadCombine:yieldCallToCloserUnloader(combine, recoverFromBlock)
+    if self.combineToUnload ~= combine or self.state == self.states.UNLOADING_MOVING_COMBINE or
+            self.state == self.states.UNLOADING_STOPPED_COMBINE then
+        return false
+    end
+    self:debug('Yielding call from %s to a closer unloader', CpUtil.getName(combine))
+    if recoverFromBlock then
+        local reverseCourse, reverseDistance = self:createBoundaryContainedReverseCourse(1.5 * self.turningRadius)
+        self:releaseCombine()
+        if reverseCourse then
+            self:debug('Backing %.1f m inside the field to clear the blocked call', reverseDistance)
+            self:setNewState(self.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
+            self.state.properties.vehicle = combine
+            self.state.properties.dx = nil
+            self:startCourse(reverseCourse, 1)
+            return true
+        end
+        self:debug('No boundary-contained reverse is available after releasing the blocked call')
+    end
+    self:startWaitingForSomethingToDo()
+    return true
+end
+
 ---@return table|nil the best node (of all the fill nodes on all trailers) to use to unload a harvester
 function AIDriveStrategyUnloadCombine:getBestTargetNode()
     local function isValidNode(targetNode)

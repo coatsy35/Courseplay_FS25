@@ -11,6 +11,9 @@ independent unloaders from clustering behind the nearest machine.
 - A forage harvester receives firm relief coverage. Its standby cannot be called by another harvester while the
   reservation remains valid.
 - A real unload call promotes the assigned standby and uses the existing rendezvous and unloading behaviour.
+- A stopped combine replaces an en-route trailer when another eligible trailer can arrive at least ten seconds
+  sooner. If the assigned trailer has remained stopped for ten seconds, the replacement also releases it onto a
+  boundary-contained reverse escape course.
 - Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. The
   distance starts at roughly 100 metres and grows with time until demand, header width and the number of pool
   trailers. A safe position reached from an AutoDrive field access point is held rather than continually moved.
@@ -22,10 +25,13 @@ independent unloaders from clustering behind the nearest machine.
   load before introducing an empty trailer. Distance eventually outweighs the partial load, and soft combine
   reservations do not prevent another combine making that choice.
 
-Demands are ordered by predicted time until the trailer is needed. Combines use the measured harvest rate, their
-normal call percentage and, while unloading, the active trailer's predicted time to full. Forage harvesters use the
-active trailer's measured fill rate, with a larger safety margin because they have no holding tank. Existing
-assignments receive a temporary score advantage to prevent repeated target changes.
+Demands are ordered by predicted time until harvesting stops, then tank fill and predicted time until the trailer is
+needed. This retains priority between combines after several have passed their normal call percentages. Combines use
+the measured harvest rate, their normal call percentage and, while unloading, the active trailer's predicted time to
+full. Forage harvesters use the active trailer's measured fill rate, with a larger safety margin because they have no
+holding tank. Existing assignments receive a temporary score advantage to prevent repeated target changes. A real
+combine call may take a soft reservation only when its predicted downtime is within the safety margin of the reserved
+combine.
 
 Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
 polygon. Courseplay stops at the last safe position when no contained route exists; leaving the field remains the

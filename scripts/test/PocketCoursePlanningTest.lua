@@ -124,4 +124,40 @@ assert(not planningStrategy.startPocketBeforeUnsafeSection and
         planningStrategy.fillLevelFullPercentage == planningStrategy.normalFillLevelFullPercentage,
         'The combine must carry through a curve when it can reach a safe section before becoming full')
 
+CpUtil = {
+    getName = function(vehicle) return vehicle.name end,
+}
+local candidateCalled = false
+local candidateStrategy = {
+    call = function() candidateCalled = true return true end,
+}
+local candidate = {
+    name = 'Near trailer',
+    getCpDriveStrategy = function() return candidateStrategy end,
+}
+local recoveryRequested = false
+local assigned = {
+    vehicle = { name = 'Far trailer' },
+    getDistanceAndEteToVehicle = function() return 100, 100 end,
+    isInDeadlock = function() return false end,
+    yieldCallToCloserUnloader = function(_, _, recoverFromBlock)
+        recoveryRequested = recoverFromBlock
+        return true
+    end,
+}
+local switchStrategy = setmetatable({
+    vehicle = {},
+    debug = function() end,
+    findUnloader = function() return candidate, 20 end,
+}, { __index = AIDriveStrategyCombineCourse })
+assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled,
+        'A stopped combine must transfer a distant call to a materially quicker eligible trailer')
+
+candidateCalled = false
+assigned.getDistanceAndEteToVehicle = function() return 25, 25 end
+assigned.isInDeadlock = function() return true end
+switchStrategy.findUnloader = function() return candidate, 20 end
+assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled and recoveryRequested,
+        'A stopped combine must replace a blocked trailer and request its boundary-aware recovery')
+
 print('PocketCoursePlanningTest: OK')
