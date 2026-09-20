@@ -58,3 +58,23 @@ function FieldworkBoundary.containsCourse(boundary, course)
     end
     return true
 end
+
+--- Check a live steering segment. An AutoDrive handover may begin just outside the corridor, but can then only
+--- steer to a point inside it. Once inside, the complete segment must remain contained.
+function FieldworkBoundary.containsSegment(boundary, x, z, gx, gz, allowEntry)
+    if not boundary then return true end
+    local targetIsInside = FieldworkBoundary.contains(boundary, gx, gz)
+    if not FieldworkBoundary.contains(boundary, x, z) then
+        return allowEntry and targetIsInside or false
+    end
+    if not targetIsInside then return false end
+    local distance = MathUtil.vector2Length(gx - x, gz - z)
+    local steps = math.max(1, math.ceil(distance / 2))
+    for i = 1, steps - 1 do
+        if not FieldworkBoundary.contains(boundary, x + (gx - x) * i / steps,
+                z + (gz - z) * i / steps) then
+            return false
+        end
+    end
+    return true
+end

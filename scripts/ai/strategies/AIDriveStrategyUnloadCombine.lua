@@ -563,7 +563,29 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
     self:checkProximitySensors(moveForwards)
 
     self:checkCollisionWarning()
+    if not self:isNextDriveSegmentInsideField(gx, gz) then
+        self:debugSparse('Next movement would cross the field polygon; retaining the last safe position')
+        self:setMaxSpeed(0)
+    end
     return gx, gz, moveForwards, self.maxSpeed, 100
+end
+
+--- Keep every live steering target inside the field corridor. This also covers short manoeuvre courses and the
+--- dynamically calculated targets used while driving beside a harvester, which do not pass through the pathfinder.
+--- A vehicle handed over by AutoDrive just outside the boundary may only move towards a target inside the corridor.
+---@param gx number|nil
+---@param gz number|nil
+---@return boolean
+function AIDriveStrategyUnloadCombine:isNextDriveSegmentInsideField(gx, gz)
+    if self.unloadTargetType ~= self.UNLOAD_TYPES.COMBINE or not gx or not gz then
+        return true
+    end
+    local boundary = self:getFieldworkBoundaryForRig()
+    if not boundary then
+        return true
+    end
+    local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+    return FieldworkBoundary.containsSegment(boundary, x, z, gx, gz, true)
 end
 
 function AIDriveStrategyUnloadCombine:hasToWaitForAssignedCombine()
@@ -1472,11 +1494,16 @@ end
 --- Build the corridor that keeps the complete tractor and trailer combination inside the field polygon.
 ---@return table|nil
 function AIDriveStrategyUnloadCombine:getFieldworkBoundaryForRig()
+    local fieldPolygon = self.vehicle:cpGetFieldPolygon()
+    if self.rigFieldworkBoundary and self.rigFieldworkBoundary.polygon == fieldPolygon then
+        return self.rigFieldworkBoundary
+    end
     local boundaryWidth = AIUtil.getWidth(self.vehicle) + 2
     for _, childVehicle in ipairs(self.vehicle:getChildVehicles()) do
         boundaryWidth = math.max(boundaryWidth, AIUtil.getWidth(childVehicle) + 2)
     end
-    return FieldworkBoundary.forVehicle(self.vehicle, boundaryWidth)
+    self.rigFieldworkBoundary = FieldworkBoundary.forVehicle(self.vehicle, boundaryWidth)
+    return self.rigFieldworkBoundary
 end
 
 ------------------------------------------------------------------------------------------------------------------------
