@@ -1085,6 +1085,9 @@ function CombinePocketHeadlandTurn:generatePocketHeadlandTurn(turnContext)
     local cornerWaypoints = {}
     -- this is how far we have to cut into the next headland (the position where the header will be after the turn)
     local offset = math.min(self.turningRadius + turnContext.frontMarkerDistance, self.workWidth)
+    -- Put the second cut one complete working width inside the first cut so its
+    -- straw swath lines up with the next pass instead of falling between passes.
+    local pocketOffset = self.workWidth
     local corner = turnContext:createCorner(self.vehicle, self.turningRadius)
     local d = -self.workWidth / 2 + turnContext.frontMarkerDistance
     local reverseDistance = 2 * offset
@@ -1105,9 +1108,9 @@ function CombinePocketHeadlandTurn:generatePocketHeadlandTurn(turnContext)
     wp.rev = true
     table.insert(cornerWaypoints, wp)
     -- now make a pocket in the inner headland to make room to turn
-    wp = corner:getPointAtDistanceFromCornerStart(reverseDistance * 0.75, -offset * 0.6)
+    wp = corner:getPointAtDistanceFromCornerStart(reverseDistance * 0.75, -pocketOffset * 0.85)
     table.insert(cornerWaypoints, wp)
-    wp = corner:getPointAtDistanceFromCornerStart(reverseDistance * 0.5, -offset * 0.7)
+    wp = corner:getPointAtDistanceFromCornerStart(reverseDistance * 0.5, -pocketOffset)
     if not CpFieldUtil.isOnField(wp.x, wp.z) then
         self:debug('No field where the pocket would be, this seems to be a 270 corner')
         corner:delete()
@@ -1115,7 +1118,7 @@ function CombinePocketHeadlandTurn:generatePocketHeadlandTurn(turnContext)
     end
     table.insert(cornerWaypoints, wp)
     -- drive forward to the field edge on the inner headland
-    wp = corner:getPointAtDistanceFromCornerStart(d, -offset * 0.7)
+    wp = corner:getPointAtDistanceFromCornerStart(d, -pocketOffset)
     table.insert(cornerWaypoints, wp)
     wp = corner:getPointAtDistanceFromCornerStart(reverseDistance / 1.5)
     wp.rev = true
@@ -1139,13 +1142,27 @@ function CombinePocketHeadlandTurn:startTurn()
     self.state = self.states.TURNING
 end
 
---- When making a pocket we need to lower the header whenever driving forward
+--- When making a pocket, lower the header while driving forwards. Before each
+--- reverse, raise it and wait for the remaining straw to leave the combine.
 function CombinePocketHeadlandTurn:turn(dt)
     local gx, gy, moveForwards, maxSpeed = AITurn.turn(self)
     if self.ppc:isReversing() then
-        self.driveStrategy:raiseImplements()
-        self.implementsLowered = nil
+        if self.implementsLowered ~= false then
+            self.driveStrategy:raiseImplements()
+            self.implementsLowered = false
+        end
+        if self.driveStrategy.combineController:isDroppingStrawSwath() then
+            if not self.waitingForStraw then
+                self:debug('Waiting for straw discharge before reversing')
+                self.waitingForStraw = true
+            end
+            maxSpeed = 0
+        elseif self.waitingForStraw then
+            self:debug('Straw discharge finished, reversing')
+            self.waitingForStraw = false
+        end
     elseif not self.implementsLowered then
+        self.waitingForStraw = false
         self.driveStrategy:lowerImplements()
         self.implementsLowered = true
     end
