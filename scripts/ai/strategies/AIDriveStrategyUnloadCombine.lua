@@ -536,7 +536,12 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
     elseif self.state == self.states.MOVING_AWAY_FROM_UNLOAD_TRAILER then
         self:moveAwayFromUnloadTrailer()
     elseif self.state == self.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL then
-        self:setMaxSpeed(self:getFieldSpeed())
+        if self:canAutoDriveTakeControl() then
+            self:setMaxSpeed(0)
+            self:requestFullTrailerHandover('AutoDrive became ready during the return route')
+        else
+            self:setMaxSpeed(self:getFieldSpeed())
+        end
         ---------------------------------------------
         --- Unloading on the field
         ---------------------------------------------
@@ -571,6 +576,9 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
     if not self:isNextDriveSegmentInsideField(gx, gz) then
         self:debugSparse('Next movement would cross the field polygon; retaining the last safe position')
         self:setMaxSpeed(0)
+        if self.state == self.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL then
+            self:requestFullTrailerHandover('Return route reached the field boundary')
+        end
     end
     return gx, gz, moveForwards, self.maxSpeed, 100
 end
@@ -1459,7 +1467,11 @@ function AIDriveStrategyUnloadCombine:startUnloadingTrailers()
         end
     else
         --- Trailer attached
-        if self.invertedStartPositionMarkerNode then
+        if self:canAutoDriveTakeControl() then
+            --- AutoDrive can find and join its road network from here. Release at the current field-contained
+            --- position instead of making Courseplay drive back to the configured access point.
+            self:requestFullTrailerHandover('Trailer is full and AutoDrive is ready')
+        elseif self.invertedStartPositionMarkerNode then
             --- The start position is valid, so drive in there before releasing and giving control to giants or AD.
             self:debug('Trailer is full and a valid start position is set, so drive there before AD or giants can take over.')
             self:startPathfindingToInvertedGoalPositionMarker()
@@ -1469,6 +1481,22 @@ function AIDriveStrategyUnloadCombine:startUnloadingTrailers()
             self:onTrailerFull()
         end
     end
+end
+
+function AIDriveStrategyUnloadCombine:canAutoDriveTakeControl()
+    return not self.useGiantsUnload and self.vehicle.getCanAdTakeControl and self.vehicle:getCanAdTakeControl()
+end
+
+--- Complete a full-trailer handover once. Stopping a job can be deferred until the end of the update, so guard
+--- against repeated requests from the live boundary check.
+---@param reason string
+function AIDriveStrategyUnloadCombine:requestFullTrailerHandover(reason)
+    if self.fullTrailerHandoverRequested then
+        return
+    end
+    self.fullTrailerHandoverRequested = true
+    self:debug('%s; releasing the driver', reason)
+    self:onTrailerFull()
 end
 
 function AIDriveStrategyUnloadCombine:onTrailerFull()
@@ -2938,6 +2966,8 @@ function AIDriveStrategyUnloadCombine:startPathfindingToInvertedGoalPositionMark
     local fieldNum = CpFieldUtil.getFieldNumUnderVehicle(self.vehicle)
 
     local context = PathfinderContext(self.vehicle)
+    self.returnToStartBoundary = self:getFieldworkBoundaryForRig()
+    context._fieldworkBoundary = self.returnToStartBoundary
     context:maxFruitPercent(self:getMaxFruitPercent()):offFieldPenalty(PathfinderContext.defaultOffFieldPenalty)
     context:useFieldNum(fieldNum):allowReverse(self:getAllowReversePathfinding())
     context:maxIterations(PathfinderUtil.getMaxIterationsForFieldPolygon(self.vehicle:cpGetFieldPolygon()))
@@ -2960,10 +2990,17 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToInvertedGoalPositionMar
 
         course:append(Course.createFromTwoWorldPositions(self.vehicle, x, z, dx, dz,
                 0, 0, 0, 3, false))
+        if not FieldworkBoundary.containsCourse(self.returnToStartBoundary, course) then
+            self:debug('Return route to the start marker would leave the field corridor; handing over at the current position')
+            self:requestFullTrailerHandover('No field-contained return route is available')
+            return false
+        end
         self:startCourse(course, 1)
+        return true
     else
         self:debug("Could not find a path to the start position marker, pass over to the job!")
-        self:onTrailerFull()
+        self:requestFullTrailerHandover('Pathfinding to the start marker failed')
+        return false
     end
 end
 

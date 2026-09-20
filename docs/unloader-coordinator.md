@@ -48,8 +48,10 @@ course. It follows forward at the standby gap while the combine cuts into the po
 trailer builds a fresh forward pipe approach without applying moving-unload alignment rules.
 
 Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
-polygon. Courseplay stops at the last safe position when no contained route exists; leaving the field remains the
-AutoDrive handover. A tractor handed over just outside an access point may only drive inwards.
+polygon. When a full trailer reports that AutoDrive can take control, Courseplay releases it at its current safe
+position so AutoDrive can join the surrounding road network directly. The older return-to-start fallback is also
+constrained to the complete rig's field corridor; if no contained route exists, Courseplay hands over at the last
+safe position. A tractor handed over just outside an access point may only drive inwards.
 After unloading, the tractor reverses by a distance derived from header width and both vehicle lengths. Fieldwork
 traffic also applies the same physical turn envelope when trail-based convoy distance is unreliable during turns or
 the drive back to a work-start waypoint. A combine waiting in a pocket or pull-back holds until the unloader reaches

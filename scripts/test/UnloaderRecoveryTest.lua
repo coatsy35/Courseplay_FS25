@@ -117,4 +117,32 @@ strategy:followCombineToPocket()
 assert(startedPocketUnload,
         'A completed pocket must start a fresh forward pipe approach without the moving-unload alignment gate')
 
+-- A full trailer must hand over where it stands when AutoDrive is ready. AutoDrive then owns the route from the
+-- field to its network; Courseplay must not drive back across the field to the configured access point first.
+local handovers = 0
+local pathfindingStarted = false
+strategy.useGiantsUnload = false
+strategy.vehicle = {
+    getCanAdTakeControl = function() return true end,
+}
+strategy.augerWagon = nil
+strategy.fieldUnloadPositionNode = nil
+strategy.invertedStartPositionMarkerNode = {}
+strategy.setMaxSpeed = function() end
+strategy.releaseCombine = function() end
+strategy.startPathfindingToInvertedGoalPositionMarker = function() pathfindingStarted = true end
+strategy.onTrailerFull = function() handovers = handovers + 1 end
+UnloaderCoordinator.release = function() end
+strategy:startUnloadingTrailers()
+assert(handovers == 1 and not pathfindingStarted,
+        'A full trailer must release directly to an available AutoDrive job instead of returning to the start marker')
+
+-- If a legacy return route reaches the field edge, stop at the last safe position and request the handover once.
+strategy.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL = {}
+strategy.state = strategy.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL
+strategy.fullTrailerHandoverRequested = nil
+strategy:requestFullTrailerHandover('boundary')
+strategy:requestFullTrailerHandover('boundary repeated')
+assert(handovers == 2, 'A boundary-triggered full-trailer handover must only be requested once')
+
 print('UnloaderRecoveryTest: OK')
