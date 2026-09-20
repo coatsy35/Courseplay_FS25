@@ -22,6 +22,10 @@ function AStar:getMotionPrimitives(turnRadius, allowReverse)
     return AStar.SimpleMotionPrimitives(self.deltaPos, allowReverse)
 end
 
+function AStar:isValidNode(node)
+    return self.constraints:isValidNode(node, true, true, true)
+end
+
 --- A simple set of motion primitives to use with an A* algorithm, pointing to 8 directions
 ---@class AStar.SimpleMotionPrimitives : HybridAStar.MotionPrimitives
 AStar.SimpleMotionPrimitives = CpObject(HybridAStar.MotionPrimitives)
@@ -112,6 +116,8 @@ function AStar:isObstacleBetween(n1, n2)
     return self:runForImmediatePoints(n1, n2,
             function(x, y)
                 local node = State3D(x, y, 0)
+                -- Smoothing cannot shortcut across a hard boundary or obstacle, even when its penalty is zero.
+                if not self:isValidNode(node) then return true end
                 local penalty
                 local cachedPenalty = self.penalties:get(node)
                 if cachedPenalty then

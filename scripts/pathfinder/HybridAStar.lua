@@ -522,6 +522,11 @@ function HybridAStar:getMotionPrimitives(turnRadius, allowReverse)
     return HybridAStar.MotionPrimitives(turnRadius, 6.75, allowReverse)
 end
 
+--- Detailed searches have a physical steering pose. Grid searches override this with their coarse constraints.
+function HybridAStar:isValidNode(node, ignoreTrailer)
+    return self.constraints:isValidNode(node, ignoreTrailer)
+end
+
 function HybridAStar:getAnalyticPath(start, goal, turnRadius, allowReverse, hitchLength)
     local analyticSolution, pathType = self.analyticSolver:solve(start, goal, turnRadius)
     local analyticSolutionLength = analyticSolution:getLength(turnRadius)
@@ -573,7 +578,7 @@ function HybridAStar:initRun(start, goal, turnRadius, allowReverse, constraints,
     end
 
     -- ignore trailer for the first check, we don't know its heading anyway
-    if not constraints:isValidNode(goal, true) then
+    if not self:isValidNode(goal, true) then
         self:debug('Goal node is invalid, abort pathfinding.')
         return PathfinderResult(true, nil, true)
     end
@@ -680,7 +685,7 @@ function HybridAStar:run(start, goal, turnRadius, allowReverse, constraints, hit
                     -- ignore invalidity of a node in the first few iterations: this is due to the fact that sometimes
                     -- we end up being in overlap with another vehicle when we start the pathfinding and all we need is
                     -- an iteration or two to bring us out of that position
-                    if (self.ignoreValidityAtStart and self.iterations < 3) or self.constraints:isValidNode(succ) then
+                    if (self.ignoreValidityAtStart and self.iterations < 3) or self:isValidNode(succ) then
                         succ:updateG(primitive, self.penaltyCache:get(succ, self.constraints))
                         local analyticSolutionCost = 0
                         if self.analyticSolverEnabled then

@@ -11,8 +11,11 @@ independent unloaders from clustering behind the nearest machine.
 - A forage harvester receives firm relief coverage. Its standby cannot be called by another harvester while the
   reservation remains valid.
 - A real unload call promotes the assigned standby and uses the existing rendezvous and unloading behaviour.
+- Starting a worker at or above its call setting dispatches against the combine's current position, without waiting
+  for a passed waypoint or harvest-rate history. An overdue call cannot use an unknown end-of-course prediction.
 - A combine at or beyond its configured call percentage replaces an en-route trailer when another eligible trailer
-  can arrive at least ten seconds sooner. If the assigned trailer has remained stopped for ten seconds, the
+  can arrive at least ten seconds sooner. During an active route search, the improvement must also exceed a quarter
+  of the assigned trailer's travel estimate, avoiding repeated cancellation for small gains. If the assigned trailer has remained stopped for ten seconds, the
   replacement also releases it onto a boundary-contained reverse escape course.
 - Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. Each
   trailer enters the field and parks in a separate rear layer. When predicted demand advances materially, the next
@@ -97,22 +100,27 @@ Each combine or forage harvester has an **Unloader coordination** section:
 Staging pauses during turns and manoeuvres. Targets must be on fruit-free ground, remain inside the field polygon,
 and retain collision avoidance. Reached pool and staging targets remain fixed until coverage or urgency changes.
 
-## Behaviour checklist for test build 2924
+## Behaviour checklist for test build 2925
 
 | Requirement | Automated coverage | In-game acceptance |
 | --- | --- | --- |
-| Lead waits, then approaches by the configured call percentage | Moving-gap estimate, parked lead, 65% and 80% calls | Observe one lead entering and parking before each configured threshold |
+| Lead waits, then approaches by the configured call percentage | Moving-gap estimate, parked lead, 65%, 80% and 95% startup calls with zero harvest history | Observe one lead entering and parking before each configured threshold; start a loaded save above the setting |
 | Rear trailers enter and park clear | Stable pool targets, progressive demand, four combines/five trailers | Check separate entry points and parked rigs on the harvested strip |
 | Finish nearby partial loads; share trailers across combines | Partial-load arrival score, uncovered-machine priority, caller-specific fruit wait | One partial trailer serves two nearby combines without a loop |
 | Pocket and first-headland unloading | Actual call dispatcher, ready-pocket promotion, reverse hold and forward approach | Lead waits clear while the pocket is cut, then unloads promptly |
 | Forager relief | Firm reservations, measured trailer fill and capacity | Full trailer clears and relief takes the pipe with minimal interruption |
 | Safe turns and recovery | Header-derived clearances, convoy order, blocked-call recovery | Wide headers clear corners and pocket returns without contacting following vehicles |
-| Field boundary and AD handover | Swept rig containment, entry direction, persistent clearance ownership | No rig leaves the polygon before AD control; verify AD joins its network |
+| Field boundary and AD handover | Actual JPS search through a bent corridor, smoothing, swept rig containment, entry direction, persistent clearance ownership | No rig leaves the polygon before AD control; verify AD joins its network |
 | Stable calls and routes | Departure queue, nearer replacement, stale callbacks and long searches | First tractor completes departure; others wait and then depart in order |
 
 These checks exercise the real Lua decision functions with engine stubs. They do not simulate GIANTS vehicle physics,
-fruit maps, collision shapes or AutoDrive. Live-game acceptance remains necessary; the latest captured log predates
-builds 2923 and 2924.
+fruit maps, collision shapes or AutoDrive. Live-game acceptance remains necessary.
+
+Build 2924's captured run exposed two regressions: a worker starting at 90.5% with no fill history targeted waypoint
+2434 instead of its current position, and the shared search loop applied detailed trailer constraints to coarse grid
+successors. The new regression cases fail against 2924 and pass against 2925. Grid goal, successor and smoothing
+checks now consistently use coarse validity; detailed driving searches retain footprint checks. Future moving
+interceptions are capped by predicted tank capacity and checked again for headland/pocket restrictions.
 
 ## Further validation
 
