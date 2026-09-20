@@ -152,7 +152,9 @@ end
 function UnloaderCoordinator:getPredictedStagingWaypoint(harvester, strategy, secondsUntilNeeded)
     local currentIx = strategy:getClosestFieldworkWaypointIx()
     local course = strategy:getFieldworkCourse()
-    local speed = harvester.getSpeedLimit and math.min(30, harvester:getSpeedLimit(true)) / 3.6 or 0
+    -- getSpeedLimit also returns a boolean; keep only its numeric first result.
+    local speedLimit = harvester.getSpeedLimit and harvester:getSpeedLimit(true) or 0
+    local speed = math.min(30, speedLimit) / 3.6
     if course and course.getNextWaypointIxWithinDistance and secondsUntilNeeded > 0 and speed > 0 then
         local predictedIx = course:getNextWaypointIxWithinDistance(currentIx, math.min(secondsUntilNeeded, 120) * speed)
         if predictedIx then

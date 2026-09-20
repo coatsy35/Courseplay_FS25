@@ -170,6 +170,24 @@ switchStrategy.findUnloader = function() return candidate, 20 end
 assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled and recoveryRequested,
         'A stopped combine must replace a blocked trailer and request its boundary-aware recovery')
 
+-- Exercise the moving replacement with the actual multi-return shape of the engine speed API.
+switchStrategy.isWaitingForUnload = function() return false end
+switchStrategy.vehicle.getSpeedLimit = function() return 18, false end
+switchStrategy.getClosestFieldworkWaypointIx = function() return 100 end
+switchStrategy.getFieldworkCourse = function() return {
+    getNextWaypointIxWithinDistance = function(_, ix, distance)
+        assert(distance == 100, 'Replacement prediction must use only the numeric speed return')
+        return ix + 10
+    end,
+} end
+switchStrategy.findBestWaypointToUnload = function(_, ix) return ix end
+local movingReplacementCalled = false
+switchStrategy.callUnloader = function(_, selected, ix, ete)
+    movingReplacementCalled = selected == candidate and ix == 110 and ete == 20
+end
+assert(switchStrategy:trySwitchToCloserUnloader(assigned) and movingReplacementCalled,
+        'A moving replacement must remain callable when getSpeedLimit also returns a boolean')
+
 local pocketCallAccepted = false
 local pocketLeadStrategy = {
     callForPocket = function(_, combine)

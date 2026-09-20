@@ -1085,8 +1085,10 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
     local replacement = bestUnloader:getCpDriveStrategy()
     if self:isWaitingForUnload() then return replacement:call(self.vehicle, nil) end
     local course = self:getFieldworkCourse()
+    -- getSpeedLimit also returns a boolean; keep only its numeric first result.
+    local speedLimit = self.vehicle:getSpeedLimit(true)
     local ix = course:getNextWaypointIxWithinDistance(self:getClosestFieldworkWaypointIx(),
-            bestEte * math.min(30, self.vehicle:getSpeedLimit(true)) / 3.6)
+            bestEte * math.min(30, speedLimit) / 3.6)
     ix = ix and self:findBestWaypointToUnload(ix, false)
     if ix then
         self:callUnloader(bestUnloader, ix, bestEte)

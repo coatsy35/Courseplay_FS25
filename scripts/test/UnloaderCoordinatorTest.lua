@@ -337,7 +337,8 @@ partialLead.getFreeCapacityForHarvester = function() return 30000 end
 assert(UnloaderCoordinator:createDemand(capacityCombine, g_currentMission.time).secondsUntilNeeded > 0)
 
 local predictive = makeHarvester('Moving staging target', 0, false, 120, 0)
-predictive.getSpeedLimit = function() return 18 end
+-- GIANTS returns a speed and an additional boolean, not just a single number.
+predictive.getSpeedLimit = function() return 18, true end
 predictive:getCpDriveStrategy():getFieldworkCourse().getNextWaypointIxWithinDistance = function(_, ix, distance)
     return ix + math.floor(distance)
 end
