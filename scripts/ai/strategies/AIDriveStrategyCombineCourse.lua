@@ -949,6 +949,16 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
         return
     end
 
+    -- With a coordinator lead available, movement before the configured percentage is staging only. Keep that lead
+    -- parked nearby and preserve the vehicle setting as the actual promotion point.
+    local coordinatedStandby = self.settings.nearbyStandbyUnloaders and
+            self.settings.nearbyStandbyUnloaders:getValue() > 0
+    if coordinatedStandby and not self:alwaysNeedsUnloader() and
+            self.combineController:getFillLevelPercentage() < self.settings.callUnloaderPercent:getValue() then
+        self:debug('callUnloaderWhenNeeded: lead is staged; waiting for configured call percentage')
+        return
+    end
+
     local bestUnloader, bestEte
     if self:isWaitingForUnload() then
         self:debug('callUnloaderWhenNeeded: stopped, need unloader here')
@@ -1011,24 +1021,15 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
 end
 
 --- A first-headland restriction prevents unloading alongside; it must not suppress the unloader call itself. Call
---- the stable lead with the normal travel-time timing, then let it follow behind until the combine makes its pocket.
----@return boolean true when a lead accepted the pre-call
+--- the stable lead at the configured percentage, then let it follow behind until the combine makes its pocket.
+---@return boolean true when a lead accepted the call
 function AIDriveStrategyCombineCourse:callLeadForPocketWhenNeeded()
+    if self.combineController:getFillLevelPercentage() < self.settings.callUnloaderPercent:getValue() then
+        return false
+    end
     local callWaypoint = self.course:getWaypoint(self.waypointIxWhenCallUnloader)
-    local bestUnloader, bestEte = self:findUnloader(nil, callWaypoint)
-    if not bestUnloader or not bestEte then
-        return false
-    end
-    local speed = self.vehicle:getSpeedLimit(true)
-    if speed >= 100 then
-        return false
-    end
-    local distanceToCall = self.course:getDistanceBetweenWaypoints(self.waypointIxWhenCallUnloader,
-            self.course:getCurrentWaypointIx())
-    local combineEte = speed > 0.1 and distanceToCall / (speed / 3.6) or 0
-    local atCallPercentage = self.combineController:getFillLevelPercentage() >=
-            self.settings.callUnloaderPercent:getValue()
-    if not atCallPercentage and bestEte + 5 <= combineEte then
+    local bestUnloader = self:findUnloader(nil, callWaypoint)
+    if not bestUnloader then
         return false
     end
     local strategy = bestUnloader:getCpDriveStrategy()

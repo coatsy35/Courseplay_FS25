@@ -17,6 +17,8 @@ UnloaderCoordinator.minimumPoolDistance = 100
 UnloaderCoordinator.poolDistanceStep = 45
 UnloaderCoordinator.maximumAdditionalPoolDistance = 150
 UnloaderCoordinator.stagingRetargetDistance = 25
+UnloaderCoordinator.poolAdvanceDistance = 40
+UnloaderCoordinator.poolAdvancePredictionSeconds = 45
 UnloaderCoordinator.leadContinuityEteTolerance = 10
 UnloaderCoordinator.reservedLeadCallBonus = 100000
 UnloaderCoordinator.assignments = {}
@@ -322,6 +324,22 @@ function UnloaderCoordinator:getStableStagingWaypoint(harvester, role, waypoint,
             -- tightens so the lead is genuinely nearby when the combine makes its pocket or requests unloading.
             return waypoint, waypointIx
         end
+    elseif role == 'POOL' and unloader and unloader.hasReachedStandbyPosition and
+            unloader:hasReachedStandbyPosition() and demand then
+        local stagedAt = oldAssignment.stagedAtSecondsUntilNeeded
+        local predictionAdvanced = stagedAt and demand.secondsUntilNeeded <=
+                stagedAt - self.poolAdvancePredictionSeconds
+        local targetMoved = MathUtil.vector2Length(waypoint.x - oldAssignment.waypoint.x,
+                waypoint.z - oldAssignment.waypoint.z) >= self.poolAdvanceDistance
+        local harvesterX, _, harvesterZ = getWorldTranslation(harvester.rootNode)
+        local oldDistance = MathUtil.vector2Length(oldAssignment.waypoint.x - harvesterX,
+                oldAssignment.waypoint.z - harvesterZ)
+        local newDistance = MathUtil.vector2Length(waypoint.x - harvesterX, waypoint.z - harvesterZ)
+        if predictionAdvanced and targetMoved and newDistance + self.stagingRetargetDistance < oldDistance then
+            -- Rear trailers move in separate, prediction-driven steps. They park after each step and never close
+            -- past their numbered pool layer until promoted to the lead standby role.
+            return waypoint, waypointIx
+        end
     end
     -- Pool targets remain fixed. An en-route standby also finishes its current move before another target is issued.
     return oldAssignment.waypoint, oldAssignment.waypointIx
@@ -394,7 +412,7 @@ function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAs
         return oldAssignment.waypoint, oldAssignment.waypointIx, false
     end
     waypoint, waypointIx = self:getStableStagingWaypoint(demand.harvester, 'POOL', waypoint, waypointIx,
-            oldAssignment)
+            oldAssignment, unloader, demand)
     return waypoint, waypointIx, false
 end
 
@@ -517,12 +535,14 @@ function UnloaderCoordinator:rebalance(force)
                 secondsUntilDowntime = demand.secondsUntilDowntime,
                 waitUntilHarvesterPasses = waitUntilHarvesterPasses,
                 targetMovementThreshold = self.stagingRetargetDistance,
+                stagedAtSecondsUntilNeeded = oldAssignment and waypoint == oldAssignment.waypoint and
+                        oldAssignment.stagedAtSecondsUntilNeeded or demand.secondsUntilNeeded,
             }
         end
     end
 
     -- Surplus unloaders remain well clear of the working pair. Pool positions start at a geometry- and urgency-based
-    -- distance of at least roughly 100 metres and are kept stable instead of following the moving harvester.
+    -- distance of at least roughly 100 metres and only advance in coarse prediction-driven steps.
     local poolCounts = {}
     for _, unloader in ipairs(unloaders) do
         local bestDemand, bestWaypoint, bestWaypointIx, bestCost
@@ -575,6 +595,8 @@ function UnloaderCoordinator:rebalance(force)
                 secondsUntilNeeded = math.huge,
                 waitUntilHarvesterPasses = bestWaitUntilHarvesterPasses,
                 targetMovementThreshold = self.stagingRetargetDistance,
+                stagedAtSecondsUntilNeeded = oldAssignment and bestWaypoint == oldAssignment.waypoint and
+                        oldAssignment.stagedAtSecondsUntilNeeded or bestDemand.secondsUntilNeeded,
             }
         end
     end

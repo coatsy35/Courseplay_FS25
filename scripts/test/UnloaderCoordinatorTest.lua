@@ -263,6 +263,18 @@ local stableWaypoint = UnloaderCoordinator:getPoolWaypoint(progressiveTrailer, p
 assert(stableWaypoint == nearerWaypoint,
         'A reached pool position must remain fixed instead of following urgency changes')
 
+-- A rear trailer may make another deliberate move only when predicted need advances materially and the next
+-- course-derived layer is genuinely closer to the harvester.
+progressiveTrailer.reachedStandby = true
+progressionDemand.secondsUntilNeeded = 300
+oldPoolAssignment.waypoint = { x = -250, z = 0 }
+oldPoolAssignment.waypointIx = 750
+oldPoolAssignment.stagedAtSecondsUntilNeeded = 500
+local advancedPoolWaypoint = UnloaderCoordinator:getPoolWaypoint(progressiveTrailer, progressionDemand, 1,
+        oldPoolAssignment)
+assert(advancedPoolWaypoint.x > oldPoolAssignment.waypoint.x + 40,
+        'A rear trailer must advance to a nearer parked layer when predicted demand materially increases')
+
 local promotedWaypoint = { x = 25, z = 0 }
 local firstStandbyWaypoint = UnloaderCoordinator:getStableStagingWaypoint(progressionCombine, 'STANDBY',
         promotedWaypoint, 25, oldPoolAssignment)

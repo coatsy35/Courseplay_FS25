@@ -15,8 +15,9 @@ independent unloaders from clustering behind the nearest machine.
   can arrive at least ten seconds sooner. If the assigned trailer has remained stopped for ten seconds, the
   replacement also releases it onto a boundary-contained reverse escape course.
 - Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. Each
-  trailer enters the field once and remains parked at its safe pool position instead of following harvesters or
-  exchanging targets. Pool distance grows with time until demand, header width and the number of waiting trailers.
+  trailer enters the field and parks in a separate rear layer. When predicted demand advances materially, the next
+  trailer may move to a nearer course-derived layer and park again. Pool distance accounts for time until demand,
+  header width and the number of waiting trailers.
 - A pooled trailer inside an approaching combine's swept path moves clear before the normal blocked-vehicle timeout.
   Fruit-protected access-point waits remain stationary until the combine passes, as configured.
 - A trailer waiting ahead with fruit avoidance enabled stays at its access-point pool until the harvester passes and
@@ -34,8 +35,9 @@ combine call may take a soft reservation only when its predicted downtime is wit
 combine.
 
 The nearest suitable trailer becomes the stable combine lead; a nearby partly filled trailer may win when its arrival
-time is within ten seconds of the nearest option. It advances in deliberate hops to harvested positions behind the
-combine as the call approaches, tightening to the configured standby distance at the call percentage. Rear pool
+time is within ten seconds of the nearest option. Before the configured call percentage, it only advances in
+deliberate staging moves to harvested positions and parks between moves. It does not actively follow the combine.
+At the configured percentage, Courseplay promotes that parked lead and starts its unloading approach. Rear pool
 trailers stay parked until the active lead's measured fill rate predicts that it will need relief.
 
 Disabling moving unload on the first headland prevents only alongside unloading. The normal call still promotes the
