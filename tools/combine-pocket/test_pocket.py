@@ -18,7 +18,7 @@ class CombinePocketTurnTests(unittest.TestCase):
         self.lua.execute('CpDebug = {DBG_TURN=1}')
         self.lua.execute((ROOT / 'scripts/ai/turns/AITurn.lua').read_text(encoding='utf-8-sig'))
 
-    def test_stock_pocket_geometry_is_uniformly_doubled(self):
+    def test_stock_pocket_geometry_scales_to_overlap_adjusted_headland_width(self):
         self.lua.execute('''
             CpFieldUtil = {isOnField=function() return true end}
             Course = function(_, waypoints)
@@ -34,7 +34,12 @@ class CombinePocketTurnTests(unittest.TestCase):
                 delete=function() end
             }
             local turn = setmetatable({
-                vehicle={}, turningRadius=6, workWidth=12,
+                vehicle={
+                    getCourseGeneratorSettings=function()
+                        return {headlandOverlapPercent={getValue=function() return 10 end}}
+                    end
+                },
+                turningRadius=6, workWidth=12,
                 debug=function() end
             }, CombinePocketHeadlandTurn)
             local context = {
@@ -43,13 +48,17 @@ class CombinePocketTurnTests(unittest.TestCase):
                 createCorner=function() return corner end
             }
             local course, endIx = turn:generatePocketHeadlandTurn(context)
+            local laneSpacing = 12 * 0.9
+            local offset = laneSpacing / 0.7
             assert(endIx == 42)
             assert(#course.waypoints == 10)
-            assert(course.waypoints[3].x == 18 and course.waypoints[3].rev)
-            assert(course.waypoints[4].x == 36 and course.waypoints[4].rev)
-            assert(course.waypoints[5].x == 27 and math.abs(course.waypoints[5].z + 10.8) < 0.0001)
-            assert(course.waypoints[6].x == 18 and math.abs(course.waypoints[6].z + 12.6) < 0.0001)
-            assert(math.abs(course.waypoints[7].z + 12.6) < 0.0001)
+            assert(math.abs(course.waypoints[3].x - offset) < 0.0001 and course.waypoints[3].rev)
+            assert(math.abs(course.waypoints[4].x - 2 * offset) < 0.0001 and course.waypoints[4].rev)
+            assert(math.abs(course.waypoints[5].x - 1.5 * offset) < 0.0001)
+            assert(math.abs(course.waypoints[5].z + 0.6 * offset) < 0.0001)
+            assert(math.abs(course.waypoints[6].x - offset) < 0.0001)
+            assert(math.abs(course.waypoints[6].z + laneSpacing) < 0.0001)
+            assert(math.abs(course.waypoints[7].z + laneSpacing) < 0.0001)
         ''')
 
     def test_each_reverse_waits_until_straw_discharge_finishes(self):
