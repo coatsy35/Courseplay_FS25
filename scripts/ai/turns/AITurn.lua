@@ -1079,12 +1079,25 @@ function CombinePocketHeadlandTurn:init(vehicle, driveStrategy, ppc, proximityCo
             workWidth, 'CombinePocketHeadlandTurn')
 end
 
+--- Get the centre-line spacing used for consecutive generated headland passes.
+--- The first headland is a full working width, but the next pass is inset by
+--- the configured overlap, so this is the distance the pocket must move over.
+function CombinePocketHeadlandTurn:getHeadlandLaneSpacing()
+    local settings = self.vehicle:getCourseGeneratorSettings()
+    local overlapPercent = settings.headlandOverlapPercent:getValue()
+    overlapPercent = math.max(0, math.min(100, overlapPercent))
+    return self.workWidth * (1 - overlapPercent / 100)
+end
+
 --- Create a pocket in the next row at the corner to stay on the field during the turn maneuver.
 ---@param turnContext TurnContext
 function CombinePocketHeadlandTurn:generatePocketHeadlandTurn(turnContext)
     local cornerWaypoints = {}
     -- this is how far we have to cut into the next headland (the position where the header will be after the turn)
-    local offset = math.min(self.turningRadius + turnContext.frontMarkerDistance, self.workWidth)
+    -- Keep the stock pocket proportions, scaling all offset-based coordinates
+    -- together so the stock 0.7 lateral leg is exactly one overlap-adjusted
+    -- headland lane spacing.
+    local offset = self:getHeadlandLaneSpacing() / 0.7
     local corner = turnContext:createCorner(self.vehicle, self.turningRadius)
     local d = -self.workWidth / 2 + turnContext.frontMarkerDistance
     local reverseDistance = 2 * offset
@@ -1139,13 +1152,27 @@ function CombinePocketHeadlandTurn:startTurn()
     self.state = self.states.TURNING
 end
 
---- When making a pocket we need to lower the header whenever driving forward
+--- When making a pocket, lower the header while driving forwards. Before each
+--- reverse, raise it and wait for the remaining straw to leave the combine.
 function CombinePocketHeadlandTurn:turn(dt)
     local gx, gy, moveForwards, maxSpeed = AITurn.turn(self)
     if self.ppc:isReversing() then
-        self.driveStrategy:raiseImplements()
-        self.implementsLowered = nil
+        if self.implementsLowered ~= false then
+            self.driveStrategy:raiseImplements()
+            self.implementsLowered = false
+        end
+        if self.driveStrategy.combineController:isDroppingStrawSwath() then
+            if not self.waitingForStraw then
+                self:debug('Waiting for straw discharge before reversing')
+                self.waitingForStraw = true
+            end
+            maxSpeed = 0
+        elseif self.waitingForStraw then
+            self:debug('Straw discharge finished, reversing')
+            self.waitingForStraw = false
+        end
     elseif not self.implementsLowered then
+        self.waitingForStraw = false
         self.driveStrategy:lowerImplements()
         self.implementsLowered = true
     end
