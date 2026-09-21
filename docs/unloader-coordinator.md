@@ -25,7 +25,7 @@ independent unloaders from clustering behind the nearest machine.
   Fruit-protected access-point waits remain stationary until the combine passes, as configured.
 - A trailer waiting ahead with fruit avoidance enabled stays at its access-point pool until the harvester passes and
   a fruit-free route behind it becomes available.
-- Initial calls and replacements use the same arrival score. A partial load offsets at most ten seconds of travel,
+- Initial calls and replacements use the same arrival score. A partial load offsets up to the 25-second local travel allowance,
   so nearby combines finish its load without preferring a distant trailer. Failed approaches have a 15-second
   cooldown; abandoned pathfinders are cancelled and obsolete callbacks cannot affect a new assignment.
 
@@ -97,7 +97,7 @@ Each combine or forage harvester has an **Unloader coordination** section:
 Staging pauses during turns and manoeuvres. Targets must be on fruit-free ground, remain inside the field polygon,
 and retain collision avoidance. Reached pool and staging targets remain fixed until coverage or urgency changes.
 
-## Behaviour checklist for test build 2926
+## Behaviour checklist for test build 2927
 
 | Requirement | Automated coverage | In-game acceptance |
 | --- | --- | --- |
@@ -117,7 +117,7 @@ The 2925 log showed successful approach searches rejected by the added boundary 
 pool reassignment and repeated recovery searches. Build 2926 removes that veto as requested. Spares already parked
 on harvested ground within their pool distance remain there rather than looping backwards to a more distant target.
 Actual calls consider uncovered waiting harvesters before accepting a follower's request; known convoy order gives
-the lead priority. A covered lead does not prevent a second trailer serving the follower, and distant harvesters do
+the lead priority. Build 2927 further restricts nearby followers to sharing a serviceable active trailer; distant harvesters do
 not monopolise nearby trailers.
 
 Build 2924's captured run exposed two regressions: a worker starting at 90.5% with no fill history targeted waypoint
@@ -138,3 +138,18 @@ In-game validation should cover:
 3. Two to four mixed harvesters with fewer, equal and surplus unloaders.
 4. Headland and 180-degree turns, pockets, reversing and blocked paths.
 5. Joining and leaving jobs, manual **Drive now**, field unloading and multiplayer ownership.
+
+## Build 2927: shared combine service
+
+Nearby combines share the active trailer when compatible space remains after its current tank and a harvest
+allowance. The short post-unload clearance reverse retains that coverage. Distant combines, insufficient capacity
+and blocked rigs permit another trailer. Nearby partial loads take precedence over empty trailers, including when
+an empty standby reservation already exists. Forager relief remains separate.
+
+Combine relief stays in the rear pool while an active rig occupies the pipe, with clearance derived from work width,
+urgency and queue position (at least the existing 100-metre pool baseline). It does not enter close standby early.
+Relief prediction uses remaining capacity and harvested crop rate, not the much faster pipe transfer rate.
+
+The 2926 log showed separate active trailers for both nearby combines and a third promoted into close standby as
+pipe discharge accelerated the fill-rate estimate. New regression cases cover shared service, distant and capacity
+exceptions, post-unload clearance, blocked rigs and rear relief positioning. In-game validation is still required.

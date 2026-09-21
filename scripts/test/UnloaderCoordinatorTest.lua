@@ -356,7 +356,7 @@ print('Fleet reservation, capacity and prediction regressions: OK')
 
 -- Coverage, not the still-full tank of a served combine, determines who gets the remaining trailer.
 local covered = makeHarvester('Covered full combine', 0, false, 0, 0, 0, 100)
-local uncovered = makeHarvester('Uncovered combine', 100, false, 0, 100, 10, 98)
+local uncovered = makeHarvester('Uncovered combine', 1000, false, 0, 1000, 10, 98)
 covered:getCpDriveStrategy().combineController = {getFillLevel = function() return 20000 end}
 local serving = makeUnloader('Active lead', 0, false, covered, 0)
 serving.getFreeCapacityForHarvester = function() return 32000 end
@@ -473,3 +473,48 @@ local waypoint = UnloaderCoordinator:getPoolWaypoint(parked, {
 }, 2)
 assert(waypoint.x == parked.vehicle.rootNode.x, 'An unneeded spare already clear in the field must stay parked')
 print('Parked spare does not backtrack: OK')
+
+-- Two nearby combines share a rig that can finish its current tank and still take more crop.
+lead.rootNode.x = 200
+leadStrategy.combineController = {getFillLevel = function() return 10000 end}
+leadStrategy.litersPerSecond = 0
+servingLead.getFreeCapacityForHarvester = function() return 25000 end
+AIDriveStrategyUnloadCombine.activeUnloaders = {[servingLead] = servingLead.vehicle, [freeTrailer] = freeTrailer.vehicle}
+g_currentMission.vehicleSystem.vehicles = {lead, follower}
+UnloaderCoordinator.assignments = {}
+assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'Nearby follower must wait for the shared rig instead of calling a second trailer')
+assert(UnloaderCoordinator:createDemand(follower, g_currentMission.time).sharedUnloader == servingLead)
+UnloaderCoordinator:rebalance(true)
+assert(freeTrailer.assignment.role == 'POOL', 'Relief stays well back even when both combines need unloading')
+servingLead.getFreeCapacityForHarvester = function() return 5000 end
+assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'Insufficient remaining capacity must permit another trailer')
+UnloaderCoordinator:rebalance(true)
+assert(freeTrailer.assignment.role == 'POOL', 'Urgent combine relief must not enter close standby while the pipe is occupied')
+assert(math.abs(freeTrailer.assignment.waypoint.x - lead.rootNode.x) >= UnloaderCoordinator.minimumPoolDistance,
+        'Even urgent relief must park outside the rear pool clearance')
+servingLead.getFreeCapacityForHarvester = function() return 25000 end
+lead.rootNode.x = 2000
+assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'Separated combines require independent trailers')
+lead.rootNode.x = 200
+UnloaderCoordinator.trailerFillSamples[servingLead] = {fill = 0, time = g_currentMission.time - 1000, rate = 10}
+assert(UnloaderCoordinator:getSecondsUntilRelief(lead, leadStrategy, servingLead, g_currentMission.time) == math.huge,
+        'Rapid pipe transfer must not predict that a sufficient trailer needs immediate replacement')
+leadStrategy.litersPerSecond = 50
+assert(UnloaderCoordinator:getSecondsUntilRelief(lead, leadStrategy, servingLead, g_currentMission.time) == 300)
+print('Shared combine trailer, rear relief and crop-rate regressions: OK')
+
+servingLead.getCombineToUnload = function() return nil end
+servingLead.states = {MOVING_BACK = {}}
+servingLead.state = servingLead.states.MOVING_BACK
+UnloaderCoordinator.clearingUnloaders[servingLead.vehicle] = {harvester = lead, distance = 60}
+assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
+        'Brief post-unload reversing must not summon an empty replacement for a nearby partial load')
+servingLead.isInDeadlock = function() return true end
+assert(not UnloaderCoordinator:getSharedUnloader(follower), 'A blocked rig must not indefinitely suppress another trailer')
+servingLead.isInDeadlock = nil
+servingLead.state = {}
+assert(not UnloaderCoordinator:getSharedUnloader(follower), 'Clearance coverage ends when reversing ends')
+print('Partial-load clearance and blocked coverage regressions: OK')

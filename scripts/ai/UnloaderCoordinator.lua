@@ -182,6 +182,7 @@ function UnloaderCoordinator:hasHigherCallPriority(harvester, current)
 end
 
 function UnloaderCoordinator:shouldServeHarvesterFirst(unloader, harvester)
+    if self:getSharedUnloader(harvester) then return false end
     for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
         if other ~= harvester and self:getHarvesterStrategy(other) and not self:getActiveUnloader(other) and
                 self:hasHigherCallPriority(other, harvester) then
@@ -195,6 +196,40 @@ function UnloaderCoordinator:shouldServeHarvesterFirst(unloader, harvester)
         end
     end
     return true
+end
+
+--- Nearby combines share the active rig while it can still take crop after its current tank.
+--- Do not use an unloading trailer's transfer rate as the field's crop production rate.
+function UnloaderCoordinator:getSharedUnloader(harvester)
+    local strategy = self:getHarvesterStrategy(harvester)
+    if not strategy or not strategy.alwaysNeedsUnloader or strategy:alwaysNeedsUnloader() then return nil end
+    if self:getActiveUnloader(harvester) then return nil end
+    local hx, _, hz = getWorldTranslation(harvester.rootNode)
+    for unloader in pairs(AIDriveStrategyUnloadCombine.activeUnloaders or {}) do
+        local other = unloader:getCombineToUnload()
+        local clearing = not other and unloader.states and unloader.state == unloader.states.MOVING_BACK and
+                self.clearingUnloaders[unloader.vehicle]
+        other = other or clearing and clearing.harvester
+        local otherStrategy = other and (other ~= harvester or clearing) and self:getHarvesterStrategy(other)
+        if otherStrategy and not otherStrategy:alwaysNeedsUnloader() and
+                unloader.getFreeCapacityForHarvester and otherStrategy.combineController then
+            local x, _, z = getWorldTranslation(other.rootNode)
+            local width = math.max(strategy:getWorkWidth(), otherStrategy:getWorkWidth())
+            local distance = MathUtil.vector2Length(x - hx, z - hz)
+            local free = unloader:getFreeCapacityForHarvester(harvester)
+            local tank = clearing and 0 or otherStrategy.combineController:getFillLevel()
+            local harvestAllowance = math.max(0, otherStrategy.litersPerSecond or 0) * self.combineSafetyMarginSeconds
+            local departing = unloader.getAllTrailersFull and unloader.settings and
+                    unloader:getAllTrailersFull(unloader.settings.fullThreshold:getValue())
+            local _, ete = unloader:getDistanceAndEteToVehicle(harvester)
+            if distance <= math.max(self.minimumPoolDistance, width * 4) and
+                    ete <= self.combineSafetyMarginSeconds and not departing and free > tank + harvestAllowance and
+                    (not unloader.isInDeadlock or not unloader:isInDeadlock()) and
+                    (not unloader.canRetryCombineApproach or unloader:canRetryCombineApproach(harvester)) then
+                return unloader
+            end
+        end
+    end
 end
 
 --- Calculate a close-standby target on the harvested course behind the harvester. A predicted future call position
@@ -249,7 +284,9 @@ function UnloaderCoordinator:getSecondsUntilRelief(harvester, strategy, activeUn
         if remaining <= 0 then return 0 end
         if strategy.litersPerSecond and strategy.litersPerSecond > 0.1 then
             -- Include the crop still being harvested while the lead travels and unloads.
-            seconds = math.min(seconds, remaining / strategy.litersPerSecond)
+            seconds = remaining / strategy.litersPerSecond
+        else
+            seconds = math.huge
         end
     end
     return seconds
@@ -272,9 +309,12 @@ function UnloaderCoordinator:createDemand(harvester, now)
     end
 
     local isForager = strategy:alwaysNeedsUnloader()
+    local sharedUnloader = self:getSharedUnloader(harvester)
     local activeUnloader = self:getActiveUnloader(harvester)
     local secondsUntilNeeded
-    if activeUnloader then
+    if sharedUnloader then
+        secondsUntilNeeded = math.huge
+    elseif activeUnloader then
         secondsUntilNeeded = self:getSecondsUntilRelief(harvester, strategy, activeUnloader, now)
     elseif isForager then
         secondsUntilNeeded = 0
@@ -290,6 +330,7 @@ function UnloaderCoordinator:createDemand(harvester, now)
     return {
         harvester = harvester,
         harvesterStrategy = strategy,
+        sharedUnloader = sharedUnloader,
         activeUnloader = activeUnloader,
         isFirm = isForager,
         secondsUntilNeeded = secondsUntilNeeded,
@@ -324,7 +365,7 @@ end
 ---@param distance number
 ---@return number
 function UnloaderCoordinator:getCallScore(fillLevelPercentage, distance, ete)
-    return math.min(10, math.max(0, fillLevelPercentage) / 10) - (ete or distance / 5)
+    return (fillLevelPercentage > 0 and self.combineSafetyMarginSeconds or 0) - (ete or distance / 5)
 end
 
 ---@param unloader AIDriveStrategyUnloadCombine
@@ -615,6 +656,16 @@ function UnloaderCoordinator:rebalance(force)
             if oldAssignment and oldAssignment.reserved and oldAssignment.harvester == demand.harvester and
                     self:canServeDemand(unloader, demand) then
                 bestIndex = i
+                if unloader:getFillLevelPercentage() == 0 then
+                    local currentEte = self:getEteToDemand(unloader, demand)
+                    for _, candidate in ipairs(unloaders) do
+                        if candidate:getFillLevelPercentage() > 0 and self:canServeDemand(candidate, demand) and
+                                self:getEteToDemand(candidate, demand) <= currentEte + self.combineSafetyMarginSeconds then
+                            bestIndex = nil
+                            break
+                        end
+                    end
+                end
                 break
             end
         end
@@ -629,7 +680,7 @@ function UnloaderCoordinator:rebalance(force)
             for i, unloader in ipairs(unloaders) do
                 if self:canServeDemand(unloader, demand) then
                     local ete = self:getEteToDemand(unloader, demand)
-                    if ete <= fastestEte + self.leadContinuityEteTolerance then
+                    if ete <= fastestEte + self.combineSafetyMarginSeconds then
                         local distance = demand.waypoint and unloader:getDistanceAndEteToWaypoint(demand.waypoint)
                                 or unloader:getDistanceAndEteToVehicle(demand.harvester)
                         local score = self:getCallScore(unloader:getFillLevelPercentage(), distance, ete)
@@ -640,11 +691,14 @@ function UnloaderCoordinator:rebalance(force)
                 end
             end
         end
-        if bestIndex then
+        if bestIndex and not demand.sharedUnloader then
             local unloader = table.remove(unloaders, bestIndex)
             local oldAssignment = self.assignments[unloader]
             local deploy = oldAssignment and oldAssignment.harvester == demand.harvester and
                     oldAssignment.role == 'STANDBY' or self:shouldDeploy(unloader, demand, oldAssignment)
+            -- Combine relief stays in the rear pool until the active rig has left.
+            -- Foragers retain their continuous-feed relief arrangement.
+            if demand.activeUnloader and not demand.isFirm then deploy = false end
             local waypoint, waypointIx, waitUntilHarvesterPasses
             if deploy then
                 waypoint, waypointIx = demand.waypoint, demand.waypointIx

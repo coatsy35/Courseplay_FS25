@@ -1178,7 +1178,7 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
                         unloaderDistance, unloaderEte = driveStrategy:getDistanceAndEteToWaypoint(waypoint)
                     end
                     -- The same bounded load preference applies to both initial calls and replacements. A partial
-                    -- load can offset at most ten seconds of travel, never a journey across the field.
+                    -- load can offset at most the local sharing travel allowance, never a journey across the field.
                     local score = UnloaderCoordinator:getCallScore(unloaderFillLevelPercentage, unloaderDistance, unloaderEte)
                     self:debug('findUnloader: %s idle on my field, fill level %.1f, distance %.1f, ETE %.1f, score %.1f)',
                             CpUtil.getName(vehicle), unloaderFillLevelPercentage, unloaderDistance, unloaderEte, score)

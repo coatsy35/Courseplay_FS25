@@ -198,8 +198,10 @@ empty.getDistanceAndEteToVehicle = function() return 94, 20 end
 g_currentMission.vehicleSystem.vehicles = {partial.vehicle, empty.vehicle}
 AIDriveStrategyUnloadCombine.isActiveCpCombineUnloader = function() return true end
 local selector = setmetatable({vehicle = a, debug = function() end}, {__index = AIDriveStrategyCombineCourse})
-assert(selector:findUnloader(a, nil, false) == empty.vehicle)
-assert(selector:findUnloader(a, nil, true) == empty.vehicle)
+assert(selector:findUnloader(a, nil, false) == partial.vehicle)
+assert(selector:findUnloader(a, nil, true) == partial.vehicle)
+partial.getDistanceAndEteToVehicle = function() return 1500, 300 end
+assert(selector:findUnloader(a, nil) == empty.vehicle, 'A distant partial load must not monopolise the call')
 partial.getDistanceAndEteToVehicle = function() return 100, 22 end
 assert(selector:findUnloader(a, nil, false) == partial.vehicle, 'A genuinely nearby partial load retains preference')
 
