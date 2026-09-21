@@ -16,7 +16,7 @@ independent unloaders from clustering behind the nearest machine.
 - A combine at or beyond its configured call percentage replaces an en-route trailer when another eligible trailer
   can arrive at least ten seconds sooner. During an active route search, the improvement must also exceed a quarter
   of the assigned trailer's travel estimate, avoiding repeated cancellation for small gains. If the assigned trailer has remained stopped for ten seconds, the
-  replacement also releases it onto a boundary-contained reverse escape course.
+  replacement also releases it onto a reverse escape course using normal CP proximity control.
 - Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. Each
   trailer enters the field and parks in a separate rear layer. When predicted demand advances materially, the next
   trailer may move to a nearer course-derived layer and park again. Pool distance accounts for time until demand,
@@ -65,17 +65,14 @@ route. At a shared field entry, subsequent active calls also queue until the dep
 train and turning envelope. Calls remain assigned while queued. A nearby forward approach joins the appropriate
 moving or stopped unload course without a needless global pathfinding loop.
 
-Coordinator pathfinding, reverse-clearance courses and live steering targets are constrained to the detected field
-polygon. Coarse grid routing checks the field corridor; the detailed search checks oriented tractor/trailer footprints
-and their swept segments. Completed courses and live
-steering also check attached bodies. Active combine approaches use the actual polygon with footprint checks rather
-than a circular inset. A rejected live movement schedules an in-field recovery route instead of an indefinite stop.
-A failed exact approach falls back to a
-harvested point behind the combine without stopping the AI worker. When a full trailer reports that AutoDrive can
+Unloader pathfinding prefers the detected field polygon, adding a route cost outside its corridor. Analytic
+shortcuts cannot bypass that preference. The polygon is not an absolute containment rule: a usable approach near
+an edge is allowed, and completed routes and live driving are not cancelled by a separate boundary rollout.
+The boundary recovery state machine has been removed. Normal CP collision and proximity controls remain active.
+A failed exact approach falls back to a harvested point behind the combine without stopping the AI worker;
+the failed-call cooldown prevents an immediate unrelated pool journey. When a full trailer reports that AutoDrive can
 take control, Courseplay releases it at its current safe position so AutoDrive can join the surrounding road network
-directly. The older return-to-start fallback is also constrained to the complete rig's field corridor; if no
-contained route exists, Courseplay hands over at the last safe position. A tractor handed over just outside an
-access point may only drive inwards.
+directly. The older return-to-start fallback uses the same field preference and ordinary collision checks.
 After unloading, the tractor reverses by a distance derived from header width and both vehicle lengths. Fieldwork
 traffic also applies the same physical turn envelope when trail-based convoy distance is unreliable during turns or
 the drive back to a work-start waypoint. A combine waiting in a pocket or pull-back holds until the unloader reaches
@@ -100,7 +97,7 @@ Each combine or forage harvester has an **Unloader coordination** section:
 Staging pauses during turns and manoeuvres. Targets must be on fruit-free ground, remain inside the field polygon,
 and retain collision avoidance. Reached pool and staging targets remain fixed until coverage or urgency changes.
 
-## Behaviour checklist for test build 2925
+## Behaviour checklist for test build 2926
 
 | Requirement | Automated coverage | In-game acceptance |
 | --- | --- | --- |
@@ -110,11 +107,18 @@ and retain collision avoidance. Reached pool and staging targets remain fixed un
 | Pocket and first-headland unloading | Actual call dispatcher, ready-pocket promotion, reverse hold and forward approach | Lead waits clear while the pocket is cut, then unloads promptly |
 | Forager relief | Firm reservations, measured trailer fill and capacity | Full trailer clears and relief takes the pipe with minimal interruption |
 | Safe turns and recovery | Header-derived clearances, convoy order, blocked-call recovery | Wide headers clear corners and pocket returns without contacting following vehicles |
-| Field boundary and AD handover | Actual JPS search through a bent corridor, smoothing, swept rig containment, entry direction, persistent clearance ownership | No rig leaves the polygon before AD control; verify AD joins its network |
-| Stable calls and routes | Departure queue, nearer replacement, stale callbacks and long searches | First tractor completes departure; others wait and then depart in order |
+| Field boundary preference and AD handover | Outside-field route cost, accepted-route retention, preserved collision checks | Prefer in-field travel without repeated route cancellation; verify AD joins its network |
+| Stable calls and routes | Waiting-lead priority independent of caller order, departure queue, nearer replacement, stale callbacks and long searches | Full lead receives the nearest suitable trailer; spare trailers wait clear |
 
 These checks exercise the real Lua decision functions with engine stubs. They do not simulate GIANTS vehicle physics,
 fruit maps, collision shapes or AutoDrive. Live-game acceptance remains necessary.
+
+The 2925 log showed successful approach searches rejected by the added boundary rollout, followed by call release,
+pool reassignment and repeated recovery searches. Build 2926 removes that veto as requested. Spares already parked
+on harvested ground within their pool distance remain there rather than looping backwards to a more distant target.
+Actual calls consider uncovered waiting harvesters before accepting a follower's request; known convoy order gives
+the lead priority. A covered lead does not prevent a second trailer serving the follower, and distant harvesters do
+not monopolise nearby trailers.
 
 Build 2924's captured run exposed two regressions: a worker starting at 90.5% with no fill history targeted waypoint
 2434 instead of its current position, and the shared search loop applied detailed trailer constraints to coarse grid

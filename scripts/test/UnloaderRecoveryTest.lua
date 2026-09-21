@@ -13,7 +13,7 @@ local released = false
 local strategy = {
     turningRadius = 12,
     debug = function() end,
-    createBoundaryContainedReverseCourse = function() return nil, 0 end,
+    createClearanceReverseCourse = function() return nil, 0 end,
     startWaitingForSomethingToDo = function() released = true end,
 }
 setmetatable(strategy, { __index = AIDriveStrategyUnloadCombine })
@@ -46,7 +46,7 @@ local releasedBlockedCall = false
 strategy.state = {}
 strategy.states.MOVING_AWAY_FROM_OTHER_VEHICLE = {}
 strategy.combineToUnload = combine
-strategy.createBoundaryContainedReverseCourse = function() return {}, 18 end
+strategy.createClearanceReverseCourse = function() return {}, 18 end
 strategy.releaseCombine = function(self)
     releasedBlockedCall = true
     self.combineToUnload = nil
@@ -222,8 +222,8 @@ assert(not strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
         'A target behind the tractor must still use a manoeuvring route')
 directDz = 13
 FieldworkBoundary.containsSegment = function() return false end
-assert(not strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
-        'A direct approach must never cross the field boundary')
+assert(strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
+        'The optional boundary preference must not veto a normal nearby pipe approach')
 FieldworkBoundary.containsSegment = function() return true end
 directCombineStrategy.isWaitingForUnloadAfterPulledBack = function() return false end
 directCombineStrategy.hasAutoAimPipe = function() return false end

@@ -1167,7 +1167,8 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
             -- or when starting.
             if driveStrategy:isServingPosition(x, z, 10) then
                 local unloaderFillLevelPercentage = driveStrategy:getFillLevelPercentage()
-                if driveStrategy:isAllowedToBeCalled(self.vehicle) and unloaderFillLevelPercentage < 99 then
+                if driveStrategy:isAllowedToBeCalled(self.vehicle) and unloaderFillLevelPercentage < 99 and
+                        UnloaderCoordinator:shouldServeHarvesterFirst(driveStrategy, self.vehicle) then
                     local unloaderDistance, unloaderEte
                     if combine then
                         -- if already stopped, we want the unloader to come to us

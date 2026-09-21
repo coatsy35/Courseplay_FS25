@@ -425,3 +425,51 @@ assert(not UnloaderCoordinator:canBeCalledBy(aheadTrailer, fleetHarvesters[1]),
 assert(UnloaderCoordinator:canBeCalledBy(aheadTrailer, fleetHarvesters[2]),
         'A wait for one harvester must not exclude a safe call from another that has already passed')
 print('Fleet coverage, call timing and parked-lead acceptance regressions: OK')
+
+-- Reproduce the follower claiming a newly available nearby trailer before the full lead's update runs.
+local lead = makeHarvester('Lead', 200, false, 0, 200, 0, 96)
+local follower = makeHarvester('Follower', 150, false, 0, 150, 30, 85)
+local leadStrategy, followerStrategy = lead:getCpDriveStrategy(), follower:getCpDriveStrategy()
+leadStrategy.isWaitingForUnload = function() return true end
+followerStrategy.isWaitingForUnload = function() return false end
+local freeTrailer = makeUnloader('Free trailer', 100, true, nil, 30)
+freeTrailer.isServingPosition = function() return true end
+freeTrailer.isAllowedToBeCalled = function() return true end
+AIDriveStrategyUnloadCombine.activeUnloaders = {[freeTrailer] = freeTrailer.vehicle}
+g_currentMission.vehicleSystem.vehicles = {follower, lead}
+assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'A follower updating first must leave the nearby trailer available for the waiting lead')
+assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, lead))
+followerStrategy.isWaitingForUnload = function() return true end
+followerStrategy.fieldWorkerProximityController = {fieldWorkCourse = {}, hasSameCourse = function() return true end,
+    otherVehicleAheadOnTrail = {[lead] = true}}
+leadStrategy.fieldWorkerProximityController = {fieldWorkCourse = {}, hasSameCourse = function() return true end,
+    otherVehicleAheadOnTrail = {[follower] = false}}
+assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'Both waiting: the established convoy leader retains first call')
+leadStrategy.fieldWorkerProximityController = nil
+assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, lead) and
+        not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'One recorded convoy trail must establish the same priority from both callers')
+local servingLead = makeUnloader('Serving lead', 200, false, lead, 0)
+AIDriveStrategyUnloadCombine.activeUnloaders[servingLead] = servingLead.vehicle
+assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'Once the lead has a trailer, another free trailer may serve the follower')
+AIDriveStrategyUnloadCombine.activeUnloaders[servingLead] = nil
+lead.rootNode.x = 2000
+assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'A distant harvester must not monopolise a trailer beside another due combine')
+print('Waiting lead and order-independent call priority regressions: OK')
+
+-- A spare inside its predicted pool layer must not loop backwards merely to match a new pool waypoint/heading.
+local parked = makeUnloader('Parked spare', 100, true, nil, 0)
+local poolHarvester = makeHarvester('Pool harvester', 300, false, 200, 300)
+parked.vehicle.cpGetFieldPolygon = function() return {} end
+AIUtil = {getWidth = function() return 3 end}
+FieldworkBoundary = {forVehicle = function() return {} end, contains = function() return true end}
+PathfinderUtil.hasFruit = function() return false end
+local waypoint = UnloaderCoordinator:getPoolWaypoint(parked, {
+    harvester = poolHarvester, harvesterStrategy = poolHarvester:getCpDriveStrategy(), secondsUntilNeeded = 500,
+}, 2)
+assert(waypoint.x == parked.vehicle.rootNode.x, 'An unneeded spare already clear in the field must stay parked')
+print('Parked spare does not backtrack: OK')

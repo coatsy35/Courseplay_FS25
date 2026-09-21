@@ -158,7 +158,7 @@ local full = unloader(100)
 full.combineToUnload = a
 full.unloadTargetType = AIDriveStrategyUnloadCombine.UNLOAD_TYPES.COMBINE
 full.getHarvesterTurnClearanceDistance = function() return 50 end
-full.createBoundaryContainedReverseCourse = function() return {}, 30 end
+full.createClearanceReverseCourse = function() return {}, 30 end
 full.isDriveUnloadNowRequested = function() return false end
 full.getAllTrailersFull = function() return true end
 assert(full:changeToUnloadWhenTrailerFull())
@@ -238,8 +238,7 @@ close:startUnloadingCombine()
 assert(joinedMoving == 1 and joinedStopped == 1)
 print('Recorded moving/stopped combine join regressions: OK')
 
--- Exercise the actual update dispatcher: a boundary rejection must schedule recovery; recovery driving must
--- continue through proximity checks, and parked/queued states must not act on a stale steering target.
+-- Exercise the actual update dispatcher: boundary preference must not cancel driving or override proximity control.
 local frame = unloader(0)
 frame.updateLowFrequencyImplementControllers = function() end
 frame.calculateAutoAimPipeOffsetX = function() end
@@ -249,23 +248,15 @@ frame.setMaxSpeed = function(self, value) self.maxSpeed = math.min(self.maxSpeed
 frame.setFieldSpeed = function(self) self:setMaxSpeed(15) end
 frame.checkProximitySensors = function(self) self:setMaxSpeed(7) end
 frame.checkCollisionWarning = function() end
-frame.isNextDriveSegmentInsideField = function() return false end
-local recovered, resumed = 0, 0
-frame.recoverFromBoundaryBlock = function(self) recovered = recovered + 1; self:setNewState(self.states.WAITING_FOR_BOUNDARY_PATHFINDER) end
+local resumed = 0
 frame.resumeDepartureCall = function() resumed = resumed + 1 end
 frame.pathfinderController.isActive = function() return false end
-frame.state = frame.states.DRIVING_BOUNDARY_RECOVERY
+frame.driveToCombine = function(self) self:setFieldSpeed() end
+frame.state = frame.states.DRIVING_TO_COMBINE
+frame.isNextDriveSegmentInsideField = function() error('Hard boundary veto must not run') end
 frame.maxSpeed = math.huge
 local _, _, _, speed = frame:getDriveData(16)
-assert(speed == 0 and recovered == 1, 'Unsafe movement must stop and replace the rejected route')
-frame.maxSpeed = math.huge
-frame:getDriveData(16)
-assert(recovered == 2, 'The recovery wait must retry after a failed search')
-frame.state = frame.states.DRIVING_BOUNDARY_RECOVERY
-frame.isNextDriveSegmentInsideField = function() return true end
-frame.maxSpeed = math.huge
-_, _, _, speed = frame:getDriveData(16)
-assert(speed == 7 and recovered == 2, 'Recovery movement must obey proximity speed limits')
+assert(speed == 7, 'Normal driving must retain the approach and obey proximity speed limits')
 frame.state = frame.states.WAITING_FOR_DEPARTURE
 frame.maxSpeed = math.huge
 _, _, _, speed = frame:getDriveData(16)
@@ -297,3 +288,28 @@ assert(controller.startedAt == g_time and controller.numRetries == 3 and control
 controller:cancel()
 assert(not controller:isActive() and controller.currentPathfinderCall == nil)
 print('Pathfinder re-entrant completion regression: OK')
+
+-- Reproduce the observed successful-route -> boundary rejection -> release/restage cycle.
+FieldworkBoundary = {containsRigCourse = function() error('A completed unloader route must not be vetoed') end}
+AIUtil.getDirectionNodeToReverserNodeOffset = function() return 0 end
+local route = {adjustForReversing = function() end}
+for _, moving in ipairs({true, false}) do
+    local driver = unloader(0)
+    driver.combineToUnload = a
+    driver.state = driver.states.WAITING_FOR_PATHFINDER
+    driver.extendCombineApproachWithinField = function() end
+    local callback = moving and driver.onPathfindingDoneToMovingCombine or driver.onPathfindingDoneToWaitingCombine
+    assert(callback(driver, driver.pathfinderController, true, route))
+    assert(driver.combineToUnload == a and driver.course == route and
+            driver.state == (moving and driver.states.DRIVING_TO_MOVING_COMBINE or driver.states.DRIVING_TO_COMBINE),
+            'A successful approach must retain its combine and enter the driving state')
+end
+local failed = unloader(0)
+failed.combineToUnload = a
+failed:recordFailedCombineApproach()
+failed.isAvailableForStaging = function() return true end
+failed.startPathfindingToStandby = function() error('A failed call must not immediately cause a pool journey') end
+failed:clearStandbyAssignment()
+failed:setStandbyAssignment({harvester = b, role = 'POOL', waypoint = {x = -100, z = 0}})
+assert(failed.state == failed.states.WAITING_IN_STANDBY)
+print('Accepted route retention and failed-call parking regressions: OK')

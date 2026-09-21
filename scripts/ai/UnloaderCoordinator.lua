@@ -143,6 +143,60 @@ function UnloaderCoordinator:getSecondsUntilTrailerFull(strategy, now)
     return math.max(0, (100 - fill) / rate)
 end
 
+--- Compare actual outstanding calls before letting update order decide which combine gets a free trailer.
+function UnloaderCoordinator:hasHigherCallPriority(harvester, current)
+    local strategy, currentStrategy = self:getHarvesterStrategy(harvester), self:getHarvesterStrategy(current)
+    if not strategy or not currentStrategy then return false end
+    local waiting = strategy.isWaitingForUnload and strategy:isWaitingForUnload() or false
+    local currentWaiting = currentStrategy.isWaitingForUnload and currentStrategy:isWaitingForUnload() or false
+    local settings = harvester:getCpSettings()
+    if not waiting and (not strategy.getFillLevelPercentage or not settings.callUnloaderPercent or
+            strategy:getFillLevelPercentage() < settings.callUnloaderPercent:getValue()) then return false end
+    local currentSettings = current:getCpSettings()
+    if not currentWaiting and currentStrategy.getFillLevelPercentage and currentSettings.callUnloaderPercent and
+            currentStrategy:getFillLevelPercentage() < currentSettings.callUnloaderPercent:getValue() then return true end
+    -- A known convoy leader requesting unload has priority over its follower, including during a pocket.
+    local proximity = currentStrategy.fieldWorkerProximityController
+    local otherProximity = strategy.fieldWorkerProximityController
+    local sameCourse = proximity and proximity.fieldWorkCourse and proximity:hasSameCourse(harvester) or
+            otherProximity and otherProximity.fieldWorkCourse and otherProximity:hasSameCourse(current)
+    if sameCourse then
+        local ahead = proximity and proximity.otherVehicleAheadOnTrail and proximity.otherVehicleAheadOnTrail[harvester]
+        local behind = otherProximity and otherProximity.otherVehicleAheadOnTrail and otherProximity.otherVehicleAheadOnTrail[current]
+        -- Consult both ends so only one recorded trail is sufficient. Contradictory stale records fall through
+        -- to the common urgency ordering, rather than making each combine wait for the other.
+        if ahead ~= nil and behind == nil then return ahead end
+        if behind ~= nil and ahead == nil then return not behind end
+        if ahead ~= nil and ahead ~= behind then return ahead end
+        if strategy.getFieldWorkProximity and currentStrategy.getFieldWorkProximity then
+            local aheadDistance = strategy:getFieldWorkProximity(current:getAIDirectionNode())
+            local behindDistance = currentStrategy:getFieldWorkProximity(harvester:getAIDirectionNode())
+            if aheadDistance < math.huge and behindDistance == math.huge then return true end
+            if behindDistance < math.huge and aheadDistance == math.huge then return false end
+        end
+    end
+    if waiting ~= currentWaiting then return waiting end
+    local seconds, currentSeconds = self:getSecondsUntilDowntime(harvester), self:getSecondsUntilDowntime(current)
+    if seconds ~= currentSeconds then return seconds < currentSeconds end
+    return tostring(harvester.rootNode) < tostring(current.rootNode)
+end
+
+function UnloaderCoordinator:shouldServeHarvesterFirst(unloader, harvester)
+    for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if other ~= harvester and self:getHarvesterStrategy(other) and not self:getActiveUnloader(other) and
+                self:hasHigherCallPriority(other, harvester) then
+            local x, _, z = getWorldTranslation(other.rootNode)
+            if unloader:isServingPosition(x, z, 10) and unloader:isAllowedToBeCalled(other) then
+                -- Preserve locality: a waiting combine across the field must not monopolise this trailer.
+                local _, otherEte = unloader:getDistanceAndEteToVehicle(other)
+                local _, currentEte = unloader:getDistanceAndEteToVehicle(harvester)
+                if otherEte <= currentEte + self.combineSafetyMarginSeconds then return false end
+            end
+        end
+    end
+    return true
+end
+
 --- Calculate a close-standby target on the harvested course behind the harvester. A predicted future call position
 --- can still contain crop, so parking there would either be rejected or make the trailer cut through fruit.
 ---@param harvester table
@@ -462,6 +516,18 @@ function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAs
     -- A fruit-protected vehicle ahead of the harvester remains at its access point until the harvester passes.
     if waitUntilHarvesterPasses then
         return self:getWaypointAtUnloader(unloader), nil, waitUntilHarvesterPasses
+    end
+
+    -- A spare already on harvested ground and clear of the working pair need not turn around to reach a pool
+    -- waypoint behind it. Keep its present position until predicted demand brings its layer further forwards.
+    if distance >= self.minimumPoolDistance and distance <= poolDistance and
+            unloader.vehicle.cpGetFieldPolygon and FieldworkBoundary then
+        local x, _, z = getWorldTranslation(unloader.vehicle.rootNode)
+        local boundary = FieldworkBoundary.forVehicle(unloader.vehicle, AIUtil.getWidth(unloader.vehicle) + 2)
+        if boundary and FieldworkBoundary.contains(boundary, x, z) and
+                not PathfinderUtil.hasFruit(x, z, 4, 4) then
+            return self:getWaypointAtUnloader(unloader), nil, false
+        end
     end
 
     local waypoint, waypointIx = self:getStagingWaypoint(demand.harvester, poolDistance)

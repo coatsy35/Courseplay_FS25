@@ -135,3 +135,22 @@ constraints.collisionDetector.findCollidingShapes = function() return 0 end
 assert(constraints:isValidNode({x = 20, y = -25, t = 0, tTrailer = 0, d = 0}, true, true),
         'A fully contained detailed destination must remain usable')
 print('Coarse routing and detailed rig containment regressions: OK')
+
+-- Unloader contexts opt into preference, while other fieldwork contexts retain their strict policy.
+constraints.protectRigBoundary, constraints.preferFieldworkBoundary = false, true
+constraints.offFieldPenalty, constraints.maxFruitPercent, constraints.penaltyFactor = 7.5, 10, 1
+constraints:resetCounts()
+CpFieldUtil = {isOnField = function() return true end}
+PathfinderUtil.isWorldPositionOwned = function() return true end
+PathfinderUtil.hasFruit = function() return false, 0 end
+local insideNode, outsideNode = {x = 20, y = -25, t = 0, d = 0}, {x = -10, y = -25, t = 0, d = 0}
+assert(constraints:isValidNode(outsideNode, true, true),
+        'An unloader route near the boundary must remain possible when normal collision checks pass')
+assert(constraints:getNodePenalty(outsideNode) > constraints:getNodePenalty(insideNode),
+        'Route selection must prefer the assigned field even if neighbouring ground is also a field')
+assert(not constraints:isValidAnalyticSolutionNode(outsideNode),
+        'An analytic shortcut must not bypass the in-field planning preference')
+constraints.collisionDetector.findCollidingShapes = function() return 1 end
+assert(not constraints:isValidNode(outsideNode, true, true),
+        'A soft boundary must never disable collision detection')
+print('Boundary routing preference and preserved collision checks: OK')

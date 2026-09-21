@@ -58,6 +58,7 @@ function PathfinderConstraints:init(context)
     self.vehicle = context._vehicle
     self.fieldworkBoundary = context._fieldworkBoundary
     self.protectRigBoundary = context._protectRigBoundary
+    self.preferFieldworkBoundary = context._preferFieldworkBoundary
     self.turnRadius = AIUtil.getTurningRadius(context._vehicle) or 10
     self.vehicleData = PathfinderUtil.VehicleData(context._vehicle, true, 0.25)
     self.trailerHitchLength = AIUtil.getTowBarLength(context._vehicle) or 3
@@ -100,6 +101,11 @@ end
 ---@param node State3D
 function PathfinderConstraints:getNodePenalty(node)
     local penalty = 0
+    -- Unloader boundaries guide route selection, rather than vetoing a usable route or the live driver.
+    -- A separate preference also avoids treating a neighbouring field as part of this unloading field.
+    if self.preferFieldworkBoundary and not FieldworkBoundary.contains(self.fieldworkBoundary, node.x, -node.y) then
+        penalty = penalty + math.max(25, self.offFieldPenalty * 4)
+    end
     -- not on any field
     local offFieldPenalty = self.offFieldPenalty
     local offField = not CpFieldUtil.isOnField(node.x, -node.y)
@@ -171,6 +177,10 @@ end
 --- that analytic paths are almost always invalid when they go near the fruit. Since analytic paths are only at the
 --- beginning at the end of the course and mostly curves, it is no problem getting closer to the fruit than otherwise
 function PathfinderConstraints:isValidAnalyticSolutionNode(node, log)
+    -- Analytic shortcuts bypass node penalties. Let the normal search find the preferred in-field route first.
+    if self.preferFieldworkBoundary and not FieldworkBoundary.contains(self.fieldworkBoundary, node.x, -node.y) then
+        return false
+    end
     local hasFruit, fruitValue = PathfinderUtil.hasFruit(node.x, -node.y, 3, 3, self.areaToIgnoreFruit)
     local analyticLimit = self.maxFruitPercent * 2
     if hasFruit and fruitValue > analyticLimit then
@@ -221,7 +231,7 @@ function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid, c
                 previous = outside
             end
         end
-    elseif not FieldworkBoundary.contains(self.fieldworkBoundary, node.x, -node.y) then
+    elseif not self.preferFieldworkBoundary and not FieldworkBoundary.contains(self.fieldworkBoundary, node.x, -node.y) then
         return false
     end
     if not offFieldValid and self.strictMode then
