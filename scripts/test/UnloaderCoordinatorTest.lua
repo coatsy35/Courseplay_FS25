@@ -474,6 +474,16 @@ local waypoint = UnloaderCoordinator:getPoolWaypoint(parked, {
     harvester = poolHarvester, harvesterStrategy = poolHarvester:getCpDriveStrategy(), secondsUntilNeeded = 500,
 }, 2)
 assert(waypoint.x == parked.vehicle.rootNode.x, 'An unneeded spare already clear in the field must stay parked')
+local justCleared = makeUnloader('Just cleared', 250, true, nil, 60)
+justCleared.vehicle.cpGetFieldPolygon = function() return {} end
+justCleared.postUnloadClearanceHarvester = poolHarvester
+PathfinderUtil.hasFruit = function() return true end
+local clearedWaypoint = UnloaderCoordinator:getPoolWaypoint(justCleared, {
+    harvester = poolHarvester, harvesterStrategy = poolHarvester:getCpDriveStrategy(), secondsUntilNeeded = 500,
+}, 2)
+assert(clearedWaypoint.x == justCleared.vehicle.rootNode.x,
+        'A trailer that reversed to measured turn clearance must stay parked, even at a crop edge')
+PathfinderUtil.hasFruit = function() return false end
 print('Parked spare does not backtrack: OK')
 
 -- Two nearby combines share a rig that can finish its current tank and still take more crop.

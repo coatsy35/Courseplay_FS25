@@ -1113,7 +1113,12 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
         -- time is not an arrival-time improvement; retain the call unless the alternative is substantially closer.
         switchAdvantage = math.max(switchAdvantage, assignedEte * 0.25)
     end
-    if not assignedIsStuck and (not assignedEte or
+    -- When a previously busy part-loaded trailer becomes free, even a modest real arrival-time gain should
+    -- transfer the call from an empty trailer. The ordinary hysteresis remains for equally loaded trailers.
+    local nearerPartial = bestUnloader ~= assignedUnloader.vehicle and
+            bestUnloader:getCpDriveStrategy():getFillLevelPercentage() > 0 and
+            assignedUnloader:getFillLevelPercentage() == 0 and assignedEte and bestEte < assignedEte
+    if not assignedIsStuck and not nearerPartial and (not assignedEte or
             bestEte + switchAdvantage >= assignedEte) then
         self:debug('Keeping assigned unloader %s: ETE %.1fs, alternative %s %.1fs',
                 CpUtil.getName(assignedUnloader.vehicle or assignedUnloader), assignedEte or -1,

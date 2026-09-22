@@ -619,6 +619,9 @@ function AIDriveStrategyUnloadCombine:areThereAnyCombinesOrLoaderLeftoverOnTheFi
 end
 
 function AIDriveStrategyUnloadCombine:startWaitingForSomethingToDo()
+    if self.state == self.states.MOVING_BACK and self:isAtHarvesterClearance() then
+        self.postUnloadClearanceHarvester = self.state.properties.vehicle
+    end
     self:releaseCombine()
     if self.state ~= self.states.IDLE then
         self.course = Course.createStraightForwardCourse(self.vehicle, 25)
@@ -2041,6 +2044,7 @@ function AIDriveStrategyUnloadCombine:callForPocket(combine)
         self:debug('callForPocket: no safe harvested standby waypoint available yet')
         return false
     end
+    self.postUnloadClearanceHarvester = nil
     UnloaderCoordinator:release(self)
     self.combineRequestGeneration = (self.combineRequestGeneration or 0) + 1
     if self.pathfinderController then self.pathfinderController:cancel() end
@@ -2067,6 +2071,7 @@ end
 function AIDriveStrategyUnloadCombine:call(combine, waypoint)
     -- A real unload call always supersedes provisional staging. Firm forage reservations are filtered by
     -- isAllowedToBeCalled(), so reaching this point also performs the atomic standby-to-active promotion.
+    self.postUnloadClearanceHarvester = nil
     UnloaderCoordinator:release(self)
     self.combineRequestGeneration = (self.combineRequestGeneration or 0) + 1
     if self.pathfinderController then self.pathfinderController:cancel() end

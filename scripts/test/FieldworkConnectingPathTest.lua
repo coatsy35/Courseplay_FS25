@@ -36,6 +36,30 @@ local longConnector = {contained = true, getLength = function() return 700 end}
 assert(strategy:canDriveConnectingPathDirectly(longConnector),
         'A long contained generated connector must be driven without a duplicate global search')
 
+AIUtil = {getWidth = function() return 4 end}
+MathUtil = {vector2Length = function(x, z) return math.sqrt(x * x + z * z) end}
+function getWorldTranslation(node) return node.x, 0, node.z end
+local follower = {rootNode = {x = 40, z = 0}, getIsCpFieldWorkActive = function() return true end}
+g_currentMission = {vehicleSystem = {vehicles = {follower}}}
+strategy.fieldWorkerProximityController = {hasSameCourse = function() return true end}
+longConnector.getNumberOfWaypoints = function() return 3 end
+longConnector.getWaypointPosition = function(_, ix) return (ix - 1) * 40, 0, 0 end
+CpUtil = {getName = function() return 'Follower' end}
+strategy.debug = function() end
+assert(not strategy:canDriveConnectingPathDirectly(longConnector),
+        'A connector crossing the following worker must use collision-aware routing')
+g_currentMission.time = 1000
+strategy.workStarterCourse = longConnector
+strategy.states = {WAITING_FOR_PATHFINDER = {}}
+strategy:onPathfindingFailedToConnectingPathEnd(nil, {collisionMask = function()
+    error('An occupied connector must not disable collision checks')
+end}, false, 1)
+assert(strategy.connectingPathRetryAt == 6000 and strategy.state == strategy.states.WAITING_FOR_PATHFINDER,
+        'A failed detour must wait and retry rather than drive through the following worker')
+follower.rootNode.z = 30
+assert(strategy:canDriveConnectingPathDirectly(longConnector),
+        'A worker clear of the connector must not force a global search')
+
 longConnector.contained = false
 assert(not strategy:canDriveConnectingPathDirectly(longConnector),
         'A connector that leaves the field must not bypass pathfinding')

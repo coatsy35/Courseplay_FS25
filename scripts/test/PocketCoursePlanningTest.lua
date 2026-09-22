@@ -130,6 +130,7 @@ CpUtil = {
 local candidateCalled = false
 local candidateStrategy = {
     call = function() candidateCalled = true return true end,
+    getFillLevelPercentage = function() return 0 end,
 }
 local candidate = {
     name = 'Near trailer',
@@ -139,6 +140,7 @@ local recoveryRequested = false
 local assigned = {
     vehicle = { name = 'Far trailer' },
     getDistanceAndEteToVehicle = function() return 100, 100 end,
+    getFillLevelPercentage = function() return 0 end,
     isInDeadlock = function() return false end,
     yieldCallToCloserUnloader = function(_, _, recoverFromBlock)
         recoveryRequested = recoverFromBlock
@@ -319,5 +321,15 @@ switchStrategy.findUnloader = function() return candidate, 73.9 end
 assert(not switchStrategy:trySwitchToCloserUnloader(assigned), 'Small ETE changes must not discard route searches')
 switchStrategy.findUnloader = function() return candidate, 20 end
 assert(switchStrategy:trySwitchToCloserUnloader(assigned), 'A substantially closer trailer must still take over')
+
+-- The field log showed a 60%-full trailer become free 75 m away while an empty trailer was still en route.
+-- A 5.5-second arrival gain must transfer that call, even though ordinary search hysteresis is ten seconds.
+assigned.pathfinderController = nil
+assigned.getDistanceAndEteToVehicle = function() return 90, 21.9 end
+candidateStrategy.getFillLevelPercentage = function() return 60 end
+switchStrategy.findUnloader = function() return candidate, 16.4 end
+candidateCalled = false
+assert(switchStrategy:trySwitchToCloserUnloader(assigned) and candidateCalled,
+        'A nearer free part-loaded trailer must take over an en-route empty trailer')
 
 print('PocketCoursePlanningTest: OK')

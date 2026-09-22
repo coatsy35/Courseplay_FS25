@@ -562,8 +562,9 @@ function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAs
     -- waypoint behind it. Keep its present position until predicted demand brings its layer further forwards.
     local clearance = unloader.getHarvesterTurnClearanceDistance and
             unloader:getHarvesterTurnClearanceDistance(demand.harvester) or self.minimumPoolDistance
-    clearance = clearance + (demand.harvesterStrategy.getWorkWidth and demand.harvesterStrategy:getWorkWidth() or 0)
-    local clearOfHarvesters = distance >= clearance
+    -- The reverse manoeuvre already measures turn clearance. Adding another header width here makes a cleared
+    -- trailer drive a long loop to a pool waypoint even though it can safely stay where it stopped.
+    local clearOfHarvesters = distance + 2 >= clearance
     if clearOfHarvesters then
         for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
             if other ~= demand.harvester and self:getHarvesterStrategy(other) then
@@ -572,8 +573,7 @@ function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAs
                 local otherStrategy = self:getHarvesterStrategy(other)
                 local otherClearance = unloader.getHarvesterTurnClearanceDistance and
                         unloader:getHarvesterTurnClearanceDistance(other) or self.minimumPoolDistance
-                otherClearance = otherClearance + (otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or 0)
-                if MathUtil.vector2Length(ox - ux, oz - uz) < otherClearance then
+                if MathUtil.vector2Length(ox - ux, oz - uz) + 2 < otherClearance then
                     clearOfHarvesters = false
                     break
                 end
@@ -585,7 +585,9 @@ function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAs
         local x, _, z = getWorldTranslation(unloader.vehicle.rootNode)
         local boundary = FieldworkBoundary.forVehicle(unloader.vehicle, AIUtil.getWidth(unloader.vehicle) + 2)
         if boundary and FieldworkBoundary.contains(boundary, x, z) and
-                not PathfinderUtil.hasFruit(x, z, 4, 4) then
+                (unloader.postUnloadClearanceHarvester or
+                        unloader.hasReachedStandbyPosition and unloader:hasReachedStandbyPosition() or
+                        not PathfinderUtil.hasFruit(x, z, 4, 4)) then
             return self:getWaypointAtUnloader(unloader), nil, false
         end
     end
