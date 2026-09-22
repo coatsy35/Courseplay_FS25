@@ -293,3 +293,36 @@ assert(nearbyStandbyHeld,
         'Promoting an active call must immediately stop a nearby provisional movement at the shared entry')
 
 print('UnloaderRecoveryTest: OK')
+
+-- A normal moving-combine unload must clear the pipe side before re-entering the pool.
+local movingClearance = {isWaitingInPocket = function() return false end,
+    isTurningOnHeadland = function() return false end,
+    isTurning = function() return false end,
+    isAboutToTurn = function() return false end}
+local movingCombine = {rootNode = {x = 0, z = 0}, getCpDriveStrategy = function() return movingClearance end}
+local reverseState = {}
+local clearRig = setmetatable({combineToUnload = movingCombine, states = {MOVING_BACK = reverseState},
+    settings = {fullThreshold = {getValue = function() return 85 end}},
+    getAllTrailersFull = function() return false end,
+    startMovingBackFromCombine = function(self, state, combine, hold)
+        self.reverseRequest = {state, combine, hold}
+    end,
+    debug = function() end}, {__index = AIDriveStrategyUnloadCombine})
+clearRig:onUnloadingMovingCombineFinished(movingClearance)
+assert(clearRig.reverseRequest and clearRig.reverseRequest[1] == reverseState and
+        clearRig.reverseRequest[2] == movingCombine,
+        'An emptied moving combine must receive a reverse clearance move before the rig parks')
+
+-- Completing the planned reverse is insufficient when the tractor remains inside the actual envelope.
+getWorldTranslation = function(node) return node.x, 0, node.z end
+local extension, started = nil, false
+clearRig.vehicle = {rootNode = {x = 20, z = 0}}
+clearRig.state = {properties = {vehicle = movingCombine, clearanceDistance = 50}}
+clearRig.getHarvesterTurnClearanceDistance = function() return 50 end
+clearRig.createClearanceReverseCourse = function(_, distance) extension = distance; return {} end
+clearRig.startCourse = function() started = true end
+assert(clearRig:extendReverseForClearance() and started and extension > 30,
+        'Reverse must continue when the course ends before the rig has cleared the combine')
+clearRig.vehicle.rootNode.x = 55
+assert(not clearRig:extendReverseForClearance(), 'Verified clearance must finish the reverse')
+print('Moving-combine release and measured reverse clearance regressions: OK')

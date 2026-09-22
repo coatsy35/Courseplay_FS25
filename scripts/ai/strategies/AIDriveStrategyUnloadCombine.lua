@@ -523,7 +523,8 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         self:setMaxSpeed(self.settings.reverseSpeed:getValue())
         -- drive back to have some room for the pathfinder
         local d, _, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
-        if dz > 0 and d >= (self.state.properties.clearanceDistance or 0) then
+        if dz > 0 and d >= (self.state.properties.clearanceDistance or 0) and
+                self:isAtHarvesterClearance() then
             self:startUnloadingTrailers()
         end
 
@@ -538,7 +539,8 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         end
         -- drive back until the combine is in front of us
         local d, _, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
-        if dz > 0 and d >= (self.state.properties.clearanceDistance or 0) then
+        if dz > 0 and d >= (self.state.properties.clearanceDistance or 0) and
+                self:isAtHarvesterClearance() then
             self:debug('Stop backing up')
             self:startWaitingForSomethingToDo()
         end
@@ -1135,11 +1137,15 @@ function AIDriveStrategyUnloadCombine:onLastWaypointPassed()
     elseif self.state == self.states.MOVING_BACK_FOR_HEADLAND_TURN then
         self:startWaitingForSomethingToDo()
     elseif self.state == self.states.MOVING_BACK_WITH_TRAILER_FULL then
-        self:debug('Reached the reverse-clearance waypoint; starting trailer unload handover')
-        self:startUnloadingTrailers()
+        if not self:extendReverseForClearance() then
+            self:debug('Reached the reverse-clearance waypoint; starting trailer unload handover')
+            self:startUnloadingTrailers()
+        end
     elseif self.state == self.states.MOVING_BACK then
-        self:debug('Reached the reverse-clearance waypoint')
-        self:startWaitingForSomethingToDo()
+        if not self:extendReverseForClearance() then
+            self:debug('Reached the reverse-clearance waypoint')
+            self:startWaitingForSomethingToDo()
+        end
     elseif self.state == self.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL then
         self:debug('Inverted goal position reached, so give control back to the job.')
         self:onTrailerFull()
@@ -2796,9 +2802,8 @@ function AIDriveStrategyUnloadCombine:onUnloadingMovingCombineFinished(combineSt
         self:startMovingBackFromCombine(self.states.MOVING_BACK_WITH_TRAILER_FULL, self.combineToUnload)
         return
     else
-        self:debug('combine empty and moving forward')
-        self:releaseCombine()
-        self:startWaitingForSomethingToDo()
+        self:debug('combine empty and moving forward, clearing the pipe side')
+        self:startMovingBackFromCombine(self.states.MOVING_BACK, self.combineToUnload, true)
         return
     end
 end
@@ -2813,6 +2818,7 @@ function AIDriveStrategyUnloadCombine:startMovingBackFromCombine(newState, combi
     end
 
     local requestedDistance = self:getHarvesterTurnClearanceDistance(combine)
+    self.clearanceReverseExtensions = 0
     UnloaderCoordinator:registerClearingUnloader(self, combine, requestedDistance)
     local reverseCourse, reverseDistance = self:createClearanceReverseCourse(requestedDistance)
     self:setNewState(newState)
@@ -2831,6 +2837,43 @@ function AIDriveStrategyUnloadCombine:startMovingBackFromCombine(newState, combi
         end
     end
     return
+end
+
+--- A reverse course can end before the complete trailer train clears the harvester.
+--- Check the same world-space clearance used by the waiting harvester before releasing the rig.
+function AIDriveStrategyUnloadCombine:getHarvesterClearanceRemaining()
+    local combine = self.state.properties.vehicle
+    local required = self.state.properties.clearanceDistance or 0
+    if not combine or required <= 0 then return 0 end
+    local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+    local cx, _, cz = getWorldTranslation(combine.rootNode)
+    return required - MathUtil.vector2Length(x - cx, z - cz)
+end
+
+function AIDriveStrategyUnloadCombine:isAtHarvesterClearance()
+    return self:getHarvesterClearanceRemaining() <= 0
+end
+
+function AIDriveStrategyUnloadCombine:extendReverseForClearance()
+    local remaining = self:getHarvesterClearanceRemaining()
+    if remaining <= 0 then return false end
+    local combine = self.state.properties.vehicle
+    self.clearanceReverseExtensions = (self.clearanceReverseExtensions or 0) + 1
+    if self.clearanceReverseExtensions > 2 then
+        self:debug('Reverse course ended %.1f m short of clearance after two extensions; holding for clearance', remaining)
+        self:setMaxSpeed(0)
+        return true
+    end
+    local extra = remaining + self:getHarvesterTurnClearanceDistance(combine) / 2
+    local course = self:createClearanceReverseCourse(extra)
+    if not course then
+        self:debug('Could not extend reverse course; holding for clearance')
+        self:setMaxSpeed(0)
+        return true
+    end
+    self:debug('Reverse course ended %.1f m short; extending by %.1f m', remaining, extra)
+    self:startCourse(course, 1)
+    return true
 end
 
 ---@param harvester table|nil

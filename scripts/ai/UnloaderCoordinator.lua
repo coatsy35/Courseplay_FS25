@@ -221,9 +221,8 @@ function UnloaderCoordinator:getSharedUnloader(harvester)
             local harvestAllowance = math.max(0, otherStrategy.litersPerSecond or 0) * self.combineSafetyMarginSeconds
             local departing = unloader.getAllTrailersFull and unloader.settings and
                     unloader:getAllTrailersFull(unloader.settings.fullThreshold:getValue())
-            local _, ete = unloader:getDistanceAndEteToVehicle(harvester)
             if distance <= math.max(self.minimumPoolDistance, width * 4) and
-                    ete <= self.combineSafetyMarginSeconds and not departing and free > tank + harvestAllowance and
+                    not departing and free > tank + harvestAllowance and
                     (not unloader.isInDeadlock or not unloader:isInDeadlock()) and
                     (not unloader.canRetryCombineApproach or unloader:canRetryCombineApproach(harvester)) then
                 return unloader
@@ -561,7 +560,27 @@ function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAs
 
     -- A spare already on harvested ground and clear of the working pair need not turn around to reach a pool
     -- waypoint behind it. Keep its present position until predicted demand brings its layer further forwards.
-    if distance >= self.minimumPoolDistance and distance <= poolDistance and
+    local clearance = unloader.getHarvesterTurnClearanceDistance and
+            unloader:getHarvesterTurnClearanceDistance(demand.harvester) or self.minimumPoolDistance
+    clearance = clearance + (demand.harvesterStrategy.getWorkWidth and demand.harvesterStrategy:getWorkWidth() or 0)
+    local clearOfHarvesters = distance >= clearance
+    if clearOfHarvesters then
+        for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
+            if other ~= demand.harvester and self:getHarvesterStrategy(other) then
+                local ox, _, oz = getWorldTranslation(other.rootNode)
+                local ux, _, uz = getWorldTranslation(unloader.vehicle.rootNode)
+                local otherStrategy = self:getHarvesterStrategy(other)
+                local otherClearance = unloader.getHarvesterTurnClearanceDistance and
+                        unloader:getHarvesterTurnClearanceDistance(other) or self.minimumPoolDistance
+                otherClearance = otherClearance + (otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or 0)
+                if MathUtil.vector2Length(ox - ux, oz - uz) < otherClearance then
+                    clearOfHarvesters = false
+                    break
+                end
+            end
+        end
+    end
+    if clearOfHarvesters and distance <= poolDistance and
             unloader.vehicle.cpGetFieldPolygon and FieldworkBoundary then
         local x, _, z = getWorldTranslation(unloader.vehicle.rootNode)
         local boundary = FieldworkBoundary.forVehicle(unloader.vehicle, AIUtil.getWidth(unloader.vehicle) + 2)

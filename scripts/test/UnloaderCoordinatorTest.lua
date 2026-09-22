@@ -66,6 +66,7 @@ local function makeUnloader(name, x, available, activeHarvester, fill)
         isAvailableForStaging = function() return available end,
         getCombineToUnload = function() return activeHarvester end,
         getFillLevelPercentage = function() return fill or 0 end,
+        getHarvesterTurnClearanceDistance = function() return 50 end,
         isServingPosition = function() return true end,
         getDistanceAndEteToWaypoint = function(self, waypoint)
             local distance = math.abs(self.x - waypoint.x)
@@ -464,6 +465,7 @@ print('Waiting lead and order-independent call priority regressions: OK')
 -- A spare inside its predicted pool layer must not loop backwards merely to match a new pool waypoint/heading.
 local parked = makeUnloader('Parked spare', 100, true, nil, 0)
 local poolHarvester = makeHarvester('Pool harvester', 300, false, 200, 300)
+g_currentMission.vehicleSystem.vehicles = {poolHarvester}
 parked.vehicle.cpGetFieldPolygon = function() return {} end
 AIUtil = {getWidth = function() return 3 end}
 FieldworkBoundary = {forVehicle = function() return {} end, contains = function() return true end}
@@ -518,3 +520,13 @@ servingLead.isInDeadlock = nil
 servingLead.state = {}
 assert(not UnloaderCoordinator:getSharedUnloader(follower), 'Clearance coverage ends when reversing ends')
 print('Partial-load clearance and blocked coverage regressions: OK')
+
+-- A shared rig travelling to the first nearby combine must not be rejected just because
+-- its current journey estimate to the second exceeds the staging margin.
+servingLead.state = {}
+servingLead.getCombineToUnload = function() return lead end
+servingLead.getDistanceAndEteToVehicle = function() return 300, 70 end
+UnloaderCoordinator.clearingUnloaders[servingLead.vehicle] = nil
+assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
+        'The active rig must cover an adjacent combine throughout its first journey')
+print('Adjacent combine shares en-route active trailer: OK')

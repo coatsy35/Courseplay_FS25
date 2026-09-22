@@ -97,7 +97,7 @@ Each combine or forage harvester has an **Unloader coordination** section:
 Staging pauses during turns and manoeuvres. Targets must be on fruit-free ground, remain inside the field polygon,
 and retain collision avoidance. Reached pool and staging targets remain fixed until coverage or urgency changes.
 
-## Behaviour checklist for test build 2927
+## Behaviour checklist for test build 2928
 
 | Requirement | Automated coverage | In-game acceptance |
 | --- | --- | --- |
@@ -153,3 +153,21 @@ Relief prediction uses remaining capacity and harvested crop rate, not the much 
 The 2926 log showed separate active trailers for both nearby combines and a third promoted into close standby as
 pipe discharge accelerated the fill-rate estimate. New regression cases cover shared service, distant and capacity
 exceptions, post-unload clearance, blocked rigs and rear relief positioning. In-game validation is still required.
+
+## Build 2928: shared call and verified clearance
+
+The 2927 saved log showed T7.300/322 called for CR11/319 at 10:09:40 and T7.300/324 called
+for nearby CR11/318 at 10:10:25. The shared-coverage check used the active trailer's
+estimated travel time to the second combine, so it failed while the rig was still
+travelling to the first. Nearby combines now share that active rig while it has capacity
+after the current tank and harvest allowance. A blocked rig, a full rig, and separated
+combines allow independent coverage.
+
+The same log shows T7.300/322 completing its 34.1-metre reverse course at 10:12:28,
+while CR11/319 continued waiting for physical clearance. Reverse-course completion now
+measures the rig's distance to the combine. It extends the reverse when needed and
+holds the combine if clearance cannot yet be achieved. A trailer finishing an ordinary
+moving-combine unload also reverses clear before rejoining the pool. A rig already parked
+clear of every active harvester retains its position instead of driving farther back to
+an arbitrary pool waypoint. These paths have focused Lua regressions; live-game physics
+still needs acceptance testing.
