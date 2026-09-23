@@ -2420,6 +2420,11 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, suc
     self:debug('Pathfinding to standby position failed; retaining current position')
     if self.connectorClearance then
         self.connectorClearance.attempt = (self.connectorClearance.attempt or 0) + 1
+        self.connectorClearance.failedTargets = self.connectorClearance.failedTargets or {}
+        if self.standbyTargetX and self.standbyTargetZ then
+            table.insert(self.connectorClearance.failedTargets,
+                    {x = self.standbyTargetX, z = self.standbyTargetZ})
+        end
     end
     self.standbyRetryAt = (g_time or 0) + 5000
     if self.standbyAssignment then
@@ -3115,6 +3120,37 @@ function AIDriveStrategyUnloadCombine:isRigClearOfCourse(course, clearance)
     return true
 end
 
+--- The pathfinder cannot reach a goal occupied by another tractor or trailer. Check the full parked rigs before
+--- starting a search, so an invalid goal cannot be selected again on every retry.
+function AIDriveStrategyUnloadCombine:isConnectorClearanceTargetFree(x, z, width, trainLength)
+    local ownVehicles = {[self.vehicle] = true}
+    for _, child in ipairs(self.vehicle:getChildVehicles()) do ownVehicles[child] = true end
+    for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if not ownVehicles[other] then
+            local vehicles = {other}
+            if other.getChildVehicles then
+                for _, child in ipairs(other:getChildVehicles()) do table.insert(vehicles, child) end
+            end
+            for _, vehicle in ipairs(vehicles) do
+                if vehicle.rootNode then
+                    local ox, _, oz = getWorldTranslation(vehicle.rootNode)
+                    local otherWidth = AIUtil.getWidth(vehicle)
+                    local separation = trainLength / 2 + width / 2 + otherWidth / 2 + 5
+                    if MathUtil.vector2Length(ox - x, oz - z) < separation then return false end
+                end
+            end
+        end
+    end
+    return true
+end
+
+function AIDriveStrategyUnloadCombine:isNewConnectorClearanceTarget(x, z)
+    for _, failed in ipairs(self.connectorClearance.failedTargets or {}) do
+        if MathUtil.vector2Length(x - failed.x, z - failed.z) < 8 then return false end
+    end
+    return true
+end
+
 --- Select an actual holding place outside the whole connector, including the trailer's swept width.
 --- Prefer the harvested side; neither an out-of-field point nor standing crop is an escape route.
 function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
@@ -3127,7 +3163,8 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
             width / 2 + 5
     local current = self.connectorClearance
     local attempt = current and current.harvester == harvester and current.attempt or 0
-    self.connectorClearance = {harvester = harvester, course = course, distance = clearance, attempt = attempt}
+    self.connectorClearance = {harvester = harvester, course = course, distance = clearance, attempt = attempt,
+        failedTargets = current and current.harvester == harvester and current.failedTargets or {}}
     self.standbyYieldingToHarvester = harvester
     if self:isRigClearOfCourse(course, clearance) then
         self:holdAtStandbyPosition()
@@ -3146,6 +3183,8 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
                 local targetX, targetZ = x - dz * distance * side, z + dx * distance * side
                 if boundary and FieldworkBoundary.contains(boundary, targetX, targetZ) and
                         (pass == 2 or not PathfinderUtil.hasFruit(targetX, targetZ, width + 2, trainLength + 2)) and
+                        self:isConnectorClearanceTargetFree(targetX, targetZ, width, trainLength) and
+                        self:isNewConnectorClearanceTarget(targetX, targetZ) and
                         self.getDistanceFromConnectingCourse(course, targetX, targetZ) >= clearance + trainLength / 2 then
                     self:debug('Clearing %s connecting route by %.1f m%s', CpUtil.getName(harvester),
                             distance, pass == 2 and ' (emergency route through crop)' or '')

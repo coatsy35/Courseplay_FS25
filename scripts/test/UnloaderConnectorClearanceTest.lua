@@ -14,6 +14,10 @@ dofile('scripts/ai/strategies/AIDriveStrategyUnloadCombine.lua')
 local trailer = {width = 5, length = 9, rootNode = {x = 10, z = 0}}
 local tractor = {width = 4, length = 6, rootNode = {x = 20, z = 0},
     getChildVehicles = function() return {trailer} end}
+local parkedTrailer = {width = 5, rootNode = {x = 20, z = 27.5}}
+local parkedTractor = {width = 4, rootNode = {x = 20, z = 28},
+    getChildVehicles = function() return {parkedTrailer} end}
+g_currentMission = {vehicleSystem = {vehicles = {tractor, parkedTractor}}}
 local driver = {getWorkWidth = function() return 15 end}
 local combine = {getCpDriveStrategy = function() return driver end}
 local strategy = setmetatable({vehicle = tractor, standbyAssignment = {},
@@ -30,8 +34,14 @@ local course = {getNumberOfWaypoints = function() return 3 end,
     getWaypointPosition = function(_, ix) return (ix - 1) * 50, 0, 0 end}
 assert(not strategy:isRigClearOfCourse(course, 15))
 strategy:requestToMoveOutOfWay(combine, nil, course)
-assert(target and target.z > 15 and strategy.connectorClearance.course == course,
-    'A parked rig must be sent clear of the full connector rather than reverse a fixed distance')
+assert(target and target.z > 45 and strategy.connectorClearance.course == course,
+    'The clearance target must avoid both the connector and another parked trailer')
+local rejectedZ = target.z
+strategy.connectorClearance.failedTargets = {{x = target.x, z = target.z}}
+target = nil
+strategy:startConnectorClearance(combine, course)
+assert(target and math.abs(target.z - rejectedZ) >= 8,
+    'A rejected pathfinder goal must not be selected again')
 tractor.rootNode.z, trailer.rootNode.z = target.z, target.z
 assert(strategy:isRigClearOfCourse(course, strategy.connectorClearance.distance),
     'Both tractor and trailer must clear the route before the combine proceeds')
