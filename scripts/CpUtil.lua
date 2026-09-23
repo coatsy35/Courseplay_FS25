@@ -427,7 +427,13 @@ function CpUtil.initStates(states, newStates)
         states = {}
     end
     for key, state in pairs(newStates) do
-        states[key] = { name = tostring(key), properties = state }
+        -- State definitions are shared by the class, but manoeuvre properties belong to one driver.
+        -- Reusing the definition lets another vehicle overwrite the blocker or clearance target.
+        local properties = {}
+        for property, value in pairs(state) do
+            properties[property] = value
+        end
+        states[key] = { name = tostring(key), properties = properties }
     end
 	return states
 end
