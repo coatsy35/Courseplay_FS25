@@ -1099,6 +1099,12 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
     if not assignedUnloader.getDistanceAndEteToVehicle or not assignedUnloader.yieldCallToCloserUnloader then
         return false
     end
+    -- A proximity hold can look like a deadlock during an actual transfer. Replacing the trailer at this point
+    -- sends a second rig into the pipe corridor and discards the crop already being loaded into the first.
+    if assignedUnloader.states and (assignedUnloader.state == assignedUnloader.states.UNLOADING_STOPPED_COMBINE or
+            assignedUnloader.state == assignedUnloader.states.UNLOADING_MOVING_COMBINE) then
+        return false
+    end
     local bestUnloader, bestEte = self:findUnloader(self.vehicle, nil)
     if not bestUnloader or not bestEte then
         return false

@@ -454,8 +454,8 @@ assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, lead) and
         'One recorded convoy trail must establish the same priority from both callers')
 local servingLead = makeUnloader('Serving lead', 200, false, lead, 0)
 AIDriveStrategyUnloadCombine.activeUnloaders[servingLead] = servingLead.vehicle
-assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
-        'Once the lead has a trailer, another free trailer may serve the follower')
+assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'The follower must not send a second trailer into the lead trailer’s working corridor')
 AIDriveStrategyUnloadCombine.activeUnloaders[servingLead] = nil
 lead.rootNode.x = 2000
 assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
@@ -493,6 +493,12 @@ leadStrategy.combineController = {getFillLevel = function() return 10000 end}
 leadStrategy.litersPerSecond = 0
 servingLead.getFreeCapacityForHarvester = function() return 25000 end
 AIDriveStrategyUnloadCombine.activeUnloaders = {[servingLead] = servingLead.vehicle, [freeTrailer] = freeTrailer.vehicle}
+lead.rootNode.x = 380
+assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
+        'The same-course sharing corridor must extend beyond the old 100 m cutoff')
+assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'Combines on the same headland must share the serving trailer before they converge at a corner')
+lead.rootNode.x = 200
 g_currentMission.vehicleSystem.vehicles = {lead, follower}
 UnloaderCoordinator.assignments = {}
 assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
@@ -501,8 +507,8 @@ assert(UnloaderCoordinator:createDemand(follower, g_currentMission.time).sharedU
 UnloaderCoordinator:rebalance(true)
 assert(freeTrailer.assignment.role == 'POOL', 'Relief stays well back even when both combines need unloading')
 servingLead.getFreeCapacityForHarvester = function() return 5000 end
-assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
-        'Insufficient remaining capacity must permit another trailer')
+assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'Remaining capacity alone must not summon another trailer before the lead has finished')
 UnloaderCoordinator:rebalance(true)
 assert(freeTrailer.assignment.role == 'POOL', 'Urgent combine relief must not enter close standby while the pipe is occupied')
 assert(math.abs(freeTrailer.assignment.waypoint.x - lead.rootNode.x) >= UnloaderCoordinator.minimumPoolDistance,
@@ -540,4 +546,10 @@ servingLead.getDistanceAndEteToVehicle = function() return 300, 70 end
 UnloaderCoordinator.clearingUnloaders[servingLead.vehicle] = nil
 assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
         'The active rig must cover an adjacent combine throughout its first journey')
+servingLead.states.UNLOADING_STOPPED_COMBINE = {}
+servingLead.state = servingLead.states.UNLOADING_STOPPED_COMBINE
+servingLead.isInDeadlock = function() return true end
+assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
+        'A temporary hold during transfer must not release the nearby corridor to a second trailer')
+servingLead.isInDeadlock = nil
 print('Adjacent combine shares en-route active trailer: OK')

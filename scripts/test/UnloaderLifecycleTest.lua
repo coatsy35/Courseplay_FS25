@@ -93,6 +93,14 @@ staged.standbyTargetStartedAt = g_currentMission.time - 60000
 staged:setStandbyAssignment(staged.standbyAssignment)
 assert(staged.pathfinderController.active and staged.state == staged.states.WAITING_FOR_STANDBY_PATHFINDER,
         'A progressing standby search must not be cancelled just because it exceeds 15 seconds')
+
+local spare = unloader(0)
+spare.isAvailableForStaging = function() return true end
+spare.startPathfindingToStandby = function()
+    error('A pooled spare must remain parked until promoted to the lead')
+end
+spare:setStandbyAssignment({harvester = a, role = 'POOL', waypoint = {x = 100, z = 0}})
+assert(spare.state == spare.states.WAITING_IN_STANDBY)
 staged:setStandbyAssignment({harvester = a, role = 'STANDBY', waypoint = {x = 180, z = 0}})
 assert(stagingAttempts == 1 and staged.pathfinderController.active,
         'An advancing staging target must not repeatedly restart the same in-progress departure search')
@@ -205,6 +213,15 @@ partial.getDistanceAndEteToVehicle = function() return 1500, 300 end
 assert(selector:findUnloader(a, nil) == empty.vehicle, 'A distant partial load must not monopolise the call')
 partial.getDistanceAndEteToVehicle = function() return 100, 22 end
 assert(selector:findUnloader(a, nil, false) == partial.vehicle, 'A genuinely nearby partial load retains preference')
+
+local transferring = unloader(0)
+transferring.state = transferring.states.UNLOADING_STOPPED_COMBINE
+transferring.getDistanceAndEteToVehicle = function() return 10, 2 end
+transferring.yieldCallToCloserUnloader = function()
+    error('A transferring trailer must not be replaced')
+end
+assert(not selector:trySwitchToCloserUnloader(transferring),
+        'A proximity hold during crop transfer must not cause a second trailer to be called')
 
 print('UnloaderLifecycleTest: OK')
 

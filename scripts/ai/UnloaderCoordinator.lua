@@ -198,8 +198,8 @@ function UnloaderCoordinator:shouldServeHarvesterFirst(unloader, harvester)
     return true
 end
 
---- Nearby combines share the active rig while it can still take crop after its current tank.
---- Do not use an unloading trailer's transfer rate as the field's crop production rate.
+--- A nearby combine must not send another rig into the same working corridor while the first is still serving.
+--- Once that rig has finished and cleared, the next call can choose it again if it has room, or choose a replacement.
 function UnloaderCoordinator:getSharedUnloader(harvester)
     local strategy = self:getHarvesterStrategy(harvester)
     if not strategy or not strategy.alwaysNeedsUnloader or strategy:alwaysNeedsUnloader() then return nil end
@@ -211,20 +211,21 @@ function UnloaderCoordinator:getSharedUnloader(harvester)
                 self.clearingUnloaders[unloader.vehicle]
         other = other or clearing and clearing.harvester
         local otherStrategy = other and (other ~= harvester or clearing) and self:getHarvesterStrategy(other)
-        if otherStrategy and not otherStrategy:alwaysNeedsUnloader() and
-                unloader.getFreeCapacityForHarvester and otherStrategy.combineController then
+        if otherStrategy and not otherStrategy:alwaysNeedsUnloader() then
             local x, _, z = getWorldTranslation(other.rootNode)
             local width = math.max(strategy:getWorkWidth(), otherStrategy:getWorkWidth())
             local distance = MathUtil.vector2Length(x - hx, z - hz)
-            local free = unloader:getFreeCapacityForHarvester(harvester)
-            local tank = clearing and 0 or otherStrategy.combineController:getFillLevel()
-            local harvestAllowance = math.max(0, otherStrategy.litersPerSecond or 0) * self.combineSafetyMarginSeconds
-            local departing = unloader.getAllTrailersFull and unloader.settings and
-                    unloader:getAllTrailersFull(unloader.settings.fullThreshold:getValue())
-            if distance <= math.max(self.minimumPoolDistance, width * 4) and
-                    not departing and free > tank + harvestAllowance and
-                    (not unloader.isInDeadlock or not unloader:isInDeadlock()) and
-                    (not unloader.canRetryCombineApproach or unloader:canRetryCombineApproach(harvester)) then
+            local proximity = strategy.fieldWorkerProximityController
+            local otherProximity = otherStrategy.fieldWorkerProximityController
+            local sameCourse = proximity and proximity.hasSameCourse and proximity:hasSameCourse(other) or
+                    otherProximity and otherProximity.hasSameCourse and otherProximity:hasSameCourse(harvester)
+            -- The machines may be separated along a headland yet still converge in the same turn and pipe corridor.
+            local sharingDistance = sameCourse and math.max(250, width * 4) or
+                    math.max(self.minimumPoolDistance, width * 4)
+            local transferring = unloader.states and (unloader.state == unloader.states.UNLOADING_STOPPED_COMBINE or
+                    unloader.state == unloader.states.UNLOADING_MOVING_COMBINE)
+            if distance <= sharingDistance and
+                    (transferring or not unloader.isInDeadlock or not unloader:isInDeadlock()) then
                 return unloader
             end
         end

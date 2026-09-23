@@ -2324,6 +2324,12 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
         end
     end
     self.standbyYieldingToHarvester = nil
+    if assignment.role == 'POOL' then
+        -- Extra trailers remain parked until the coordinator promotes one to the lead. Repositioning every
+        -- pooled rig on startup sends several tractors into the same harvested strip for no current call.
+        self:holdAtStandbyPosition()
+        return
+    end
     if self.failedApproachStagingUntil and (g_time or 0) < self.failedApproachStagingUntil then
         self:holdAtStandbyPosition()
         return
