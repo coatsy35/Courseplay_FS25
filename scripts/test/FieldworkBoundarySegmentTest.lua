@@ -61,10 +61,15 @@ dofile('scripts/ai/turns/AITurn.lua')
 local turnVehicle = {size = {width = 4}, cpGetFieldPolygon = function() return boundary.polygon end,
     cpGetIslandPolygons = function() return boundary.islands end}
 local turn = setmetatable({vehicle = turnVehicle, workWidth = 16,
+    driveStrategy = {callUnloader = function() end},
     turnContext = {isHeadlandCorner = function() return false end}, debug = function() end,
     turnCourse = course({{x = 4, z = 20}, {x = 20, z = 20}})}, {__index = CourseTurn})
 assert(turn:turnCourseFitsField(FieldworkBoundary.forVehicle(turnVehicle, 16)),
         'A raised-header centre turn may enter the field within the vehicle envelope')
+turn.driveStrategy = {}
+assert(not turn:turnCourseFitsField(FieldworkBoundary.forVehicle(turnVehicle, 16)),
+        'A towed implement must retain the full working-width corridor')
+turn.driveStrategy = {callUnloader = function() end}
 turn.turnContext.isHeadlandCorner = function() return true end
 assert(not turn:turnCourseFitsField(FieldworkBoundary.forVehicle(turnVehicle, 16)),
         'A headland corner must retain the full working-width corridor')

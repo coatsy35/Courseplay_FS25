@@ -2390,6 +2390,14 @@ function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypo
     self:cancelStandbyPathfinding()
     self.standbyTargetStartedAt = g_currentMission and g_currentMission.time or g_time or 0
     self.standbyTargetX, self.standbyTargetZ = waypoint.x, waypoint.z
+    if not emergencyClearance and not avoidHarvester and
+            self:isStandbyTargetOnAnotherHarvesterRoute(harvester, waypoint) then
+        self:debug('Standby target for %s is on another harvester route; retaining current position',
+                CpUtil.getName(harvester))
+        self.standbyRetryAt = (g_time or 0) + 10000
+        self:holdAtStandbyPosition()
+        return
+    end
     self.standbyBoundary = self:getFieldworkBoundaryForRig()
     if not self.standbyBoundary or not FieldworkBoundary.contains(self.standbyBoundary, waypoint.x, waypoint.z) then
         self:debug('Standby target for %s is outside the field polygon; retaining current position',
@@ -2412,6 +2420,43 @@ function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypo
     self.standbyPathfindingStartedAt = g_currentMission and g_currentMission.time or g_time or 0
     self:debug('Pathfinding to standby position for %s', CpUtil.getName(harvester))
     self.pathfinderController:findPathToGoal(context, PathfinderUtil.getWaypointAsState3D(waypoint, 0, 0))
+end
+
+--- Check the remaining route of other harvesters before parking a spare trailer. The route may be a
+--- temporary alignment course rather than the fieldwork course, as it was in the reported blockage.
+function AIDriveStrategyUnloadCombine:isStandbyTargetOnAnotherHarvesterRoute(harvester, waypoint)
+    local rigWidth = AIUtil.getWidth(self.vehicle)
+    for _, child in ipairs(self.vehicle:getChildVehicles()) do
+        rigWidth = math.max(rigWidth, AIUtil.getWidth(child))
+    end
+    local trainMargin = self.getTrainLength(self.vehicle) / 2
+    for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if other ~= harvester and AIDriveStrategyCombineCourse.isActiveCpCombine(other) then
+            local driver = other:getCpDriveStrategy()
+            local ppc = driver and driver.ppc
+            local course = ppc and ppc:getCourse()
+            if course and course:getNumberOfWaypoints() > 1 then
+                local ix = math.max(1, ppc:getCurrentWaypointIx() or 1)
+                local px, _, pz = course:getWaypointPosition(ix)
+                local clearance = (driver:getWorkWidth() or AIUtil.getWidth(other)) / 2 +
+                        rigWidth / 2 + trainMargin + 2
+                for nextIx = ix + 1, course:getNumberOfWaypoints() do
+                    local x, _, z = course:getWaypointPosition(nextIx)
+                    local dx, dz = x - px, z - pz
+                    local lengthSquared = dx * dx + dz * dz
+                    if lengthSquared > 0.01 then
+                        local fraction = math.max(0, math.min(1,
+                                ((waypoint.x - px) * dx + (waypoint.z - pz) * dz) / lengthSquared))
+                        local distance = MathUtil.vector2Length(waypoint.x - px - fraction * dx,
+                                waypoint.z - pz - fraction * dz)
+                        if distance < clearance then return true end
+                    end
+                    px, pz = x, z
+                end
+            end
+        end
+    end
+    return false
 end
 
 function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, success, course, goalNodeInvalid)
@@ -3015,6 +3060,24 @@ function AIDriveStrategyUnloadCombine:onBlockingVehicle(blockingVehicle, isBack)
         self:debug('%s has been blocking us for a while, ignoring as either not active or in the back', CpUtil.getName(blockingVehicle))
         return
     end
+    if self.standbyAssignment and self:isInStandbyState() then
+        if AIDriveStrategyCombineCourse.isActiveCpCombine(blockingVehicle) then
+            self:requestToMoveOutOfWay(blockingVehicle)
+            return
+        end
+        local otherStrategy = blockingVehicle.getCpDriveStrategy and blockingVehicle:getCpDriveStrategy()
+        if otherStrategy and otherStrategy.isInStandbyState and otherStrategy:isInStandbyState() then
+            -- A parked standby rig must not reverse into the next parked rig to yield to another
+            -- standby arrival. The moving rig can retry its collision-aware route after the hold.
+            if self.state == self.states.DRIVING_TO_STANDBY then
+                self.standbyRetryAt = (g_time or 0) + 10000
+                self:holdAtStandbyPosition()
+            end
+            self:debugSparse('Holding standby position while %s occupies the approach',
+                    CpUtil.getName(blockingVehicle))
+            return
+        end
+    end
     if self.state ~= self.states.MOVING_AWAY_FROM_OTHER_VEHICLE and
             self.state ~= self.states.BACKING_UP_FOR_REVERSING_COMBINE and
             self.state ~= self.states.FOLLOW_CHOPPER_THROUGH_TURN and
@@ -3181,7 +3244,8 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
     local boundary = self:getFieldworkBoundaryForRig()
     local trainLength = self.getTrainLength(self.vehicle)
     local offset = clearance + trainLength / 2 + 5
-    for pass = 1, 2 do
+    local allowFruit = self.settings and self.settings.avoidFruit and not self.settings.avoidFruit:getValue()
+    for pass = 1, allowFruit and 2 or 1 do
         for step = 0, 7 do
             local distance = offset + ((step + math.floor(attempt / 2)) % 8) * 12
             for sideIx = 1, 2 do
@@ -3208,6 +3272,12 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
 end
 
 function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle, _, connectingCourse)
+    local standbyBlockedByCombine = self.standbyAssignment and self:isInStandbyState() and
+            AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle)
+    if not connectingCourse and standbyBlockedByCombine then
+        local driver = vehicle:getCpDriveStrategy()
+        connectingCourse = driver and driver.ppc and driver.ppc:getCourse()
+    end
     if connectingCourse and self:isAvailableForStaging() and self.standbyAssignment then
         if self.connectorClearance and self.connectorClearance.harvester == vehicle and
                 self.standbyRetryAt and (g_time or 0) < self.standbyRetryAt then
@@ -3220,6 +3290,12 @@ function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle, _, connecti
             end
         end
         self:startConnectorClearance(vehicle, connectingCourse)
+        return
+    end
+    if standbyBlockedByCombine then
+        -- A standby rig has no safe straight-line escape when its harvester's course is unavailable.
+        self:debugSparse('Waiting for a route to clear %s rather than reversing without pathfinding',
+                CpUtil.getName(vehicle))
         return
     end
     if AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then

@@ -20,9 +20,10 @@ local parkedTractor = {width = 4, rootNode = {x = 20, z = 28},
 g_currentMission = {vehicleSystem = {vehicles = {tractor, parkedTractor}}}
 local driver = {getWorkWidth = function() return 15 end}
 local combine = {getCpDriveStrategy = function() return driver end}
+AIDriveStrategyCombineCourse = {isActiveCpCombine = function(vehicle) return vehicle == combine end}
 local strategy = setmetatable({vehicle = tractor, standbyAssignment = {},
     states = {WAITING_IN_STANDBY = {}, WAITING_FOR_STANDBY_PATHFINDER = {}, DRIVING_TO_STANDBY = {}},
-    state = {}, debug = function() end}, {__index = AIDriveStrategyUnloadCombine})
+    state = {}, debug = function() end, setMaxSpeed = function() end}, {__index = AIDriveStrategyUnloadCombine})
 strategy.getFieldworkBoundaryForRig = function() return {} end
 strategy.isAvailableForStaging = function() return true end
 local target
@@ -48,4 +49,61 @@ assert(strategy:isRigClearOfCourse(course, strategy.connectorClearance.distance)
 trailer.rootNode.z = 0
 assert(not strategy:isRigClearOfCourse(course, strategy.connectorClearance.distance),
     'Tractor clearance alone must not hide a trailer still occupying the route')
+
+-- A combine approaching a parked standby rig must use its actual route and the obstacle-aware
+-- clearance pathfinder, rather than commanding a blind 25 m reverse into the next trailer.
+strategy.state = strategy.states.WAITING_IN_STANDBY
+driver.ppc = {getCourse = function() return course end}
+tractor.rootNode.z, trailer.rootNode.z = 0, 0
+strategy.connectorClearance = nil
+target = nil
+strategy:requestToMoveOutOfWay(combine)
+assert(target and strategy.connectorClearance.course == course,
+    'A blocked standby rig must pathfind clear of the combine course')
+
+-- Another standby arrival should stop and replan; the parked rig must stay where it is.
+tractor.getIsCpActive = function() return true end
+parkedTractor.getCpDriveStrategy = function()
+    return {isInStandbyState = function() return true end}
+end
+strategy.debugSparse = function() end
+strategy.state = strategy.states.WAITING_IN_STANDBY
+target = nil
+strategy:onBlockingVehicle(parkedTractor, false)
+assert(strategy.state == strategy.states.WAITING_IN_STANDBY and not target,
+    'A parked standby rig must not back away from another standby rig')
+
+local held = false
+strategy.state = strategy.states.DRIVING_TO_STANDBY
+strategy.holdAtStandbyPosition = function(self)
+    held = true
+    self.state = self.states.WAITING_IN_STANDBY
+end
+strategy:onBlockingVehicle(parkedTractor, false)
+assert(held and strategy.standbyRetryAt > 0,
+    'The approaching standby rig must stop and retry its route')
+
+local otherCourse = {getNumberOfWaypoints = function() return 3 end,
+    getWaypointPosition = function(_, ix) return (ix - 1) * 400, 0, 0 end}
+local otherDriver = {getWorkWidth = function() return 15 end,
+    ppc = {getCourse = function() return otherCourse end,
+        getCurrentWaypointIx = function() return 1 end}}
+local otherCombine = {getCpDriveStrategy = function() return otherDriver end}
+g_currentMission.vehicleSystem.vehicles = {tractor, parkedTractor, otherCombine}
+AIDriveStrategyCombineCourse.isActiveCpCombine = function(vehicle)
+    return vehicle == combine or vehicle == otherCombine
+end
+assert(strategy:isStandbyTargetOnAnotherHarvesterRoute(combine, {x = 800, z = 0}),
+    'A spare must not park on another combine\'s upcoming alignment route')
+assert(not strategy:isStandbyTargetOnAnotherHarvesterRoute(combine, {x = 800, z = 60}),
+    'A separate parking area must remain available')
+held = false
+AIDriveStrategyUnloadCombine.startPathfindingToStandby(strategy, combine, {x = 800, z = 0})
+assert(held, 'An occupied standby target must be rejected before pathfinding')
+
+PathfinderUtil.hasFruit = function() return true end
+strategy.settings = {avoidFruit = {getValue = function() return true end}}
+target = nil
+strategy:startConnectorClearance(combine, course)
+assert(not target, 'Avoid fruit must forbid an emergency clearance target in standing crop')
 print('UnloaderConnectorClearanceTest: OK')

@@ -819,7 +819,11 @@ end
 -- field corridor, while still refusing a course that leaves it again or crosses an island.
 function CourseTurn:turnCourseFitsField(boundary)
     if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then return true end
-    if self.turnContext:isHeadlandCorner() then return false end
+    -- Only harvesters can raise the header clear of the boundary. A tractor
+    -- and its towed implement must still fit the full working-width corridor.
+    if self.turnContext:isHeadlandCorner() or not (self.driveStrategy and self.driveStrategy.callUnloader) then
+        return false
+    end
     local vehicleBoundary = FieldworkBoundary.forVehicle(self.vehicle, 0)
     if FieldworkBoundary.containsCourse(vehicleBoundary, self.turnCourse, nil, nil, true) then
         self:debug('Raised-header centre turn fits the vehicle corridor')
