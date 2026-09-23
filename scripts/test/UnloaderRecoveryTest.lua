@@ -82,6 +82,14 @@ strategy.inDeadlock = nil
 assert(not strategy:isInDeadlock(),
         'A stationary tractor calculating a route must not be treated as blocked and repeatedly reassigned')
 
+strategy.state = strategy.states.UNLOADING_STOPPED_COMBINE
+combineStrategy.isDischarging = function() return true end
+assert(not strategy:isInDeadlock(),
+        'A stopped trailer receiving grain must remain available to a nearby combine')
+combineStrategy.isDischarging = function() return false end
+assert(strategy:isInDeadlock(),
+        'A stopped trailer without grain flow must still be eligible for deadlock recovery')
+
 -- A called trailer must not copy the temporary reverse course while the combine is creating its pocket.
 local startedPocketUnload = false
 local heldBehindPocket = false

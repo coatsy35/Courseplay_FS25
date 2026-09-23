@@ -784,8 +784,13 @@ function AIDriveStrategyUnloadCombine:isInDeadlock()
             local standbyDistance = UnloaderCoordinator:getStandbyDistance(self.combineToUnload)
             isDeliberatelyFollowingBehind = distance <= standbyDistance + 5 or combineStrategy:isManeuvering()
         end
+        -- A stopped tractor under the pipe is doing useful work while grain is flowing.
+        -- Flagging it as deadlocked makes nearby combines call a second trailer unnecessarily.
+        local isUnloadingStoppedCombine = self.state == self.states.UNLOADING_STOPPED_COMBINE and
+                combineStrategy.isDischarging and combineStrategy:isDischarging()
         return self.inDeadlock:get(urgentlyNeeded and not isCalculatingRoute and
-                not isDeliberatelyFollowingBehind and AIUtil.isStopped(self.vehicle), 10000)
+                not isDeliberatelyFollowingBehind and not isUnloadingStoppedCombine and
+                AIUtil.isStopped(self.vehicle), 10000)
     else
         return false
     end
