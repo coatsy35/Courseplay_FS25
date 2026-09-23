@@ -157,6 +157,7 @@ assert(AIDriveStrategyUnloadCombine.getTrainLength(train) == 16,
 local full = unloader(100)
 full.combineToUnload = a
 full.unloadTargetType = AIDriveStrategyUnloadCombine.UNLOAD_TYPES.COMBINE
+full.settings = {reverseSpeed = setting(5)}
 full.getHarvesterTurnClearanceDistance = function() return 50 end
 full.createClearanceReverseCourse = function() return {}, 30 end
 full.isDriveUnloadNowRequested = function() return false end

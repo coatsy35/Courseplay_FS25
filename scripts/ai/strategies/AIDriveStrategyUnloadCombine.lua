@@ -371,11 +371,6 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
     if not moveForwards then
         local maxSpeed
         gx, gz, maxSpeed = self:getReverseDriveData()
-        if self.state == self.states.MOVING_BACK or self.state == self.states.MOVING_BACK_WITH_TRAILER_FULL then
-            -- The reverse driver supplies the configured speed. Give the straight, measured post-unload
-            -- clearance manoeuvre a modest boost while retaining that setting as the driver's reference.
-            maxSpeed = maxSpeed * 1.5
-        end
         self:setMaxSpeed(maxSpeed)
     else
         gx, _, gz = self.ppc:getGoalPointPosition()
@@ -525,7 +520,7 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         self:makeRoomForCombineTurningOnHeadland()
 
     elseif self.state == self.states.MOVING_BACK_WITH_TRAILER_FULL then
-        self:setMaxSpeed(self.settings.reverseSpeed:getValue() * 1.5)
+        self:setMaxSpeed(self.settings.reverseSpeed:getValue())
         -- drive back to have some room for the pathfinder
         local d, _, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
         if dz > 0 and d >= (self.state.properties.clearanceDistance or 0) and
@@ -537,7 +532,7 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         self:setMaxSpeed(self.settings.reverseSpeed:getValue())
     elseif self.state == self.states.MOVING_BACK then
 
-        self:setMaxSpeed(self.settings.reverseSpeed:getValue() * 1.5)
+        self:setMaxSpeed(self.settings.reverseSpeed:getValue())
         if self.state.properties.holdCombine then
             self:debugSparse('Holding combine while backing up')
             self.combineToUnload:getCpDriveStrategy():hold(1000)
@@ -2849,7 +2844,8 @@ function AIDriveStrategyUnloadCombine:startMovingBackFromCombine(newState, combi
     self.state.properties.holdCombine = holdCombineWhileMovingBack
     self.state.properties.clearanceDistance = requestedDistance
     if reverseCourse then
-        self:debug('Backing %.1f m away from %s for turn clearance', reverseDistance, CpUtil.getName(combine))
+        self:debug('Backing %.1f m away from %s for turn clearance at configured reverse limit %.1f km/h',
+                reverseDistance, CpUtil.getName(combine), self.settings.reverseSpeed:getValue())
         self:startCourse(reverseCourse, 1)
     else
         self:debug('Could not create a reverse-clearance course; retaining current position')
