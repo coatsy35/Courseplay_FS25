@@ -544,7 +544,11 @@ end
 ---@return Waypoint|nil, number|nil, boolean
 function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAssignment)
     local poolDistance = self:getPoolDistance(demand, poolNumber)
-    local distance = unloader:getDistanceAndEteToVehicle(demand.harvester)
+    -- Parking is a physical clearance decision. A Dubins route can be much longer after reversing because the
+    -- tractor faces away from the combine, even though it is already safely parked beside the worked strip.
+    local ux, _, uz = getWorldTranslation(unloader.vehicle.rootNode)
+    local hx, _, hz = getWorldTranslation(demand.harvester.rootNode)
+    local distance = MathUtil.vector2Length(ux - hx, uz - hz)
     local waitUntilHarvesterPasses = unloader.shouldWaitAtPoolForHarvester and
             unloader:shouldWaitAtPoolForHarvester(demand.harvester) or false
 
@@ -580,7 +584,7 @@ function UnloaderCoordinator:getPoolWaypoint(unloader, demand, poolNumber, oldAs
             end
         end
     end
-    if clearOfHarvesters and distance <= poolDistance and
+    if clearOfHarvesters and (distance <= poolDistance or unloader.postUnloadClearanceHarvester) and
             unloader.vehicle.cpGetFieldPolygon and FieldworkBoundary then
         local x, _, z = getWorldTranslation(unloader.vehicle.rootNode)
         local boundary = FieldworkBoundary.forVehicle(unloader.vehicle, AIUtil.getWidth(unloader.vehicle) + 2)

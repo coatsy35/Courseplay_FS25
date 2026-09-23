@@ -162,11 +162,11 @@ full.createClearanceReverseCourse = function() return {}, 30 end
 full.isDriveUnloadNowRequested = function() return false end
 full.getAllTrailersFull = function() return true end
 assert(full:changeToUnloadWhenTrailerFull())
-assert(full.combineToUnload == a and full.state.properties.clearanceDistance == 50,
-    'A short reverse route must not reduce the required physical clearance')
+assert(full.combineToUnload == a and full.state.properties.clearanceDistance == 45,
+    'A short reverse route must not reduce the new 90%-of-envelope physical clearance')
 full:releaseCombine()
 assert(UnloaderCoordinator:isStillClearingHarvester(nil, a), 'Deregistration must not authorise a premature pocket return')
-full.vehicle.rootNode.x = 151
+full.vehicle.rootNode.x = 146
 assert(not UnloaderCoordinator:isStillClearingHarvester(nil, a))
 
 -- Firm relief cannot be stolen by an earlier demand in the next rebalance.

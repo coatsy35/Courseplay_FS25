@@ -642,32 +642,63 @@ end
 function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
     -- A long generated connector can double back along a headland occupied by a following worker. Its field
     -- polygon is valid, but driving it directly bypasses collision-aware routing and can hit that worker.
-    if not self.fieldWorkerProximityController or not course.getNumberOfWaypoints or
-            not course.getWaypointPosition then return false end
+    if not course.getNumberOfWaypoints or not course.getWaypointPosition then return false end
     local ownWidth = math.max(AIUtil.getWidth(self.vehicle), self:getWorkWidth())
+    local parkedUnloader
     for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
-        if other ~= self.vehicle and other.getIsCpFieldWorkActive and other:getIsCpFieldWorkActive() and
-                self.fieldWorkerProximityController:hasSameCourse(other) then
-            local ox, _, oz = getWorldTranslation(other.rootNode)
+        if other ~= self.vehicle then
             local otherStrategy = other.getCpDriveStrategy and other:getCpDriveStrategy()
-            local otherWidth = math.max(AIUtil.getWidth(other),
-                    otherStrategy and otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or 0)
-            local clearance = (ownWidth + otherWidth) / 2 + 5
-            local previousX, _, previousZ = course:getWaypointPosition(1)
-            for ix = 2, course:getNumberOfWaypoints() do
-                local x, _, z = course:getWaypointPosition(ix)
-                local dx, dz = x - previousX, z - previousZ
-                local lengthSquared = dx * dx + dz * dz
-                local fraction = lengthSquared > 0 and
-                        math.max(0, math.min(1, ((ox - previousX) * dx + (oz - previousZ) * dz) / lengthSquared)) or 0
-                local nearestX, nearestZ = previousX + fraction * dx, previousZ + fraction * dz
-                if MathUtil.vector2Length(ox - nearestX, oz - nearestZ) < clearance then
-                    self:debug('Connecting path crosses %s; using collision-aware pathfinding', CpUtil.getName(other))
-                    return true
+            local fieldWorker = other.getIsCpFieldWorkActive and other:getIsCpFieldWorkActive() and
+                    self.fieldWorkerProximityController and self.fieldWorkerProximityController:hasSameCourse(other)
+            local unloader = otherStrategy and otherStrategy.requestToMoveOutOfWay and
+                    otherStrategy.getCombineToUnload and not otherStrategy:getCombineToUnload() and
+                    (otherStrategy.isAvailableForStaging and otherStrategy:isAvailableForStaging() or
+                            otherStrategy.states and
+                            otherStrategy.state == otherStrategy.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
+            if fieldWorker or unloader then
+                local nodes = {other.rootNode}
+                if unloader and other.getChildVehicles then
+                    for _, child in ipairs(other:getChildVehicles()) do
+                        table.insert(nodes, child.rootNode)
+                    end
                 end
-                previousX, previousZ = x, z
+                local otherWidth = math.max(AIUtil.getWidth(other),
+                        otherStrategy and otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or 0)
+                local clearance = (ownWidth + otherWidth) / 2 + 5
+                for _, node in ipairs(nodes) do
+                    local ox, _, oz = getWorldTranslation(node)
+                    local previousX, _, previousZ = course:getWaypointPosition(1)
+                    for ix = 2, course:getNumberOfWaypoints() do
+                        local x, _, z = course:getWaypointPosition(ix)
+                        local dx, dz = x - previousX, z - previousZ
+                        local lengthSquared = dx * dx + dz * dz
+                        local fraction = lengthSquared > 0 and
+                                math.max(0, math.min(1, ((ox - previousX) * dx + (oz - previousZ) * dz) / lengthSquared)) or 0
+                        local nearestX, nearestZ = previousX + fraction * dx, previousZ + fraction * dz
+                        if MathUtil.vector2Length(ox - nearestX, oz - nearestZ) < clearance then
+                            if fieldWorker then
+                                self:debug('Connecting path crosses %s; using collision-aware pathfinding', CpUtil.getName(other))
+                                return true
+                            end
+                            parkedUnloader = otherStrategy
+                            break
+                        end
+                        previousX, previousZ = x, z
+                    end
+                    if parkedUnloader then break end
+                end
+                if parkedUnloader then break end
             end
         end
+    end
+    if parkedUnloader then
+        -- Ask one parked rig at a time to clear the corridor. Its local escape course must not conflict with
+        -- another trailer's escape course, and the combine keeps collision checks enabled while it waits.
+        if parkedUnloader.isAvailableForStaging and parkedUnloader:isAvailableForStaging() then
+            parkedUnloader:requestToMoveOutOfWay(self.vehicle)
+        end
+        self:debug('Connecting path occupied by a staging trailer; waiting for clearance')
+        return true
     end
     return false
 end
@@ -747,10 +778,21 @@ end
 
 function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToConnectingPathEnd(controller, success, course, goalNodeInvalid)
     if success then
+        if self:isConnectingPathBlockedByWorker(course) then
+            self:debug('Pathfound connecting route remains occupied; waiting before retrying')
+            self.connectingPathRetryAt = g_currentMission.time + 5000
+            self.state = self.states.WAITING_FOR_PATHFINDER
+            return
+        end
         self.connectingPathRetryAt = nil
         self:debug('Pathfinding to end of connecting path finished')
         self:startCourseToWorkStart(course)
     else
+        if self:isConnectingPathBlockedByWorker(self.workStarterCourse) then
+            self.connectingPathRetryAt = g_currentMission.time + 5000
+            self.state = self.states.WAITING_FOR_PATHFINDER
+            return
+        end
         self:debug('Pathfinding to end of connecting path failed, use the connecting path/alignment course instead')
         self:startCourseToWorkStart(self.workStarterCourse)
     end

@@ -371,6 +371,11 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
     if not moveForwards then
         local maxSpeed
         gx, gz, maxSpeed = self:getReverseDriveData()
+        if self.state == self.states.MOVING_BACK or self.state == self.states.MOVING_BACK_WITH_TRAILER_FULL then
+            -- The reverse driver supplies the configured speed. Give the straight, measured post-unload
+            -- clearance manoeuvre a modest boost while retaining that setting as the driver's reference.
+            maxSpeed = maxSpeed * 1.5
+        end
         self:setMaxSpeed(maxSpeed)
     else
         gx, _, gz = self.ppc:getGoalPointPosition()
@@ -520,7 +525,7 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         self:makeRoomForCombineTurningOnHeadland()
 
     elseif self.state == self.states.MOVING_BACK_WITH_TRAILER_FULL then
-        self:setMaxSpeed(self.settings.reverseSpeed:getValue())
+        self:setMaxSpeed(self.settings.reverseSpeed:getValue() * 1.5)
         -- drive back to have some room for the pathfinder
         local d, _, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
         if dz > 0 and d >= (self.state.properties.clearanceDistance or 0) and
@@ -532,7 +537,7 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         self:setMaxSpeed(self.settings.reverseSpeed:getValue())
     elseif self.state == self.states.MOVING_BACK then
 
-        self:setMaxSpeed(self.settings.reverseSpeed:getValue())
+        self:setMaxSpeed(self.settings.reverseSpeed:getValue() * 1.5)
         if self.state.properties.holdCombine then
             self:debugSparse('Holding combine while backing up')
             self.combineToUnload:getCpDriveStrategy():hold(1000)
@@ -2282,6 +2287,17 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
 
     local oldAssignment = self.standbyAssignment
     self.standbyAssignment = assignment
+    local yieldingTo = self.standbyYieldingToHarvester
+    if yieldingTo and yieldingTo.getIsCpActive and yieldingTo:getIsCpActive() then
+        local driver = yieldingTo:getCpDriveStrategy()
+        if driver and driver.states and (driver.state == driver.states.WAITING_FOR_PATHFINDER or
+                driver.state == driver.states.DRIVING_TO_WORK_START_WAYPOINT) then
+            -- Do not re-enter the connecting corridor just after yielding to the combine driving through it.
+            self:holdAtStandbyPosition()
+            return
+        end
+    end
+    self.standbyYieldingToHarvester = nil
     if self.failedApproachStagingUntil and (g_time or 0) < self.failedApproachStagingUntil then
         self:holdAtStandbyPosition()
         return
@@ -2822,7 +2838,9 @@ function AIDriveStrategyUnloadCombine:startMovingBackFromCombine(newState, combi
         return
     end
 
-    local requestedDistance = self:getHarvesterTurnClearanceDistance(combine)
+    -- This is the post-unload departure, not the larger clearance used while a combine is turning. Trial a
+    -- ten per cent shorter release distance; both the trailer and combine use this same measured threshold.
+    local requestedDistance = self:getHarvesterTurnClearanceDistance(combine) * 0.9
     self.clearanceReverseExtensions = 0
     UnloaderCoordinator:registerClearingUnloader(self, combine, requestedDistance)
     local reverseCourse, reverseDistance = self:createClearanceReverseCourse(requestedDistance)
@@ -2869,7 +2887,9 @@ function AIDriveStrategyUnloadCombine:extendReverseForClearance()
         self:setMaxSpeed(0)
         return true
     end
-    local extra = remaining + self:getHarvesterTurnClearanceDistance(combine) / 2
+    -- A short extension is enough to cross the measured threshold; a second half-clearance creates a long
+    -- unnecessary reverse course and holds the combine while the trailer keeps travelling.
+    local extra = remaining + math.min(5, (self.state.properties.clearanceDistance or remaining) * 0.15)
     local course = self:createClearanceReverseCourse(extra)
     if not course then
         self:debug('Could not extend reverse course; holding for clearance')
@@ -3005,8 +3025,11 @@ function AIDriveStrategyUnloadCombine:onBlockingVehicle(blockingVehicle, isBack)
             end
         elseif (AIDriveStrategyUnloadCombine.isActiveCpCombineUnloader(blockingVehicle) or
                 AIDriveStrategyUnloadCombine.isActiveCpSiloLoader(blockingVehicle)) and
-                blockingVehicle:getCpDriveStrategy():isIdle() then
-            self:debug('%s is an idle CP combine unloader, request it to move.', CpUtil.getName(blockingVehicle))
+                (blockingVehicle:getCpDriveStrategy():isIdle() or
+                        blockingVehicle:getCpDriveStrategy():isAvailableForStaging()) then
+            -- A pooled/standby trailer has no active call and must yield just as an idle trailer does.
+            -- Otherwise the unloading rig backs away, releases its combine and starts a replacement call.
+            self:debug('%s is an idle or staging CP unloader, request it to move.', CpUtil.getName(blockingVehicle))
             blockingVehicle:getCpDriveStrategy():requestToMoveForward(self.vehicle)
             -- no state change, wait for the other unloader to move
             return
@@ -3027,6 +3050,9 @@ function AIDriveStrategyUnloadCombine:onBlockingVehicle(blockingVehicle, isBack)
 end
 
 function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle)
+    if AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+        self.standbyYieldingToHarvester = vehicle
+    end
     if self.standbyAssignment then
         UnloaderCoordinator:release(self)
     end

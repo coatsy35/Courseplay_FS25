@@ -60,6 +60,36 @@ follower.rootNode.z = 30
 assert(strategy:canDriveConnectingPathDirectly(longConnector),
         'A worker clear of the connector must not force a global search')
 
+local requestedMoves = 0
+local parkedStrategy = {
+    states = {MOVING_AWAY_FROM_OTHER_VEHICLE = {}},
+    state = {},
+    getCombineToUnload = function() return nil end,
+    isAvailableForStaging = function(self) return self.state ~= self.states.MOVING_AWAY_FROM_OTHER_VEHICLE end,
+    requestToMoveOutOfWay = function(self)
+        requestedMoves = requestedMoves + 1
+        self.state = self.states.MOVING_AWAY_FROM_OTHER_VEHICLE
+    end,
+}
+local trailer = {
+    rootNode = {x = 60, z = 0},
+    getCpDriveStrategy = function() return parkedStrategy end,
+    getChildVehicles = function() return {{rootNode = {x = 48, z = 0}}} end,
+}
+g_currentMission.vehicleSystem.vehicles = {follower, trailer}
+assert(not strategy:canDriveConnectingPathDirectly(longConnector),
+        'A parked trailer across the centre-work connector must stop direct driving')
+assert(requestedMoves == 1, 'The parked trailer must be asked to clear the combine route')
+strategy:onPathfindingFailedToConnectingPathEnd(nil, {collisionMask = function()
+    error('A trailer-obstructed connector must retain collision checks')
+end}, false, 1)
+assert(requestedMoves == 1 and strategy.connectingPathRetryAt == 6000,
+        'A moving-away trailer must not receive repeated escape courses while the combine waits')
+trailer.rootNode.z = 40
+trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 40}}} end
+assert(strategy:canDriveConnectingPathDirectly(longConnector),
+        'The combine may proceed when the full tractor and trailer have cleared its route')
+
 longConnector.contained = false
 assert(not strategy:canDriveConnectingPathDirectly(longConnector),
         'A connector that leaves the field must not bypass pathfinding')

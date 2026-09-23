@@ -477,12 +477,13 @@ assert(waypoint.x == parked.vehicle.rootNode.x, 'An unneeded spare already clear
 local justCleared = makeUnloader('Just cleared', 250, true, nil, 60)
 justCleared.vehicle.cpGetFieldPolygon = function() return {} end
 justCleared.postUnloadClearanceHarvester = poolHarvester
+justCleared.getDistanceAndEteToVehicle = function() return 500, 100 end
 PathfinderUtil.hasFruit = function() return true end
 local clearedWaypoint = UnloaderCoordinator:getPoolWaypoint(justCleared, {
     harvester = poolHarvester, harvesterStrategy = poolHarvester:getCpDriveStrategy(), secondsUntilNeeded = 500,
 }, 2)
 assert(clearedWaypoint.x == justCleared.vehicle.rootNode.x,
-        'A trailer that reversed to measured turn clearance must stay parked, even at a crop edge')
+        'A cleared trailer must stay parked despite a long turning route estimate and nearby crop')
 PathfinderUtil.hasFruit = function() return false end
 print('Parked spare does not backtrack: OK')
 
