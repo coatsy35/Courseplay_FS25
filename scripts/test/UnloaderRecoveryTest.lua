@@ -61,6 +61,22 @@ assert(strategy:yieldCallToCloserUnloader(combine, true),
 assert(releasedBlockedCall and backedOut,
         'A blocked unloader must release the combine and reverse on a boundary-contained recovery course')
 
+local clearanceSpeed
+local reversing = false
+local clearance = setmetatable({
+    settings = {fieldSpeed = {getValue = function() return 20 end},
+        reverseSpeed = {getValue = function() return 8 end}},
+    ppc = {isReversing = function() return reversing end},
+    state = {properties = {vehicle = {getCpDriveStrategy = function() return nil end}}},
+    movingAwayDelay = {get = function() return true end},
+    setMaxSpeed = function(_, speed) clearanceSpeed = speed end,
+}, {__index = AIDriveStrategyUnloadCombine})
+clearance:moveAwayFromOtherVehicle()
+assert(clearanceSpeed == 20, 'Forward clearance must use CP field speed')
+reversing = true
+clearance:moveAwayFromOtherVehicle()
+assert(clearanceSpeed == 8, 'Reverse clearance must use CP reverse speed')
+
 CpDelayedBoolean = function()
     return { get = function(_, condition) return condition end }
 end

@@ -55,6 +55,27 @@ assert(not FieldworkBoundary.containsCourse(boundary, neverEnteringCourse, 1, 2,
 
 print('FieldworkBoundarySegmentTest: OK')
 
+function CpObject(base) return setmetatable({}, {__index = base}) end
+CpDebug = {DBG_TURN = 1}
+dofile('scripts/ai/turns/AITurn.lua')
+local turnVehicle = {size = {width = 4}, cpGetFieldPolygon = function() return boundary.polygon end,
+    cpGetIslandPolygons = function() return boundary.islands end}
+local turn = setmetatable({vehicle = turnVehicle, workWidth = 16,
+    turnContext = {isHeadlandCorner = function() return false end}, debug = function() end,
+    turnCourse = course({{x = 4, z = 20}, {x = 20, z = 20}})}, {__index = CourseTurn})
+assert(turn:turnCourseFitsField(FieldworkBoundary.forVehicle(turnVehicle, 16)),
+        'A raised-header centre turn may enter the field within the vehicle envelope')
+turn.turnContext.isHeadlandCorner = function() return true end
+assert(not turn:turnCourseFitsField(FieldworkBoundary.forVehicle(turnVehicle, 16)),
+        'A headland corner must retain the full working-width corridor')
+turn.turnContext.isHeadlandCorner = function() return false end
+turn.turnCourse = course({{x = 4, z = 20}, {x = 101, z = 20}})
+assert(not turn:turnCourseFitsField(FieldworkBoundary.forVehicle(turnVehicle, 16)),
+        'A centre turn must not leave the vehicle corridor')
+turn.turnCourse = course({{x = 20, z = 50}, {x = 80, z = 50}})
+assert(not turn:turnCourseFitsField(FieldworkBoundary.forVehicle(turnVehicle, 16)),
+        'A centre turn must not cross a field island')
+
 -- A centreline inside the field does not make a tractor/trailer footprint safe.
 local box = {width = 2, length = 6, xOffset = 0, zOffset = 0}
 assert(FieldworkBoundary.boxOutsideDistance(boundary, 0.2, 20, 0, box) > 0,

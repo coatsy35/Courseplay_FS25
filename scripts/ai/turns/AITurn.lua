@@ -786,7 +786,7 @@ end
 --- same field corridor, including reverse and appended approach sections.
 function CourseTurn:fitCalculatedTurnToBoundary()
     local boundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
-    if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then return true end
+    if self:turnCourseFitsField(boundary) then return true end
     local context = self.turnContext
     local requested = context.straightEntryDistance
     if context:isHeadlandCorner() then
@@ -801,7 +801,7 @@ function CourseTurn:fitCalculatedTurnToBoundary()
     for _, fraction in ipairs({1, 0.75, 0.5, 0.25, 0}) do
         context.straightEntryDistance = requested * fraction
         self:generateCalculatedTurn()
-        if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then
+        if self:turnCourseFitsField(boundary) then
             self:debug('Straight entry: fitted turn with allowance %.1f of %.1f m, no bulb extension',
                     context.straightEntryDistance, requested)
             return true
@@ -810,6 +810,21 @@ function CourseTurn:fitCalculatedTurnToBoundary()
     context.straightEntryDistance = requested
     context.disableBulbExtension = previousBulb
     self.turnCourse = originalCourse
+    return false
+end
+
+-- A centre-row turn begins with the header raised. Its working-width corridor can reject a valid
+-- collision-free turn near the crop edge, leaving a stopped combine in the following worker's path.
+-- Keep the full-width rule for headland corners; elsewhere permit the vehicle envelope to enter the
+-- field corridor, while still refusing a course that leaves it again or crosses an island.
+function CourseTurn:turnCourseFitsField(boundary)
+    if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then return true end
+    if self.turnContext:isHeadlandCorner() then return false end
+    local vehicleBoundary = FieldworkBoundary.forVehicle(self.vehicle, 0)
+    if FieldworkBoundary.containsCourse(vehicleBoundary, self.turnCourse, nil, nil, true) then
+        self:debug('Raised-header centre turn fits the vehicle corridor')
+        return true
+    end
     return false
 end
 

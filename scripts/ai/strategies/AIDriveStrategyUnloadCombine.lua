@@ -3342,7 +3342,9 @@ function AIDriveStrategyUnloadCombine:requestToMoveForward(requestingVehicle)
 end
 
 function AIDriveStrategyUnloadCombine:moveAwayFromOtherVehicle()
-    self:setMaxSpeed(self.settings.reverseSpeed:getValue())
+    -- A clearance course can drive either forward or backwards. Use the matching CP speed setting;
+    -- the proximity controller still slows the rig around nearby vehicles.
+    self:setMaxSpeed(self.ppc:isReversing() and self.settings.reverseSpeed:getValue() or self:getFieldSpeed())
     local driveStrategy = self.state.properties.vehicle.getCpDriveStrategy and self.state.properties.vehicle:getCpDriveStrategy()
     -- Are we still close to the vehicle we are blocking?
     if driveStrategy and driveStrategy:isVehicleInProximity(self.vehicle) then
