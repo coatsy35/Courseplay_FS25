@@ -87,6 +87,13 @@ strategy:onPathfindingFailedToConnectingPathEnd(nil, {collisionMask = function()
 end}, false, 1)
 assert(requestedMoves == 1 and strategy.connectingPathRetryAt == 6000,
         'A moving-away trailer must not receive repeated escape courses while the combine waits')
+local detour = {getNumberOfWaypoints = function() return 2 end,
+    getWaypointPosition = function(_, ix) return ix * 20, 0, 10 end}
+local drivenCourse
+strategy.startCourseToWorkStart = function(_, course) drivenCourse = course end
+strategy:onPathfindingDoneToConnectingPathEnd(nil, true, detour, false)
+assert(drivenCourse == detour and strategy.connectingPathRetryAt == nil,
+        'A collision-free pathfinder detour must proceed when a parked trailer cannot clear the connector')
 trailer.rootNode.z = 40
 trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 40}}} end
 assert(strategy:canDriveConnectingPathDirectly(longConnector),

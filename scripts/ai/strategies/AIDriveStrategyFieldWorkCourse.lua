@@ -778,12 +778,9 @@ end
 
 function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToConnectingPathEnd(controller, success, course, goalNodeInvalid)
     if success then
-        if self:isConnectingPathBlockedByWorker(course) then
-            self:debug('Pathfound connecting route remains occupied; waiting before retrying')
-            self.connectingPathRetryAt = g_currentMission.time + 5000
-            self.state = self.states.WAITING_FOR_PATHFINDER
-            return
-        end
+        -- The occupancy test protects the generated connector, which has no collision checks. A successful
+        -- pathfinder route already avoided the parked rigs; applying the wider staging margin to that detour
+        -- can reject every valid route when a trailer has nowhere else to park.
         self.connectingPathRetryAt = nil
         self:debug('Pathfinding to end of connecting path finished')
         self:startCourseToWorkStart(course)
