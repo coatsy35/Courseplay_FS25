@@ -2206,6 +2206,7 @@ end
 --- timeout. A fruit-protected access-point wait remains stationary until the harvester has passed, as configured.
 ---@return boolean
 function AIDriveStrategyUnloadCombine:moveOutOfApproachingHarvesterPath()
+    if self.connectorClearance then return false end
     if not self.standbyAssignment or self.standbyAssignment.waitUntilHarvesterPasses then
         return false
     end
@@ -2273,6 +2274,7 @@ function AIDriveStrategyUnloadCombine:clearStandbyAssignment(assignment)
     self.standbyAssignment = nil
     self.standbyTargetX, self.standbyTargetZ = nil, nil
     self.standbyRetryAt = nil
+    self.connectorClearance = nil
     if self:isInStandbyState() then
         self:setNewState(self.states.IDLE)
         self:setMaxSpeed(0)
@@ -2287,6 +2289,30 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
 
     local oldAssignment = self.standbyAssignment
     self.standbyAssignment = assignment
+    if self.connectorClearance then
+        local clearance = self.connectorClearance
+        local driver = clearance.harvester.getCpDriveStrategy and clearance.harvester:getCpDriveStrategy()
+        local transitioning = driver and driver.states and
+                (driver.state == driver.states.WAITING_FOR_PATHFINDER or
+                        driver.state == driver.states.DRIVING_TO_WORK_START_WAYPOINT)
+        if transitioning then
+            if self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
+                    self.state == self.states.DRIVING_TO_STANDBY then
+                return
+            end
+            if not self:isRigClearOfCourse(clearance.course, clearance.distance) then
+                if not self.standbyRetryAt or (g_time or 0) >= self.standbyRetryAt then
+                    self:startConnectorClearance(clearance.harvester, clearance.course)
+                    return
+                end
+                self:holdAtStandbyPosition()
+                return
+            end
+            self:holdAtStandbyPosition()
+            return
+        end
+        self.connectorClearance = nil
+    end
     local yieldingTo = self.standbyYieldingToHarvester
     if yieldingTo and yieldingTo.getIsCpActive and yieldingTo:getIsCpActive() then
         local driver = yieldingTo:getCpDriveStrategy()
@@ -2354,7 +2380,7 @@ end
 
 ---@param harvester table
 ---@param waypoint Waypoint
-function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypoint)
+function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypoint, avoidHarvester, emergencyClearance)
     self:cancelStandbyPathfinding()
     self.standbyTargetStartedAt = g_currentMission and g_currentMission.time or g_time or 0
     self.standbyTargetX, self.standbyTargetZ = waypoint.x, waypoint.z
@@ -2367,11 +2393,11 @@ function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypo
     end
     local harvesterStrategy = harvester:getCpDriveStrategy()
     local context = PathfinderContext(self.vehicle)
-    context:maxFruitPercent(self:getMaxFruitPercent())
+    context:maxFruitPercent(emergencyClearance and 100 or self:getMaxFruitPercent())
     context:offFieldPenalty(self:getOffFieldPenalty(harvester))
     context:useFieldNum(CpFieldUtil.getFieldNumUnderVehicle(harvester))
     context:areaToAvoid(harvesterStrategy:getAreaToAvoid())
-    context:vehiclesToIgnore({ harvester })
+    context:vehiclesToIgnore(avoidHarvester and {} or { harvester })
     context:maxIterations(PathfinderUtil.getMaxIterationsForFieldPolygon(self.vehicle:cpGetFieldPolygon()))
     context._fieldworkBoundary = self.standbyBoundary
     context._preferFieldworkBoundary = true
@@ -2392,6 +2418,9 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, suc
         return true
     end
     self:debug('Pathfinding to standby position failed; retaining current position')
+    if self.connectorClearance then
+        self.connectorClearance.attempt = (self.connectorClearance.attempt or 0) + 1
+    end
     self.standbyRetryAt = (g_time or 0) + 5000
     if self.standbyAssignment then
         self:holdAtStandbyPosition()
@@ -3050,7 +3079,104 @@ function AIDriveStrategyUnloadCombine:onBlockingVehicle(blockingVehicle, isBack)
     end
 end
 
-function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle)
+--- Closest distance to any part of a connecting course, rather than to the combine's current position.
+function AIDriveStrategyUnloadCombine.getDistanceFromConnectingCourse(course, px, pz)
+    local previousX, _, previousZ = course:getWaypointPosition(1)
+    local best, nearestDx, nearestDz = math.huge, 0, 1
+    for ix = 2, course:getNumberOfWaypoints() do
+        local x, _, z = course:getWaypointPosition(ix)
+        local dx, dz = x - previousX, z - previousZ
+        local lengthSquared = dx * dx + dz * dz
+        if lengthSquared > 0.01 then
+            local fraction = math.max(0, math.min(1,
+                    ((px - previousX) * dx + (pz - previousZ) * dz) / lengthSquared))
+            local distance = MathUtil.vector2Length(px - previousX - fraction * dx,
+                    pz - previousZ - fraction * dz)
+            if distance < best then
+                best, nearestDx, nearestDz = distance, dx / math.sqrt(lengthSquared), dz / math.sqrt(lengthSquared)
+            end
+        end
+        previousX, previousZ = x, z
+    end
+    return best, nearestDx, nearestDz
+end
+
+function AIDriveStrategyUnloadCombine:isRigClearOfCourse(course, clearance)
+    local vehicles = {self.vehicle}
+    for _, child in ipairs(self.vehicle:getChildVehicles()) do
+        table.insert(vehicles, child)
+    end
+    for _, vehicle in ipairs(vehicles) do
+        local x, _, z = getWorldTranslation(vehicle.rootNode)
+        if self.getDistanceFromConnectingCourse(course, x, z) < clearance then
+            return false
+        end
+    end
+    return true
+end
+
+--- Select an actual holding place outside the whole connector, including the trailer's swept width.
+--- Prefer the harvested side; neither an out-of-field point nor standing crop is an escape route.
+function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
+    local width = AIUtil.getWidth(self.vehicle)
+    for _, child in ipairs(self.vehicle:getChildVehicles()) do
+        width = math.max(width, AIUtil.getWidth(child))
+    end
+    local driver = harvester:getCpDriveStrategy()
+    local clearance = (driver and driver.getWorkWidth and driver:getWorkWidth() or AIUtil.getWidth(harvester)) / 2 +
+            width / 2 + 5
+    local current = self.connectorClearance
+    local attempt = current and current.harvester == harvester and current.attempt or 0
+    self.connectorClearance = {harvester = harvester, course = course, distance = clearance, attempt = attempt}
+    self.standbyYieldingToHarvester = harvester
+    if self:isRigClearOfCourse(course, clearance) then
+        self:holdAtStandbyPosition()
+        return true
+    end
+    local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+    local _, dx, dz = self.getDistanceFromConnectingCourse(course, x, z)
+    local boundary = self:getFieldworkBoundaryForRig()
+    local trainLength = self.getTrainLength(self.vehicle)
+    local offset = clearance + trainLength / 2 + 5
+    for pass = 1, 2 do
+        for step = 0, 7 do
+            local distance = offset + ((step + math.floor(attempt / 2)) % 8) * 12
+            for sideIx = 1, 2 do
+                local side = ((sideIx + attempt) % 2 == 0) and 1 or -1
+                local targetX, targetZ = x - dz * distance * side, z + dx * distance * side
+                if boundary and FieldworkBoundary.contains(boundary, targetX, targetZ) and
+                        (pass == 2 or not PathfinderUtil.hasFruit(targetX, targetZ, width + 2, trainLength + 2)) and
+                        self.getDistanceFromConnectingCourse(course, targetX, targetZ) >= clearance + trainLength / 2 then
+                    self:debug('Clearing %s connecting route by %.1f m%s', CpUtil.getName(harvester),
+                            distance, pass == 2 and ' (emergency route through crop)' or '')
+                    self:startPathfindingToStandby(harvester,
+                            Waypoint({x = targetX, z = targetZ, angle = math.deg(math.atan(dx, dz))}), true, pass == 2)
+                    return true
+                end
+            end
+        end
+    end
+    self:debug('No field-contained harvested holding point clears %s connecting route', CpUtil.getName(harvester))
+    self.standbyRetryAt = (g_time or 0) + 5000
+    self:holdAtStandbyPosition()
+    return false
+end
+
+function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle, _, connectingCourse)
+    if connectingCourse and self:isAvailableForStaging() and self.standbyAssignment then
+        if self.connectorClearance and self.connectorClearance.harvester == vehicle and
+                self.standbyRetryAt and (g_time or 0) < self.standbyRetryAt then
+            return
+        end
+        if self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
+                self.state == self.states.DRIVING_TO_STANDBY then
+            if self.connectorClearance and self.connectorClearance.harvester == vehicle then
+                return
+            end
+        end
+        self:startConnectorClearance(vehicle, connectingCourse)
+        return
+    end
     if AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
         self.standbyYieldingToHarvester = vehicle
     end

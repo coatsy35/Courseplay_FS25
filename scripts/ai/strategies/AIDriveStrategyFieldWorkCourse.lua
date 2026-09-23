@@ -695,7 +695,7 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
         -- Ask one parked rig at a time to clear the corridor. Its local escape course must not conflict with
         -- another trailer's escape course, and the combine keeps collision checks enabled while it waits.
         if parkedUnloader.isAvailableForStaging and parkedUnloader:isAvailableForStaging() then
-            parkedUnloader:requestToMoveOutOfWay(self.vehicle)
+            parkedUnloader:requestToMoveOutOfWay(self.vehicle, nil, course)
         end
         self:debug('Connecting path occupied by a staging trailer; waiting for clearance')
         return true

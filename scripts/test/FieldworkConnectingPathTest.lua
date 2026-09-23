@@ -66,7 +66,9 @@ local parkedStrategy = {
     state = {},
     getCombineToUnload = function() return nil end,
     isAvailableForStaging = function(self) return self.state ~= self.states.MOVING_AWAY_FROM_OTHER_VEHICLE end,
-    requestToMoveOutOfWay = function(self)
+    requestToMoveOutOfWay = function(self, vehicle, _, course)
+        assert(vehicle == strategy.vehicle and course == longConnector,
+                'The parked unloader needs the blocked connector to leave its whole route')
         requestedMoves = requestedMoves + 1
         self.state = self.states.MOVING_AWAY_FROM_OTHER_VEHICLE
     end,
