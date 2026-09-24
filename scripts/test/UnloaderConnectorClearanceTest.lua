@@ -10,6 +10,7 @@ FieldworkBoundary = {contains = function(_, _, z) return z >= 0 and z < 80 end,
     containsCourse = function() return true end}
 Waypoint = function(point) return point end
 function getWorldTranslation(node) return node.x, 0, node.z end
+function localToWorld(node, _, _, offset) return node.x, 0, node.z + offset end
 dofile('scripts/ai/strategies/AIDriveStrategyUnloadCombine.lua')
 
 local trailer = {width = 5, length = 9, rootNode = {x = 10, z = 0}}
@@ -159,4 +160,33 @@ tractor.rootNode.z, trailer.rootNode.z = 70, 70
 strategy:updateStandbyCoordinator()
 assert(strategy.state == strategy.states.IDLE and not strategy.connectorClearance,
     'An idle rig may rejoin the pool only after its full train clears the connector')
+
+-- If forward-only pathfinding cannot turn past a combine header, a clear straight reverse makes
+-- enough room for another route search. An occupied rear corridor must never be used.
+tractor.rootNode.z, trailer.rootNode.z = 30, 20
+combine.rootNode, combine.width, combine.length = {x = 20, z = 55}, 15, 8
+g_currentMission.vehicleSystem.vehicles = {tractor, combine}
+function localToLocal(node, reference) return node.x - reference.x, 0, node.z - reference.z end
+FieldworkBoundary.captureRig = function(vehicle)
+    return {{x = vehicle.rootNode.x, z = vehicle.rootNode.z, heading = 0}}
+end
+FieldworkBoundary.rigOutsideDistance = function(_, rig) return rig[1].z < 0 and 1 or 0 end
+FieldworkBoundary.advanceRig = function(rig, x, z) rig[1].x, rig[1].z = x, z end
+Course = {createStraightReverseCourse = function(_, distance)
+    return {reverseDistance = distance}
+end}
+strategy.connectorClearance = {reverseAttempts = 0}
+assert(strategy:startConnectorReverseEscape() and strategy.course.reverseDistance == 20 and
+        strategy.connectorClearance.reverseAttempts == 1 and strategy.state == strategy.states.DRIVING_TO_STANDBY,
+    'A field-contained clear reverse must break the failed forward-pathfinding loop')
+strategy.state = strategy.states.WAITING_FOR_STANDBY_PATHFINDER
+strategy.connectorClearance = {reverseAttempts = 0, failedTargets = {}}
+assert(strategy:onPathfindingDoneToStandby(nil, false, nil) and
+        strategy.state == strategy.states.DRIVING_TO_STANDBY,
+    'A failed standby search must actually start the checked reverse escape')
+local rearVehicle = {rootNode = {x = 10, z = 12}, width = 4, length = 6}
+g_currentMission.vehicleSystem.vehicles = {tractor, combine, rearVehicle}
+strategy.connectorClearance = {reverseAttempts = 0}
+assert(not strategy:startConnectorReverseEscape(),
+    'The emergency reverse must not drive the trailer into another vehicle')
 print('UnloaderConnectorClearanceTest: OK')

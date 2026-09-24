@@ -38,9 +38,11 @@ local longConnector = {contained = true, getLength = function() return 700 end}
 assert(strategy:canDriveConnectingPathDirectly(longConnector),
         'A long contained generated connector must be driven without a duplicate global search')
 
-AIUtil = {getWidth = function() return 4 end, isStopped = function() return false end}
+AIUtil = {getWidth = function() return 4 end, getLength = function() return 6 end,
+    isStopped = function() return false end}
 MathUtil = {vector2Length = function(x, z) return math.sqrt(x * x + z * z) end}
 function getWorldTranslation(node) return node.x, 0, node.z end
+function localToWorld(node, _, _, offset) return node.x, 0, node.z + offset end
 local follower = {rootNode = {x = 40, z = 0}, getIsCpFieldWorkActive = function() return true end}
 g_currentMission = {vehicleSystem = {vehicles = {follower}}}
 strategy.fieldWorkerProximityController = {hasSameCourse = function() return true end}
@@ -150,6 +152,12 @@ blocked, blocker = strategy:isConnectingPathBlockedByWorker(longConnector)
 assert(blocked and blocker == 'unloader',
         'A parked trailer must be asked to move rather than treated as a field worker')
 assert(requestedMoves == 1, 'The parked trailer must be asked to clear the combine route')
+parkedStrategy.getCombineToUnload = function() return follower end
+assert(not strategy:canDriveConnectingPathDirectly(longConnector),
+        'An assigned trailer remains a physical obstacle even though its call cannot be cancelled')
+strategy:isConnectingPathBlockedByWorker(longConnector)
+assert(requestedMoves == 1, 'An assigned trailer must not receive a standby clearance request')
+parkedStrategy.getCombineToUnload = function() return nil end
 strategy:onPathfindingFailedToConnectingPathEnd(nil, {collisionMask = function()
     error('A trailer-obstructed connector must retain collision checks')
 end}, false, 1)

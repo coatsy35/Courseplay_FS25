@@ -691,43 +691,48 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
             local otherStrategy = other.getCpDriveStrategy and other:getCpDriveStrategy()
             local fieldWorker = other.getIsCpFieldWorkActive and other:getIsCpFieldWorkActive() and
                     self.fieldWorkerProximityController and self.fieldWorkerProximityController:hasSameCourse(other)
+            -- An assigned unloader is still a physical obstacle. Only the request to move is restricted
+            -- to a staging rig; an active call must not be cancelled merely to clear this connector.
             local unloader = otherStrategy and otherStrategy.requestToMoveOutOfWay and
-                    otherStrategy.getCombineToUnload and not otherStrategy:getCombineToUnload() and
-                    (otherStrategy.isAvailableForStaging and otherStrategy:isAvailableForStaging() or
-                            otherStrategy.states and
-                            otherStrategy.state == otherStrategy.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
+                    otherStrategy.getCombineToUnload
             if fieldWorker or unloader then
-                local nodes = {other.rootNode}
-                if unloader and other.getChildVehicles then
+                local parts = {other}
+                if other.getChildVehicles then
                     for _, child in ipairs(other:getChildVehicles()) do
-                        table.insert(nodes, child.rootNode)
+                        table.insert(parts, child)
                     end
                 end
-                local otherWidth = math.max(AIUtil.getWidth(other),
-                        otherStrategy and otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or 0)
-                local clearance = (ownWidth + otherWidth) / 2 + 5
-                for _, node in ipairs(nodes) do
-                    local ox, _, oz = getWorldTranslation(node)
-                    local previousX, _, previousZ = course:getWaypointPosition(1)
-                    for ix = 2, course:getNumberOfWaypoints() do
-                        local x, _, z = course:getWaypointPosition(ix)
-                        local dx, dz = x - previousX, z - previousZ
-                        local lengthSquared = dx * dx + dz * dz
-                        local fraction = lengthSquared > 0 and
-                                math.max(0, math.min(1, ((ox - previousX) * dx + (oz - previousZ) * dz) / lengthSquared)) or 0
-                        local nearestX, nearestZ = previousX + fraction * dx, previousZ + fraction * dz
-                        if MathUtil.vector2Length(ox - nearestX, oz - nearestZ) < clearance then
-                            local progress = ix - 1 + fraction
-                            if fieldWorker then
-                                if not workerProgress or progress < workerProgress then
-                                    blockingWorker, workerIx, workerProgress = other, ix, progress
+                for _, part in ipairs(parts) do
+                    if part.rootNode then
+                        local otherWidth = math.max(AIUtil.getWidth(part),
+                                part == other and otherStrategy and otherStrategy.getWorkWidth and
+                                otherStrategy:getWorkWidth() or 0)
+                        local clearance = (ownWidth + otherWidth) / 2 + 5
+                        local halfLength = AIUtil.getLength(part) / 2
+                        for _, offset in ipairs({-halfLength, 0, halfLength}) do
+                            local ox, _, oz = localToWorld(part.rootNode, 0, 0, offset)
+                            local previousX, _, previousZ = course:getWaypointPosition(1)
+                            for ix = 2, course:getNumberOfWaypoints() do
+                                local x, _, z = course:getWaypointPosition(ix)
+                                local dx, dz = x - previousX, z - previousZ
+                                local lengthSquared = dx * dx + dz * dz
+                                local fraction = lengthSquared > 0 and
+                                        math.max(0, math.min(1, ((ox - previousX) * dx + (oz - previousZ) * dz) / lengthSquared)) or 0
+                                local nearestX, nearestZ = previousX + fraction * dx, previousZ + fraction * dz
+                                if MathUtil.vector2Length(ox - nearestX, oz - nearestZ) < clearance then
+                                    local progress = ix - 1 + fraction
+                                    if fieldWorker then
+                                        if not workerProgress or progress < workerProgress then
+                                            blockingWorker, workerIx, workerProgress = other, ix, progress
+                                        end
+                                    elseif not parkedProgress or progress < parkedProgress then
+                                        parkedUnloader, parkedProgress = otherStrategy, progress
+                                    end
+                                    break
                                 end
-                            elseif not parkedProgress or progress < parkedProgress then
-                                parkedUnloader, parkedProgress = otherStrategy, progress
+                                previousX, previousZ = x, z
                             end
-                            break
                         end
-                        previousX, previousZ = x, z
                     end
                 end
             end
@@ -736,10 +741,11 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
     if parkedUnloader and (not workerProgress or parkedProgress < workerProgress) then
         -- Ask one parked rig at a time to clear the corridor. Its local escape course must not conflict with
         -- another trailer's escape course, and the combine keeps collision checks enabled while it waits.
-        if parkedUnloader.isAvailableForStaging and parkedUnloader:isAvailableForStaging() then
+        if not parkedUnloader:getCombineToUnload() and parkedUnloader.isAvailableForStaging and
+                parkedUnloader:isAvailableForStaging() then
             parkedUnloader:requestToMoveOutOfWay(self.vehicle, nil, course)
         end
-        self:debug('Connecting path occupied by a staging trailer; waiting for clearance')
+        self:debug('Connecting path occupied by a trailer; waiting for clearance')
         return true, 'unloader'
     end
     if blockingWorker then
