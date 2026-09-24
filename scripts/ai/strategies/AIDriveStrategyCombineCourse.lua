@@ -2495,6 +2495,9 @@ function AIDriveStrategyCombineCourse:onBlockingVehicle(vehicle, isBack)
         if strategy and strategy.requestToMoveOutOfWay then
             strategy:requestToMoveOutOfWay(self.vehicle, isBack)
         end
+        if self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT then
+            self:onBlockedConnectingPath(false)
+        end
     end
 end
 
