@@ -187,6 +187,10 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
         self:setMaxSpeed(0)
     elseif self.state == self.states.WAITING_FOR_PATHFINDER then
         self:setMaxSpeed(0)
+        if self.nextWaypointRetryAt and g_currentMission.time >= self.nextWaypointRetryAt then
+            self.nextWaypointRetryAt = nil
+            self:startPathfindingToNextWaypoint(self.waypointToContinueOnFailedPathfinding - 1)
+        end
         if self.connectingPathRetryAt and g_currentMission.time >= self.connectingPathRetryAt then
             self.connectingPathRetryAt = nil
             self:startConnectingPath(self.connectingPathStartIx)
@@ -577,6 +581,7 @@ end
 --- Use pathfinder to next waypoint
 -----------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyFieldWorkCourse:startPathfindingToNextWaypoint(ix)
+    self.connectingPathRetryAt = nil
     self:debug('start pathfinding to waypoint %d', ix + 1)
     local fm, bm = self:getFrontAndBackMarkers()
     self.turnContext = RowStartOrFinishContext(self.vehicle, self.fieldWorkCourse, ix + 1, ix + 1,
@@ -596,7 +601,32 @@ function AIDriveStrategyFieldWorkCourse:startPathfindingToNextWaypoint(ix)
     self.pathfinderController:findPathToNode(context, targetNode, 0, zOffset, 1)
 end
 
+--- Check the direct join that would be used if pathfinding fails, before disabling collisions.
+function AIDriveStrategyFieldWorkCourse:isNextWaypointBlockedByWorker()
+    local ix = self.waypointToContinueOnFailedPathfinding
+    if not ix then return false end
+    local sx, _, sz = getWorldTranslation(self.vehicle.rootNode)
+    local tx, _, tz = self.fieldWorkCourse:getWaypointPosition(ix)
+    local direct = {
+        getNumberOfWaypoints = function() return 2 end,
+        getWaypointPosition = function(_, pointIx)
+            if pointIx == 1 then return sx, 0, sz end
+            return tx, 0, tz
+        end,
+    }
+    return self:isConnectingPathBlockedByWorker(direct)
+end
+
+function AIDriveStrategyFieldWorkCourse:waitForNextWaypointToClear()
+    if not self:isNextWaypointBlockedByWorker() then return false end
+    self:debug('Next-waypoint join is occupied; retaining collision checks and waiting')
+    self.nextWaypointRetryAt = g_currentMission.time + 5000
+    self.state = self.states.WAITING_FOR_PATHFINDER
+    return true
+end
+
 function AIDriveStrategyFieldWorkCourse:onPathfindingFailedToNextWaypoint(controller, lastContext, wasLastRetry, currentRetryAttempt)
+    if self:waitForNextWaypointToClear() then return end
     if wasLastRetry then
         self:debug('Pathfinding to next waypoint failed again, continue directly at waypoint %d', self.waypointToContinueOnFailedPathfinding)
         self:startWaitingForLower()
@@ -611,9 +641,11 @@ end
 
 function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToNextWaypoint(controller, success, course, goalNodeInvalid)
     if success then
+        self.nextWaypointRetryAt = nil
         self:debug('Pathfinding to next waypoint finished')
         self:startCourseToWorkStart(course)
     else
+        if self:waitForNextWaypointToClear() then return end
         self:debug('Pathfinding to next waypoint failed, continue directly at waypoint %d', self.waypointToContinueOnFailedPathfinding)
         self:startWaitingForLower()
         self:lowerImplements()
@@ -677,8 +709,8 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
                         local nearestX, nearestZ = previousX + fraction * dx, previousZ + fraction * dz
                         if MathUtil.vector2Length(ox - nearestX, oz - nearestZ) < clearance then
                             if fieldWorker then
-                                self:debug('Connecting path crosses %s; using collision-aware pathfinding', CpUtil.getName(other))
-                                return true
+                                self:debug('Connecting path crosses %s; waiting for the worker to clear', CpUtil.getName(other))
+                                return true, 'fieldWorker'
                             end
                             parkedUnloader = otherStrategy
                             break
@@ -698,12 +730,13 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
             parkedUnloader:requestToMoveOutOfWay(self.vehicle, nil, course)
         end
         self:debug('Connecting path occupied by a staging trailer; waiting for clearance')
-        return true
+        return true, 'unloader'
     end
     return false
 end
 
 function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
+    self.nextWaypointRetryAt = nil
     self.connectingPathStartIx = ix
     -- ix was the last waypoint to work before the connecting path, ix + 1 is the first on the connecting path
     self:debug('Row finished before starting on a connecting path at waypoint %d.', ix + 1)
@@ -738,6 +771,23 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
             self.workStarterCourse = self:createAlignmentCourse(self.fieldWorkCourse, targetWaypointIx)
         else
             self.workStarterCourse = Course(self.vehicle, connectingPath, true)
+        end
+        local blocked, blocker = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
+        if blocked and blocker == 'fieldWorker' then
+            -- Wait for the preceding worker first. If it cannot clear, try a collision-aware
+            -- detour periodically rather than either deadlocking or searching every few seconds.
+            self.connectingPathWorkerDetourAt = self.connectingPathWorkerDetourAt or
+                    g_currentMission.time + 15000
+            if g_currentMission.time < self.connectingPathWorkerDetourAt then
+                self:debug('Connecting path occupied by another field worker; waiting for it to clear')
+                self.connectingPathRetryAt = g_currentMission.time + 5000
+                self.state = self.states.WAITING_FOR_PATHFINDER
+                self:startCourse(self.workStarterCourse, 1)
+                return
+            end
+            self.connectingPathWorkerDetourAt = g_currentMission.time + 60000
+        else
+            self.connectingPathWorkerDetourAt = nil
         end
         if #connectingPath >= 2 and self:canDriveConnectingPathDirectly(self.workStarterCourse) then
             self:debug('Connecting path is a %.1f m generated route; drive it directly instead of pathfinding to its end',

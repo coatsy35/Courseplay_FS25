@@ -48,9 +48,56 @@ CpUtil = {getName = function() return 'Follower' end}
 strategy.debug = function() end
 assert(not strategy:canDriveConnectingPathDirectly(longConnector),
         'A connector crossing the following worker must use collision-aware routing')
+local blocked, blocker = strategy:isConnectingPathBlockedByWorker(longConnector)
+assert(blocked and blocker == 'fieldWorker',
+        'A worker on the connector must be distinguished from a trailer that can move aside')
+-- The blocked combine must wait before launching the expensive whole-field search.
+g_currentMission.time = 1000
+strategy.fieldWorkCourse = {
+    getNumberOfWaypoints = function() return 4 end,
+    isOnConnectingPath = function(_, ix) return ix < 4 end,
+    getWaypointPosition = function(_, ix) return ix * 20, 0, 0 end,
+}
+strategy.getFrontAndBackMarkers = function() return 0, 0 end
+strategy.getTurnEndSideOffset = function() return 0 end
+strategy.getTurnEndForwardOffset = function() return 0 end
+strategy.getAllowReversePathfinding = function() return false end
+strategy.settings = {avoidFruit = {getValue = function() return false end}}
+strategy.states = {WAITING_FOR_PATHFINDER = {}}
+strategy.startCourse = function(_, route) assert(route == longConnector) end
+local searches = 0
+strategy.pathfinderController = {registerListeners = function() end,
+    findPathToNode = function() searches = searches + 1 end}
+RowStartOrFinishContext = function() return {getTurnEndNodeAndOffsets = function() return {}, 0 end} end
+AIUtil.getSteeringParameters = function() return false, 6 end
+PathfinderContext = function() return {allowReverse = function(self) return self end,
+    preferredPath = function(self) return self end,
+    mustBeAccurate = function(self) return self end,
+    ignoreFruit = function(self) return self end} end
+Course = function() return longConnector end
+strategy:startConnectingPath(1)
+assert(strategy.state == strategy.states.WAITING_FOR_PATHFINDER and strategy.connectingPathRetryAt == 6000 and
+        searches == 0,
+        'The following combine must wait and recheck the occupied connector')
+g_currentMission.time = 17000
+strategy:startConnectingPath(1)
+assert(searches == 1 and strategy.connectingPathWorkerDetourAt == 77000,
+        'A persistent blocker must permit a bounded collision-aware detour attempt')
+g_currentMission.time = 22000
+strategy:startConnectingPath(1)
+assert(searches == 1,
+        'A failed detour must not turn into repeated whole-field searches while the worker remains')
+strategy.vehicle.rootNode = {x = 0, z = 0}
+strategy.waypointToContinueOnFailedPathfinding = 4
+assert(strategy:isNextWaypointBlockedByWorker(),
+        'The local direct join must detect another worker on the route')
+strategy:onPathfindingFailedToNextWaypoint(nil, {collisionMask = function()
+    error('An occupied local join must not disable collisions')
+end}, false, 1)
+assert(strategy.nextWaypointRetryAt == 27000 and strategy.state == strategy.states.WAITING_FOR_PATHFINDER,
+        'A blocked local join must wait for clearance before retrying')
 g_currentMission.time = 1000
 strategy.workStarterCourse = longConnector
-strategy.states = {WAITING_FOR_PATHFINDER = {}}
 strategy:onPathfindingFailedToConnectingPathEnd(nil, {collisionMask = function()
     error('An occupied connector must not disable collision checks')
 end}, false, 1)
@@ -81,6 +128,9 @@ local trailer = {
 g_currentMission.vehicleSystem.vehicles = {follower, trailer}
 assert(not strategy:canDriveConnectingPathDirectly(longConnector),
         'A parked trailer across the centre-work connector must stop direct driving')
+blocked, blocker = strategy:isConnectingPathBlockedByWorker(longConnector)
+assert(blocked and blocker == 'unloader',
+        'A parked trailer must be asked to move rather than treated as a field worker')
 assert(requestedMoves == 1, 'The parked trailer must be asked to clear the combine route')
 strategy:onPathfindingFailedToConnectingPathEnd(nil, {collisionMask = function()
     error('A trailer-obstructed connector must retain collision checks')

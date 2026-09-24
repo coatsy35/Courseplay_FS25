@@ -6,7 +6,8 @@ AIUtil = {
 MathUtil = {vector2Length = function(x, z) return math.sqrt(x * x + z * z) end}
 CpUtil = {getName = function() return 'combine' end}
 PathfinderUtil = {hasFruit = function() return false end}
-FieldworkBoundary = {contains = function(_, _, z) return z >= 0 and z < 80 end}
+FieldworkBoundary = {contains = function(_, _, z) return z >= 0 and z < 80 end,
+    containsCourse = function() return true end}
 Waypoint = function(point) return point end
 function getWorldTranslation(node) return node.x, 0, node.z end
 dofile('scripts/ai/strategies/AIDriveStrategyUnloadCombine.lua')
@@ -26,22 +27,24 @@ local strategy = setmetatable({vehicle = tractor, standbyAssignment = {},
     state = {}, debug = function() end, setMaxSpeed = function() end}, {__index = AIDriveStrategyUnloadCombine})
 strategy.getFieldworkBoundaryForRig = function() return {} end
 strategy.isAvailableForStaging = function() return true end
-local target
-strategy.startPathfindingToStandby = function(_, harvester, waypoint, avoidHarvester)
+local target, emergency
+strategy.startPathfindingToStandby = function(_, harvester, waypoint, avoidHarvester, emergencyClearance)
     assert(harvester == combine and avoidHarvester)
     target = waypoint
+    emergency = emergencyClearance
 end
 local course = {getNumberOfWaypoints = function() return 3 end,
     getWaypointPosition = function(_, ix) return (ix - 1) * 50, 0, 0 end}
 assert(not strategy:isRigClearOfCourse(course, 15))
 strategy:requestToMoveOutOfWay(combine, nil, course)
-assert(target and target.z > 45 and strategy.connectorClearance.course == course,
+assert(target and strategy:isConnectorClearanceTargetFree(target.x, target.z, 5,
+        strategy.getTrainLength(tractor)) and strategy.connectorClearance.course == course,
     'The clearance target must avoid both the connector and another parked trailer')
-local rejectedZ = target.z
+local rejectedX, rejectedZ = target.x, target.z
 strategy.connectorClearance.failedTargets = {{x = target.x, z = target.z}}
 target = nil
 strategy:startConnectorClearance(combine, course)
-assert(target and math.abs(target.z - rejectedZ) >= 8,
+assert(target and MathUtil.vector2Length(target.x - rejectedX, target.z - rejectedZ) >= 8,
     'A rejected pathfinder goal must not be selected again')
 tractor.rootNode.z, trailer.rootNode.z = target.z, target.z
 assert(strategy:isRigClearOfCourse(course, strategy.connectorClearance.distance),
@@ -49,6 +52,16 @@ assert(strategy:isRigClearOfCourse(course, strategy.connectorClearance.distance)
 trailer.rootNode.z = 0
 assert(not strategy:isRigClearOfCourse(course, strategy.connectorClearance.distance),
     'Tractor clearance alone must not hide a trailer still occupying the route')
+
+local originalContains = FieldworkBoundary.contains
+FieldworkBoundary.contains = function(_, x, z) return x > 35 and x < 90 and z >= 0 and z < 80 end
+strategy.connectorClearance = nil
+target = nil
+tractor.rootNode.z, trailer.rootNode.z = 0, 0
+strategy:startConnectorClearance(combine, course)
+assert(target and target.x > 35,
+    'Clearance must search along the route when a sideways holding point is unavailable')
+FieldworkBoundary.contains = originalContains
 
 -- A combine approaching a parked standby rig must use its actual route and the obstacle-aware
 -- clearance pathfinder, rather than commanding a blind 25 m reverse into the next trailer.
@@ -89,21 +102,61 @@ local otherDriver = {getWorkWidth = function() return 15 end,
     ppc = {getCourse = function() return otherCourse end,
         getCurrentWaypointIx = function() return 1 end}}
 local otherCombine = {getCpDriveStrategy = function() return otherDriver end}
-g_currentMission.vehicleSystem.vehicles = {tractor, parkedTractor, otherCombine}
+local ownCourse = {getNumberOfWaypoints = function() return 3 end,
+    getWaypointPosition = function(_, ix) return (ix - 1) * 50, 0, 35 end}
+driver.ppc = {getCourse = function() return ownCourse end,
+    getCurrentWaypointIx = function() return 1 end}
+g_currentMission.vehicleSystem.vehicles = {tractor, parkedTractor, combine, otherCombine}
 AIDriveStrategyCombineCourse.isActiveCpCombine = function(vehicle)
     return vehicle == combine or vehicle == otherCombine
 end
-assert(strategy:isStandbyTargetOnAnotherHarvesterRoute(combine, {x = 800, z = 0}),
-    'A spare must not park on another combine\'s upcoming alignment route')
-assert(not strategy:isStandbyTargetOnAnotherHarvesterRoute(combine, {x = 800, z = 60}),
+assert(strategy:isStandbyTargetOnHarvesterRoute({x = 80, z = 0}),
+    'A spare must not park on another combine\'s imminent alignment route')
+assert(not strategy:isStandbyTargetOnHarvesterRoute({x = 800, z = 0}),
+    'A distant future row must not reject a useful standby position')
+assert(not strategy:isStandbyTargetOnHarvesterRoute({x = 80, z = 60}),
     'A separate parking area must remain available')
+assert(strategy:isStandbyTargetOnHarvesterRoute({x = 40, z = 35}),
+    'The assigned combine\'s upcoming connector must also be protected')
 held = false
-AIDriveStrategyUnloadCombine.startPathfindingToStandby(strategy, combine, {x = 800, z = 0})
+AIDriveStrategyUnloadCombine.startPathfindingToStandby(strategy, combine, {x = 80, z = 0})
 assert(held, 'An occupied standby target must be rejected before pathfinding')
 
 PathfinderUtil.hasFruit = function() return true end
 strategy.settings = {avoidFruit = {getValue = function() return true end}}
 target = nil
 strategy:startConnectorClearance(combine, course)
-assert(not target, 'Avoid fruit must forbid an emergency clearance target in standing crop')
+assert(target and emergency and FieldworkBoundary.contains({}, target.x, target.z),
+    'A blocked combine must get a field-contained emergency route when no harvested target exists')
+
+-- A rig can lose its standby assignment while still blocking the connector. It must keep
+-- the obstacle-aware clearance route until both tractor and trailer have moved aside.
+strategy.standbyAssignment = nil
+strategy.state = strategy.states.WAITING_IN_STANDBY
+strategy.connectorClearance = nil
+strategy:setMaxSpeed(0)
+target = nil
+strategy:requestToMoveOutOfWay(combine, nil, course)
+assert(target and strategy.connectorClearance,
+    'An unassigned idle unloader must also receive a connector-specific clearance route')
+strategy.states.IDLE = {}
+strategy.setNewState = function(self, state) self.state = state end
+strategy.startCourse = function(self, path) self.course = path end
+AIUtil.getDirectionNodeToReverserNodeOffset = function() return -2 end
+local clearancePath = {adjustForReversing = function() end}
+strategy.state = strategy.states.WAITING_FOR_STANDBY_PATHFINDER
+strategy.standbyBoundary = {}
+FieldworkBoundary.containsCourse = function() return false end
+assert(not strategy:onPathfindingDoneToStandby(nil, true, clearancePath) and
+        strategy.state == strategy.states.WAITING_IN_STANDBY,
+    'A clearance route leaving the field corridor must be rejected before driving')
+FieldworkBoundary.containsCourse = function() return true end
+strategy.state = strategy.states.WAITING_FOR_STANDBY_PATHFINDER
+assert(strategy:onPathfindingDoneToStandby(nil, true, clearancePath) and
+        strategy.state == strategy.states.DRIVING_TO_STANDBY,
+    'Successful clearance pathfinding must not require a standby assignment')
+tractor.rootNode.z, trailer.rootNode.z = 70, 70
+strategy:updateStandbyCoordinator()
+assert(strategy.state == strategy.states.IDLE and not strategy.connectorClearance,
+    'An idle rig may rejoin the pool only after its full train clears the connector')
 print('UnloaderConnectorClearanceTest: OK')

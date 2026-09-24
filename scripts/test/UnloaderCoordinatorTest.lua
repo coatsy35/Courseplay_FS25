@@ -553,3 +553,14 @@ assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
         'A temporary hold during transfer must not release the nearby corridor to a second trailer')
 servingLead.isInDeadlock = nil
 print('Adjacent combine shares en-route active trailer: OK')
+
+-- Rebalancing must not revoke an assignment while its rig is still clearing a connector.
+local clearing = makeUnloader('Clearing trailer', 100, true, nil, 0)
+clearing.isConnectorClearancePending = function() return true end
+local clearingAssignment = {harvester = lead, role = 'STANDBY', reserved = true}
+AIDriveStrategyUnloadCombine.activeUnloaders = {[clearing] = clearing.vehicle}
+g_currentMission.vehicleSystem.vehicles = {}
+UnloaderCoordinator.assignments = {[clearing] = clearingAssignment}
+UnloaderCoordinator:rebalance(true)
+assert(UnloaderCoordinator.assignments[clearing] == clearingAssignment and clearing.assignment == clearingAssignment,
+        'A clearing trailer must keep its assignment until the whole rig leaves the connector')

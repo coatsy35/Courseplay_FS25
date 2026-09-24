@@ -814,6 +814,14 @@ function UnloaderCoordinator:rebalance(force)
     end
 
     for unloader, oldAssignment in pairs(previousAssignments) do
+        if not newAssignments[unloader] and unloader.isConnectorClearancePending and
+                unloader:isConnectorClearancePending() then
+            -- An assignment must not disappear while this rig is physically clearing a combine's route.
+            newAssignments[unloader] = oldAssignment
+        end
+    end
+
+    for unloader, oldAssignment in pairs(previousAssignments) do
         if not newAssignments[unloader] and unloader.clearStandbyAssignment then
             self:debug('Releasing %s from standby for %s', getVehicleName(unloader.vehicle),
                     getVehicleName(oldAssignment.harvester))
