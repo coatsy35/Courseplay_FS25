@@ -917,8 +917,9 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingFailedToConnectingPathEnd(c
     if wasLastRetry then
         self:retryOrDriveGeneratedConnectingPath()
     else
-        self:debug('Pathfinding to end of connecting path failed once, retry with vehicle-width field clearance')
+        self:debug('Connecting path blocked; retry through crop with vehicle-width field clearance')
         self:setConnectingPathBoundary(lastContext, 0)
+        lastContext:ignoreFruit(true)
         controller:retry(lastContext)
     end
 end

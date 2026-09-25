@@ -87,7 +87,7 @@ AIUtil.getSteeringParameters = function() return false, 6 end
 PathfinderContext = function() return {allowReverse = function(self) return self end,
     preferredPath = function(self) return self end,
     mustBeAccurate = function(self) return self end,
-    ignoreFruit = function(self) return self end} end
+    ignoreFruit = function(self, ignore) self.ignoreFruitValue = ignore; return self end} end
 Course = function() return longConnector end
 strategy:startConnectingPath(1)
 assert(strategy.state == strategy.states.WAITING_FOR_PATHFINDER and strategy.connectingPathRetryAt == 6000 and
@@ -115,11 +115,11 @@ strategy.workStarterCourse = longConnector
 strategy.connectingPathRejoinIx = 3
 local retriedWithBoundary = false
 strategy:onPathfindingFailedToConnectingPathEnd({retry = function(_, context)
-    retriedWithBoundary = context._fieldworkBoundary.width == 0
+    retriedWithBoundary = context._fieldworkBoundary.width == 0 and context.ignoreFruitValue
 end}, {collisionMask = function()
     error('An occupied connector must not disable collision checks')
-end}, false, 1)
-assert(retriedWithBoundary, 'A local detour may retry at vehicle clearance while retaining collisions')
+end, ignoreFruit = function(self, ignore) self.ignoreFruitValue = ignore end}, false, 1)
+assert(retriedWithBoundary, 'A local detour may retry through crop while retaining collisions')
 strategy:onPathfindingFailedToConnectingPathEnd(nil, {}, true, 2)
 assert(strategy.connectingPathRetryAt == 6000 and strategy.state == strategy.states.WAITING_FOR_PATHFINDER,
         'A failed detour must wait and retry rather than drive through the following worker')
@@ -160,10 +160,10 @@ assert(requestedMoves == 1, 'An assigned trailer must not receive a standby clea
 parkedStrategy.getCombineToUnload = function() return nil end
 local occupiedRetry = false
 strategy:onPathfindingFailedToConnectingPathEnd({retry = function(_, context)
-    occupiedRetry = context._fieldworkBoundary.width == 0
+    occupiedRetry = context._fieldworkBoundary.width == 0 and context.ignoreFruitValue
 end}, {collisionMask = function()
     error('A trailer-obstructed connector must retain collision checks')
-end}, false, 1)
+end, ignoreFruit = function(self, ignore) self.ignoreFruitValue = ignore end}, false, 1)
 assert(occupiedRetry and requestedMoves == 1,
         'An occupied connector must retry with narrower field clearance and retained collisions')
 strategy:onPathfindingFailedToConnectingPathEnd(nil, {}, true, 2)
@@ -191,6 +191,7 @@ assert(not strategy:canDriveConnectingPathDirectly(longConnector),
 longConnector.contained = true
 g_currentMission.vehicleSystem.vehicles = {follower}
 follower.rootNode.z = 0
+strategy.settings.avoidFruit.getValue = function() return true end
 local loopingPositions = {0, 20, 40, 60, 80, 40, 100, 120, 140, 160}
 local loopingConnector = {
     getNumberOfWaypoints = function() return #loopingPositions end,
@@ -208,8 +209,8 @@ strategy.workStarterCourse = loopingConnector
 strategy.connectingPathRejoinIx = 4
 local originalFindPathToNode = strategy.pathfinderController.findPathToNode
 local retriedDirectly = false
-strategy.pathfinderController.findPathToNode = function()
-    retriedDirectly = true
+strategy.pathfinderController.findPathToNode = function(_, context)
+    retriedDirectly = context.ignoreFruitValue == false
 end
 strategy:onPathfindingDoneToConnectingPathEnd(nil, true, {append = function() end}, false)
 assert(retriedDirectly and strategy.connectingPathRejoinIx == nil,
@@ -223,9 +224,9 @@ follower.getCpDriveStrategy = function() return {
 AIUtil.isStopped = function() return leadIsStopped end
 strategy.fieldWorkerProximityController.otherVehicleAheadOnTrail = {[follower] = true}
 strategy.connectingPathWorkerLastSearchAt = nil
-local rejoinIx, rejoinBoundary
+local rejoinIx, rejoinBoundary, rejoinIgnoresFruit
 strategy.pathfinderController.findPathToWaypoint = function(_, context, _, ix)
-    rejoinIx, rejoinBoundary = ix, context._fieldworkBoundary
+    rejoinIx, rejoinBoundary, rejoinIgnoresFruit = ix, context._fieldworkBoundary, context.ignoreFruitValue
     searches = searches + 1
 end
 g_currentMission.time = 30000
@@ -235,8 +236,8 @@ assert(rejoinIx == nil and strategy.state == strategy.states.WAITING_FOR_PATHFIN
 leadIsStopped = true
 g_currentMission.time = 35000
 strategy:startConnectingPath(1)
-assert(rejoinIx == 4 and rejoinBoundary.width == 8,
-        'A stalled lead worker must trigger a local rejoin inside a wider field corridor')
+assert(rejoinIx == 4 and rejoinBoundary.width == 8 and rejoinIgnoresFruit == false,
+        'The first local rejoin search must still prefer a crop-free route')
 
 local innerDetour = {contained = false, getNumberOfWaypoints = function() return 2 end,
     append = function() end,
