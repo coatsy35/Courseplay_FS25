@@ -158,11 +158,17 @@ assert(not strategy:canDriveConnectingPathDirectly(longConnector),
 strategy:isConnectingPathBlockedByWorker(longConnector)
 assert(requestedMoves == 1, 'An assigned trailer must not receive a standby clearance request')
 parkedStrategy.getCombineToUnload = function() return nil end
-strategy:onPathfindingFailedToConnectingPathEnd(nil, {collisionMask = function()
+local occupiedRetry = false
+strategy:onPathfindingFailedToConnectingPathEnd({retry = function(_, context)
+    occupiedRetry = context._fieldworkBoundary.width == 0
+end}, {collisionMask = function()
     error('A trailer-obstructed connector must retain collision checks')
 end}, false, 1)
-assert(requestedMoves == 1 and strategy.connectingPathRetryAt == 6000,
-        'A moving-away trailer must not receive repeated escape courses while the combine waits')
+assert(occupiedRetry and requestedMoves == 1,
+        'An occupied connector must retry with narrower field clearance and retained collisions')
+strategy:onPathfindingFailedToConnectingPathEnd(nil, {}, true, 2)
+assert(strategy.connectingPathRetryAt == 6000,
+        'The combine waits only after its collision-aware detour retry also fails')
 local detour = {getNumberOfWaypoints = function() return 2 end,
     getWaypointPosition = function(_, ix) return ix * 20, 0, 10 end,
     contained = true}
@@ -185,6 +191,30 @@ assert(not strategy:canDriveConnectingPathDirectly(longConnector),
 longConnector.contained = true
 g_currentMission.vehicleSystem.vehicles = {follower}
 follower.rootNode.z = 0
+local loopingPositions = {0, 20, 40, 60, 80, 40, 100, 120, 140, 160}
+local loopingConnector = {
+    getNumberOfWaypoints = function() return #loopingPositions end,
+    getWaypointPosition = function(_, ix) return loopingPositions[ix], 0, 0 end,
+    copy = function(_, _, firstIx)
+        return {
+            getNumberOfWaypoints = function() return #loopingPositions - firstIx + 1 end,
+            getWaypointPosition = function(_, ix) return loopingPositions[firstIx + ix - 1], 0, 0 end,
+        }
+    end,
+}
+assert(strategy:getClearConnectingPathRejoinIx(loopingConnector, 2, follower) == 7,
+        'A connector that doubles back must rejoin after the worker\'s final crossing')
+strategy.workStarterCourse = loopingConnector
+strategy.connectingPathRejoinIx = 4
+local originalFindPathToNode = strategy.pathfinderController.findPathToNode
+local retriedDirectly = false
+strategy.pathfinderController.findPathToNode = function()
+    retriedDirectly = true
+end
+strategy:onPathfindingDoneToConnectingPathEnd(nil, true, {append = function() end}, false)
+assert(retriedDirectly and strategy.connectingPathRejoinIx == nil,
+        'A moving worker on the remaining route must cause a direct collision-aware detour')
+strategy.pathfinderController.findPathToNode = originalFindPathToNode
 local leadIsStopped = false
 follower.getCpDriveStrategy = function() return {
     proximityController = {isStopped = function() return leadIsStopped end},

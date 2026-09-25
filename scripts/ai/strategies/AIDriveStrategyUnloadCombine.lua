@@ -2471,6 +2471,7 @@ function AIDriveStrategyUnloadCombine:isStandbyTargetOnHarvesterRoute(waypoint)
                             dx, dz = x - px, z - pz
                             lengthSquared = dx * dx + dz * dz
                         end
+                        if lengthSquared <= 0.01 then break end
                         local fraction = math.max(0, math.min(1,
                                 ((waypoint.x - px) * dx + (waypoint.z - pz) * dz) / lengthSquared))
                         local distance = MathUtil.vector2Length(waypoint.x - px - fraction * dx,

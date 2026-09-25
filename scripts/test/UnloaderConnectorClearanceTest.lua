@@ -119,6 +119,12 @@ assert(not strategy:isStandbyTargetOnHarvesterRoute({x = 80, z = 60}),
     'A separate parking area must remain available')
 assert(strategy:isStandbyTargetOnHarvesterRoute({x = 40, z = 35}),
     'The assigned combine\'s upcoming connector must also be protected')
+local nearLimitCourse = {getNumberOfWaypoints = function() return 3 end,
+    getWaypointPosition = function(_, ix) return ({0, 149.995, 300})[ix], 0, 0 end}
+driver.ppc = {getCourse = function() return nearLimitCourse end,
+    getCurrentWaypointIx = function() return 1 end}
+assert(not strategy:isStandbyTargetOnHarvesterRoute({x = 300, z = 100}),
+    'A sub-decimetre route segment at the 150 m lookahead limit must not divide by zero')
 held = false
 AIDriveStrategyUnloadCombine.startPathfindingToStandby(strategy, combine, {x = 80, z = 0})
 assert(held, 'An occupied standby target must be rejected before pathfinding')

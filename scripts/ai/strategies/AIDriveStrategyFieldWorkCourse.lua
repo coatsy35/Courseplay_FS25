@@ -774,6 +774,22 @@ function AIDriveStrategyFieldWorkCourse:getConnectingPathRejoinIx(course, blocke
     return nil
 end
 
+--- A generated connector can double back across the same combine several times. Choosing a point just
+--- beyond its first crossing leaves the suffix obstructed and rejects every successful detour.
+function AIDriveStrategyFieldWorkCourse:getClearConnectingPathRejoinIx(course, blockedIx, otherWorker)
+    local rejoinIx = self:getConnectingPathRejoinIx(course, blockedIx, otherWorker)
+    while rejoinIx and rejoinIx < course:getNumberOfWaypoints() do
+        local remainder = course:copy(self.vehicle, rejoinIx + 1)
+        local blocked, blocker, worker, remainderIx = self:isConnectingPathBlockedByWorker(remainder)
+        if not blocked then return rejoinIx end
+        if blocker ~= 'fieldWorker' or not remainderIx then return nil end
+        local nextIx = self:getConnectingPathRejoinIx(course, rejoinIx + remainderIx, worker)
+        if not nextIx or nextIx <= rejoinIx then return nil end
+        rejoinIx = nextIx
+    end
+    return rejoinIx
+end
+
 function AIDriveStrategyFieldWorkCourse:setConnectingPathBoundary(context, width)
     local boundary = FieldworkBoundary.forVehicle(self.vehicle, width)
     self.connectingPathBoundary = boundary
@@ -853,14 +869,10 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
             end
             self.connectingPathWorkerDetourAt = g_currentMission.time + 60000
             self.connectingPathWorkerLastSearchAt = g_currentMission.time
-            self.connectingPathRejoinIx = self:getConnectingPathRejoinIx(self.workStarterCourse,
+            self.connectingPathRejoinIx = self:getClearConnectingPathRejoinIx(self.workStarterCourse,
                     blockedIx, otherWorker)
             if not self.connectingPathRejoinIx then
-                self:debug('No connector waypoint beyond the worker has enough clearance; waiting')
-                self.connectingPathRetryAt = g_currentMission.time + 5000
-                self.state = self.states.WAITING_FOR_PATHFINDER
-                self:startCourse(self.workStarterCourse, 1)
-                return
+                self:debug('No clear generated suffix; pathfinding directly to the work start')
             end
             context._preferredPath = nil
         else
@@ -893,10 +905,10 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
 end
 
 function AIDriveStrategyFieldWorkCourse:onPathfindingFailedToConnectingPathEnd(controller, lastContext, wasLastRetry, currentRetryAttempt)
-    local blocked, blocker = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
-    if blocked and (blocker ~= 'fieldWorker' or not self.connectingPathRejoinIx or wasLastRetry) then
-        -- Do not disable collisions or fall back to the obstructed generated route. Recheck after the other
-        -- worker moves; a collision-free path found by the first search is handled by the success callback.
+    local blocked = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
+    if blocked and wasLastRetry then
+        -- Keep collision checks on the narrower-field retry. If that also fails, wait for the
+        -- blocking machine rather than driving the generated connector through it.
         self:debug('Connecting path remains occupied; waiting before retrying')
         self.connectingPathRetryAt = g_currentMission.time + 5000
         self.state = self.states.WAITING_FOR_PATHFINDER
@@ -928,9 +940,14 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToConnectingPathEnd(con
                 self.workStarterCourse:getNumberOfWaypoints() then
             local remainder = self.workStarterCourse:copy(self.vehicle, self.connectingPathRejoinIx + 1)
             if self:isConnectingPathBlockedByWorker(remainder) then
-                self:debug('Local rejoin is still occupied; waiting for a clear continuation')
-                self.connectingPathRetryAt = g_currentMission.time + 5000
-                self.state = self.states.WAITING_FOR_PATHFINDER
+                self:debug('Local rejoin is still occupied; pathfinding directly to the work start')
+                self.connectingPathRejoinIx = nil
+                local context = PathfinderContext(self.vehicle):allowReverse(self:getAllowReversePathfinding())
+                        :mustBeAccurate(true):ignoreFruit(not self.settings.avoidFruit:getValue())
+                self:setConnectingPathBoundary(context, AIUtil.getWidth(self.vehicle) + 4)
+                local _, steeringLength = AIUtil.getSteeringParameters(self.vehicle)
+                local targetNode, zOffset = self.turnContext:getTurnEndNodeAndOffsets(steeringLength)
+                self.pathfinderController:findPathToNode(context, targetNode, 0, zOffset, 1)
                 return
             end
             course:append(remainder)
