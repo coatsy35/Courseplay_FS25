@@ -2182,7 +2182,8 @@ function AIDriveStrategyUnloadCombine:updateStandbyCoordinator()
         local clearance = self.connectorClearance
         if self:isRigClearOfCourse(clearance.course, clearance.distance) then
             self.connectorClearance = nil
-            self.standbyYieldingToHarvester = nil
+            -- Stay yielded until the combine finishes this connector; otherwise the
+            -- next coordinator update sends us back across its approach.
             if self:isInStandbyState() then
                 if self.standbyAssignment then self:holdAtStandbyPosition()
                 else self:setNewState(self.states.IDLE) end
@@ -2244,7 +2245,15 @@ function AIDriveStrategyUnloadCombine:moveOutOfApproachingHarvesterPath()
             local approachDistance = self:getHarvesterTurnClearanceDistance(harvester) + 20
             if dz > 0 and dz < approachDistance and math.abs(dx) < lateralClearance and
                     (not closestDz or dz < closestDz) then
-                closestHarvester, closestDz = harvester, dz
+                local ppc = strategy.ppc
+                local course = ppc and ppc.getCourse and ppc:getCourse()
+                local fromIx = ppc and ppc.getRelevantWaypointIx and ppc:getRelevantWaypointIx()
+                local toIx = course and fromIx and course.getNextWaypointIxWithinDistance and
+                        course:getNextWaypointIxWithinDistance(fromIx, approachDistance)
+                if course and fromIx and
+                        not self:isRigClearOfCourse(course, lateralClearance, fromIx, toIx) then
+                    closestHarvester, closestDz = harvester, dz
+                end
             end
         end
     end
@@ -3190,10 +3199,13 @@ function AIDriveStrategyUnloadCombine:onBlockingVehicle(blockingVehicle, isBack)
 end
 
 --- Closest distance to any part of a connecting course, rather than to the combine's current position.
-function AIDriveStrategyUnloadCombine.getDistanceFromConnectingCourse(course, px, pz)
-    local previousX, _, previousZ = course:getWaypointPosition(1)
+function AIDriveStrategyUnloadCombine.getDistanceFromConnectingCourse(course, px, pz, fromIx, toIx)
+    if course:getNumberOfWaypoints() < 2 then return math.huge, 0, 1 end
+    fromIx = math.min(math.max(1, fromIx or 1), course:getNumberOfWaypoints() - 1)
+    toIx = math.min(math.max(fromIx + 1, toIx or course:getNumberOfWaypoints()), course:getNumberOfWaypoints())
+    local previousX, _, previousZ = course:getWaypointPosition(fromIx)
     local best, nearestDx, nearestDz = math.huge, 0, 1
-    for ix = 2, course:getNumberOfWaypoints() do
+    for ix = fromIx + 1, toIx do
         local x, _, z = course:getWaypointPosition(ix)
         local dx, dz = x - previousX, z - previousZ
         local lengthSquared = dx * dx + dz * dz
@@ -3211,7 +3223,7 @@ function AIDriveStrategyUnloadCombine.getDistanceFromConnectingCourse(course, px
     return best, nearestDx, nearestDz
 end
 
-function AIDriveStrategyUnloadCombine:isRigClearOfCourse(course, clearance)
+function AIDriveStrategyUnloadCombine:isRigClearOfCourse(course, clearance, fromIx, toIx)
     local vehicles = {self.vehicle}
     for _, child in ipairs(self.vehicle:getChildVehicles()) do
         table.insert(vehicles, child)
@@ -3220,7 +3232,7 @@ function AIDriveStrategyUnloadCombine:isRigClearOfCourse(course, clearance)
         local halfLength = AIUtil.getLength(vehicle) / 2
         for _, offset in ipairs({-halfLength, 0, halfLength}) do
             local x, _, z = localToWorld(vehicle.rootNode, 0, 0, offset)
-            if self.getDistanceFromConnectingCourse(course, x, z) < clearance then
+            if self.getDistanceFromConnectingCourse(course, x, z, fromIx, toIx) < clearance then
                 return false
             end
         end

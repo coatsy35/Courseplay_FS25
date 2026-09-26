@@ -75,6 +75,34 @@ strategy:requestToMoveOutOfWay(combine)
 assert(target and strategy.connectorClearance.course == course,
     'A blocked standby rig must pathfind clear of the combine course')
 
+-- A parked rig must not chase clearance for a segment the combine has already passed.
+local futureIntersects = false
+local pastCourse = {getNumberOfWaypoints = function() return 3 end,
+    getWaypointPosition = function(_, ix)
+        local points = {{20, 0}, {20, -20}, futureIntersects and {20, 0} or {50, -20}}
+        return points[ix][1], 0, points[ix][2]
+    end,
+    getNextWaypointIxWithinDistance = function() return 3 end}
+driver.ppc = {getCourse = function() return pastCourse end,
+    getRelevantWaypointIx = function() return 2 end}
+combine.rootNode = {x = 20, z = -20}
+combine.width, combine.length = 15, 8
+combine.getAIDirectionNode = function(self) return self.rootNode end
+function localToLocal(node, reference) return node.x - reference.x, 0, node.z - reference.z end
+strategy.getHarvesterTurnClearanceDistance = function() return 30 end
+strategy.connectorClearance = nil
+target = nil
+g_currentMission.vehicleSystem.vehicles = {tractor, parkedTractor, combine}
+assert(strategy:isRigClearOfCourse(pastCourse, 12, 2, 3) and
+        not strategy:moveOutOfApproachingHarvesterPath() and not target,
+    'A combine turning away must not send a parked trailer across its route')
+futureIntersects = true
+assert(not strategy:isRigClearOfCourse(pastCourse, 12, 2, 3) and
+        strategy:moveOutOfApproachingHarvesterPath() and strategy.connectorClearance,
+    'An imminent route overlap must still trigger collision-aware clearance')
+g_currentMission.vehicleSystem.vehicles = {tractor, parkedTractor}
+combine.rootNode = nil
+
 -- Another standby arrival should stop and replan; the parked rig must stay where it is.
 tractor.getIsCpActive = function() return true end
 parkedTractor.getCpDriveStrategy = function()
@@ -163,9 +191,19 @@ assert(strategy:onPathfindingDoneToStandby(nil, true, clearancePath) and
         strategy.state == strategy.states.DRIVING_TO_STANDBY,
     'Successful clearance pathfinding must not require a standby assignment')
 tractor.rootNode.z, trailer.rootNode.z = 70, 70
+strategy.standbyYieldingToHarvester = combine
 strategy:updateStandbyCoordinator()
 assert(strategy.state == strategy.states.IDLE and not strategy.connectorClearance,
     'An idle rig may rejoin the pool only after its full train clears the connector')
+assert(strategy.standbyYieldingToHarvester == combine,
+    'Clearing the route must not send the trailer back while the combine is still approaching')
+combine.getIsCpActive = function() return true end
+driver.states = {DRIVING_TO_WORK_START_WAYPOINT = {}}
+driver.state = driver.states.DRIVING_TO_WORK_START_WAYPOINT
+target = nil
+strategy:setStandbyAssignment({harvester = combine, role = 'STANDBY', waypoint = {x = 20, z = 0}})
+assert(strategy.state == strategy.states.WAITING_IN_STANDBY and not target,
+    'A safe standby trailer must remain parked until the combine finishes its connector')
 
 -- If forward-only pathfinding cannot turn past a combine header, a clear straight reverse makes
 -- enough room for another route search. An occupied rear corridor must never be used.
