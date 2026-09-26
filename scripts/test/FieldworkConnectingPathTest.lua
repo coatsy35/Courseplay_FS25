@@ -47,7 +47,9 @@ local follower = {rootNode = {x = 40, z = 0}, getIsCpFieldWorkActive = function(
 g_currentMission = {vehicleSystem = {vehicles = {follower}}}
 strategy.fieldWorkerProximityController = {hasSameCourse = function() return true end}
 strategy.proximityController = {unregisterBlockingObjectListener = function() end,
-    registerBlockingObjectListener = function() end}
+    registerBlockingObjectListener = function() end,
+    checkBlockingVehicleFront = function() return math.huge end,
+    checkBlockingVehicleBack = function() return math.huge end}
 longConnector.getNumberOfWaypoints = function() return 5 end
 longConnector.getWaypointPosition = function(_, ix) return (ix - 1) * 40, 0, 0 end
 longConnector.copy = function() return {getNumberOfWaypoints = function() return 1 end,
@@ -268,10 +270,13 @@ local approach = {getNumberOfWaypoints = function() return 10 end,
     getWaypointPosition = function(_, ix) return (ix - 1) * 10, 0, 0 end}
 approach.copy = function(_, _, first)
     return {getNumberOfWaypoints = function() return 11 - first end,
-        getWaypointPosition = function(_, ix) return (first + ix - 2) * 10, 0, 0 end}
+        getWaypointPosition = function(_, ix) return (first + ix - 2) * 10, 0, 0 end,
+        copy = function() return {getNumberOfWaypoints = function() return 1 end,
+            getWaypointPosition = function() return 90, 0, 0 end} end}
 end
 strategy.activeConnectingPathCourse = approach
 strategy.connectorRecoveryResumeIx = 3
+follower.rootNode.z = 40
 strategy.startCourse = function(_, route)
     assert(route:getWaypointPosition(1) == 20,
             'Obstacle recovery must start from active approach progress, not a spatially close old loop')
@@ -284,6 +289,51 @@ end
 strategy:startBlockedConnectorRecovery()
 assert(recoveryIx == 4 and strategy.state == strategy.states.WAITING_FOR_PATHFINDER,
         'An obstructed approach must find a local waypoint ahead of current course progress')
+follower.rootNode.z = 0
+local directRecovery = false
+strategy.pathfinderController.findPathToNode = function() directRecovery = true end
+recoveryIx = nil
+strategy:startBlockedConnectorRecovery()
+assert(directRecovery or (recoveryIx and recoveryIx > 4),
+        'A worker occupying the recovery suffix must not cause another search to the fixed local waypoint')
+follower.rootNode.z = 40
+
+-- A stopped turning combine immediately ahead needs physical room before either
+-- pathfinder can produce a collision-free route. Only the blocked connector
+-- worker may retreat, and the back sensor and field corridor remain authoritative.
+local turningState = {}
+local turningStrategy = {state = turningState, states = {TURNING = turningState},
+    getWorkWidth = function() return 15 end}
+follower.getCpDriveStrategy = function() return turningStrategy end
+follower.rootNode = {x = 0, z = 3}
+strategy.vehicle.getAIDirectionNode = function(self) return self.rootNode end
+strategy.fieldWorkerProximityController.getPhysicalTurnClearance = function() return 18 end
+strategy.proximityController.checkBlockingVehicleFront = function() return 1.3, follower end
+strategy.proximityController.checkBlockingVehicleBack = function() return math.huge end
+strategy.settings.reverseSpeed = {getValue = function() return 8 end}
+strategy.states.REVERSING_FOR_WORKER_CLEARANCE = {}
+strategy.raiseImplements = function() end
+local reverseCourse, reverseLength
+Course = setmetatable({createStraightReverseCourse = function(_, length)
+    reverseLength = length
+    return {contained = true}
+end}, {__call = function() return longConnector end})
+strategy.startCourse = function(_, route) reverseCourse = route end
+assert(strategy:retreatFromBlockingTurningWorker() and reverseLength > 20 and
+        strategy.state == strategy.states.REVERSING_FOR_WORKER_CLEARANCE and reverseCourse,
+        'A mutually blocked connector worker must reverse far enough to clear the turning header')
+local recoveryResumed = false
+strategy.startBlockedConnectorRecovery = function() recoveryResumed = true end
+strategy:onLastWaypointPassed()
+assert(recoveryResumed, 'After clearing the turn, the worker must replan its approach')
+strategy.startBlockedConnectorRecovery = AIDriveStrategyFieldWorkCourse.startBlockedConnectorRecovery
+strategy.proximityController.checkBlockingVehicleBack = function() return 2 end
+assert(not strategy:retreatFromBlockingTurningWorker(),
+        'A blocked rear corridor must prevent the clearance retreat')
+strategy.proximityController.checkBlockingVehicleBack = function() return math.huge end
+FieldworkBoundary.containsCourse = function() return false end
+assert(not strategy:retreatFromBlockingTurningWorker(),
+        'A retreat outside the field corridor must be rejected')
 FieldworkBoundary.contains = function() return false end
 local edgeContext = {}
 strategy:setConnectingPathBoundary(edgeContext, 8)

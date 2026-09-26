@@ -33,6 +33,7 @@ AIDriveStrategyFieldWorkCourse.myStates = {
     TEMPORARY = {},
     RETURNING_TO_START = {},
     DRIVING_TO_WORK_START_WAYPOINT = { showTurnContextDebug = true },
+    REVERSING_FOR_WORKER_CLEARANCE = {},
 }
 
 AIDriveStrategyFieldWorkCourse.normalFillLevelFullPercentage = 99.5
@@ -199,6 +200,10 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
                 self:startConnectingPath(self.connectingPathStartIx)
             end
         end
+    elseif self.state == self.states.REVERSING_FOR_WORKER_CLEARANCE then
+        -- The rear sensor still limits this deliberate retreat. The convoy's forward
+        -- separation rule must not hold us in front of the worker we are clearing.
+        self:setMaxSpeed(self.settings.reverseSpeed:getValue())
     elseif self.state == self.states.WORKING then
         self:setMaxSpeed(self.settings.fieldWorkSpeed:getValue())
     elseif self.state == self.states.TURNING then
@@ -234,6 +239,7 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
 end
 
 function AIDriveStrategyFieldWorkCourse:checkDistanceToOtherFieldWorkers()
+    if self.state == self.states.REVERSING_FOR_WORKER_CLEARANCE then return end
     -- keep away from others working on the same course
     self:setMaxSpeed(self.fieldWorkerProximityController:getMaxSpeed(self.settings.convoyDistance:getValue(), self.maxSpeed))
 end
@@ -391,6 +397,9 @@ function AIDriveStrategyFieldWorkCourse:onLastWaypointPassed()
     if self.state == self.states.RETURNING_TO_START then
         self:debug('Returned to first waypoint after fieldwork done, stopping job')
         self.vehicle:stopCurrentAIJob(AIMessageSuccessFinishedJob.new())
+    elseif self.state == self.states.REVERSING_FOR_WORKER_CLEARANCE then
+        self:debug('Cleared turning worker; retrying the centre-work approach')
+        self:startBlockedConnectorRecovery()
     elseif self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT then
         self.proximityController:unregisterBlockingObjectListener()
         self.workStarter:onLastWaypoint()
@@ -997,6 +1006,7 @@ function AIDriveStrategyFieldWorkCourse:startBlockedConnectorRecovery()
     local approach = self.activeConnectingPathCourse
     if not approach then return end
     self.proximityController:unregisterBlockingObjectListener()
+    if self:retreatFromBlockingTurningWorker() then return end
     local firstIx = math.min(self.connectorRecoveryResumeIx or 1, approach:getNumberOfWaypoints())
     self.workStarterCourse = approach:copy(self.vehicle, firstIx)
     self.connectingPathRejoinIx = nil
@@ -1019,6 +1029,11 @@ function AIDriveStrategyFieldWorkCourse:startBlockedConnectorRecovery()
             self.onPathfindingFailedToConnectingPathEnd)
     self.state = self.states.WAITING_FOR_PATHFINDER
     self:startCourse(self.workStarterCourse, 1)
+    local blocked, blocker, otherWorker, blockedIx = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
+    if blocked and blocker == 'fieldWorker' then
+        self.connectingPathRejoinIx = self:getClearConnectingPathRejoinIx(self.workStarterCourse,
+                blockedIx, otherWorker)
+    end
     if self.connectingPathRejoinIx then
         self:debug('Blocked approach: pathfinding to local waypoint %d', self.connectingPathRejoinIx)
         self.pathfinderController:findPathToWaypoint(context, self.workStarterCourse,
@@ -1029,6 +1044,50 @@ function AIDriveStrategyFieldWorkCourse:startBlockedConnectorRecovery()
         self:debug('Blocked near row start: pathfinding to the work point')
         self.pathfinderController:findPathToNode(context, targetNode, 0, zOffset, 1)
     end
+end
+
+--- Give a turning combine room when both workers have stopped nose to nose. A
+--- collision-checked straight retreat is safer than repeatedly asking the
+--- pathfinder to start inside the other machine's header.
+function AIDriveStrategyFieldWorkCourse:retreatFromBlockingTurningWorker()
+    local distance, worker = self.proximityController:checkBlockingVehicleFront()
+    if not worker or distance > 5 or not self.fieldWorkerProximityController:hasSameCourse(worker) then
+        return false
+    end
+    local strategy = worker.getCpDriveStrategy and worker:getCpDriveStrategy()
+    if not strategy or not strategy.states or strategy.state ~= strategy.states.TURNING or
+            not AIUtil.isStopped(worker) then return false end
+    local rearDistance = self.proximityController:checkBlockingVehicleBack()
+    if rearDistance and rearDistance < 5 then
+        self:debug('Cannot retreat for turning worker: rear corridor is occupied')
+        return false
+    end
+    local clearance = self.fieldWorkerProximityController:getPhysicalTurnClearance(worker, strategy)
+    local retreatDistance = math.max(10, clearance + 5 - distance)
+    local boundary = FieldworkBoundary.forVehicle(self.vehicle, 0)
+    local reverse
+    if boundary then
+        for _, fraction in ipairs({1, 0.75, 0.5, 0.25}) do
+            local candidateDistance = retreatDistance * fraction
+            if candidateDistance >= 8 then
+                local candidate = Course.createStraightReverseCourse(self.vehicle, candidateDistance, 0,
+                        self.vehicle:getAIDirectionNode())
+                if FieldworkBoundary.containsCourse(boundary, candidate, nil, nil, true) then
+                    reverse, retreatDistance = candidate, candidateDistance
+                    break
+                end
+            end
+        end
+    end
+    if not reverse then
+        self:debug('Cannot retreat for turning worker without leaving the field corridor')
+        return false
+    end
+    self:debug('Backing %.1f m to clear turning worker %s', retreatDistance, CpUtil.getName(worker))
+    self:raiseImplements()
+    self.state = self.states.REVERSING_FOR_WORKER_CLEARANCE
+    self:startCourse(reverse, 1)
+    return true
 end
 
 function AIDriveStrategyFieldWorkCourse:onBlockedConnectingPath(isBack)

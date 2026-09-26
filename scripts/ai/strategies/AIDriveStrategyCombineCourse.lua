@@ -335,7 +335,8 @@ end
 
 function AIDriveStrategyCombineCourse:checkDistanceToOtherFieldWorkers()
     -- do not slow down/stop for convoy while unloading
-    if self.state ~= self.states.UNLOADING_ON_FIELD then
+    if self.state ~= self.states.UNLOADING_ON_FIELD and
+            self.state ~= self.states.REVERSING_FOR_WORKER_CLEARANCE then
         self:setMaxSpeed(self.fieldWorkerProximityController:getMaxSpeed(self.settings.convoyDistance:getValue(), self.maxSpeed))
     end
 end
