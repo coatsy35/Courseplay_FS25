@@ -235,6 +235,50 @@ function FieldWorkerProximityController:getPhysicalTurnClearance(otherVehicle, o
             rearwardManeuverDistance
 end
 
+--- A turn priority only needs to stop us while the other worker occupies the route still ahead.
+--- The trail can remain close after the lead worker has turned away across the crop.
+function FieldWorkerProximityController:isWorkerClearOfRemainingCourse(otherVehicle, otherStrategy)
+    local strategy = self.vehicle:getCpDriveStrategy()
+    local ppc = strategy and strategy.ppc
+    local course = ppc and ppc.getCourse and ppc:getCourse()
+    if not course or not course.getNumberOfWaypoints or not course.getWaypointPosition or
+            not ppc.getRelevantWaypointIx or not course.getNextWaypointIxWithinDistance or
+            not otherVehicle.rootNode then return false end
+    local fromIx = math.max(1, ppc:getRelevantWaypointIx() - 1)
+    if fromIx >= course:getNumberOfWaypoints() then return false end
+    local toIx = course:getNextWaypointIxWithinDistance(fromIx,
+            self:getPhysicalTurnClearance(otherVehicle, otherStrategy) + self.turnSlowDownBand)
+    local otherWidth = otherStrategy.getWorkWidth and otherStrategy:getWorkWidth() or AIUtil.getWidth(otherVehicle)
+    local clearance = (math.max(self.workingWidth, AIUtil.getWidth(self.vehicle)) +
+            math.max(otherWidth, AIUtil.getWidth(otherVehicle))) / 2 + 5
+    local parts = {otherVehicle}
+    if otherVehicle.getChildVehicles then
+        for _, child in ipairs(otherVehicle:getChildVehicles()) do table.insert(parts, child) end
+    end
+    for _, part in ipairs(parts) do
+        if part.rootNode then
+            local halfLength = AIUtil.getLength(part) / 2
+            for _, offset in ipairs({-halfLength, 0, halfLength}) do
+                local x, _, z = localToWorld(part.rootNode, 0, 0, offset)
+                local previousX, _, previousZ = course:getWaypointPosition(fromIx)
+                for ix = fromIx + 1, toIx do
+                    local nextX, _, nextZ = course:getWaypointPosition(ix)
+                    local dx, dz = nextX - previousX, nextZ - previousZ
+                    local lengthSquared = dx * dx + dz * dz
+                    if lengthSquared > 0.01 then
+                        local fraction = math.max(0, math.min(1,
+                                ((x - previousX) * dx + (z - previousZ) * dz) / lengthSquared))
+                        if MathUtil.vector2Length(x - previousX - fraction * dx,
+                                z - previousZ - fraction * dz) < clearance then return false end
+                    end
+                    previousX, previousZ = nextX, nextZ
+                end
+            end
+        end
+    end
+    return true
+end
+
 --- Limit our speed if there are vehicles in front of us in the same or adjacent row
 function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpeed)
     local minDistanceFromOthers = math.huge
@@ -259,11 +303,15 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 local selfIsAheadOnTrail = distanceFromMe > 0 and distanceFromMe < math.huge
                 otherIsAheadOnTrail, selfIsAheadOnTrail = self:resolveTurnConvoyOrder(otherVehicle, otherStrategy,
                         otherIsAheadOnTrail, selfIsAheadOnTrail)
+                local clearOfRemainingCourse = (isDrivingToWorkStart(self.vehicle:getCpDriveStrategy()) or
+                        isTurningOrManeuvering(self.vehicle:getCpDriveStrategy())) and
+                        self:isWorkerClearOfRemainingCourse(otherVehicle, otherStrategy)
                 self:debugSparse('have same course as %s (done %s, convoy distance %.1f), distance %.1f',
                         CpUtil.getName(otherVehicle), otherIsDone, otherConvoyDistance, distanceFromOther)
                 local hasTurnPriority = self:hasPhysicalTurnPriority(otherVehicle, otherStrategy,
                         otherIsAheadOnTrail, selfIsAheadOnTrail)
-                if distanceFromOther > 0 and distanceFromOther < distanceLimit and not hasTurnPriority then
+                if distanceFromOther > 0 and distanceFromOther < distanceLimit and
+                        not hasTurnPriority and not clearOfRemainingCourse then
                     self:debugSparse('too close (%.1f m < %.1f) to %s in front of me, slowing down.',
                     distanceFromOther, distanceLimit, CpUtil.getName(otherVehicle))
                     minDistanceFromOthers = math.min(minDistanceFromOthers, distanceFromOther)
@@ -275,7 +323,7 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 -- waypoint. The yielding machine therefore also observes the real separation and stops outside an
                 -- envelope based on both vehicle lengths and the wider header.
                 if self:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy,
-                        otherIsAheadOnTrail, selfIsAheadOnTrail) then
+                        otherIsAheadOnTrail, selfIsAheadOnTrail) and not clearOfRemainingCourse then
                     local x, _, z = getWorldTranslation(self.vehicle.rootNode)
                     local ox, _, oz = getWorldTranslation(otherVehicle.rootNode)
                     local physicalDistance = MathUtil.vector2Length(ox - x, oz - z)

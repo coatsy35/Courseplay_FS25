@@ -27,6 +27,7 @@ local strategy = setmetatable({vehicle = tractor, standbyAssignment = {},
     states = {WAITING_IN_STANDBY = {}, WAITING_FOR_STANDBY_PATHFINDER = {}, DRIVING_TO_STANDBY = {}},
     state = {}, debug = function() end, setMaxSpeed = function() end}, {__index = AIDriveStrategyUnloadCombine})
 strategy.getFieldworkBoundaryForRig = function() return {} end
+strategy.getHarvesterTurnClearanceDistance = function() return 30 end
 strategy.isAvailableForStaging = function() return true end
 local target, emergency
 strategy.startPathfindingToStandby = function(_, harvester, waypoint, avoidHarvester, emergencyClearance)
@@ -100,6 +101,12 @@ futureIntersects = true
 assert(not strategy:isRigClearOfCourse(pastCourse, 12, 2, 3) and
         strategy:moveOutOfApproachingHarvesterPath() and strategy.connectorClearance,
     'An imminent route overlap must still trigger collision-aware clearance')
+futureIntersects = false
+strategy.state = strategy.states.DRIVING_TO_STANDBY
+strategy:updateStandbyCoordinator()
+assert(not strategy.connectorClearance and strategy.state == strategy.states.WAITING_IN_STANDBY and
+        strategy.standbyYieldingToHarvester == combine,
+    'A clearing trailer must stop when the combine turns away from its remaining connector')
 g_currentMission.vehicleSystem.vehicles = {tractor, parkedTractor}
 combine.rootNode = nil
 

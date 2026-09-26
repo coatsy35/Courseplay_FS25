@@ -2004,7 +2004,7 @@ end
 
 function AIDriveStrategyUnloadCombine:isConnectorClearancePending()
     local clearance = self.connectorClearance
-    return clearance and not self:isRigClearOfCourse(clearance.course, clearance.distance) or false
+    return clearance and not self:isRigClearOfConnectorClearance(clearance) or false
 end
 
 ---@param callingHarvester table|nil
@@ -2180,7 +2180,7 @@ end
 function AIDriveStrategyUnloadCombine:updateStandbyCoordinator()
     if self.connectorClearance then
         local clearance = self.connectorClearance
-        if self:isRigClearOfCourse(clearance.course, clearance.distance) then
+        if self:isRigClearOfConnectorClearance(clearance) then
             self.connectorClearance = nil
             -- Stay yielded until the combine finishes this connector; otherwise the
             -- next coordinator update sends us back across its approach.
@@ -2326,7 +2326,7 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
     self.standbyAssignment = assignment
     if self.connectorClearance then
         local clearance = self.connectorClearance
-        if not self:isRigClearOfCourse(clearance.course, clearance.distance) then
+        if not self:isRigClearOfConnectorClearance(clearance) then
             if self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
                     self.state == self.states.DRIVING_TO_STANDBY then
                 return
@@ -3240,6 +3240,30 @@ function AIDriveStrategyUnloadCombine:isRigClearOfCourse(course, clearance, from
     return true
 end
 
+--- A moving combine only needs clearance along the part of its active connector still ahead.
+--- A requested future connector is checked in full until the combine starts driving it.
+function AIDriveStrategyUnloadCombine:getConnectorClearanceRange(clearance)
+    if not clearance.followActiveCourse then
+        return 1, clearance.course:getNumberOfWaypoints()
+    end
+    local driver = clearance.harvester:getCpDriveStrategy()
+    local ppc = driver and driver.ppc
+    if not ppc or not ppc.getCourse or ppc:getCourse() ~= clearance.course then
+        return nil
+    end
+    local fromIx = ppc.getRelevantWaypointIx and ppc:getRelevantWaypointIx() or 1
+    if fromIx >= clearance.course:getNumberOfWaypoints() then return nil end
+    local toIx = clearance.course.getNextWaypointIxWithinDistance and
+            clearance.course:getNextWaypointIxWithinDistance(fromIx, clearance.lookAheadDistance) or
+            clearance.course:getNumberOfWaypoints()
+    return fromIx, toIx
+end
+
+function AIDriveStrategyUnloadCombine:isRigClearOfConnectorClearance(clearance)
+    local fromIx, toIx = self:getConnectorClearanceRange(clearance)
+    return not fromIx or self:isRigClearOfCourse(clearance.course, clearance.distance, fromIx, toIx)
+end
+
 --- A forward-only pathfinder cannot turn a tractor and articulated trailer when a combine's header is
 --- already beside them. Back up in a straight line first, but only when the complete rig remains inside
 --- the field and there is no vehicle in the swept rear corridor.
@@ -3335,7 +3359,7 @@ function AIDriveStrategyUnloadCombine:isNewConnectorClearanceTarget(x, z)
     return true
 end
 
---- Select an actual holding place outside the whole connector, including the trailer's swept width.
+--- Select an actual holding place outside the relevant connector, including the trailer's swept width.
 --- Prefer the harvested side. If the combine's connector is already blocked and no harvested
 --- holding point exists, allow a field-contained emergency route through crop rather than deadlock.
 function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
@@ -3348,16 +3372,20 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
             width / 2 + 5
     local current = self.connectorClearance
     local attempt = current and current.harvester == harvester and current.attempt or 0
+    local followActiveCourse = driver and driver.ppc and driver.ppc.getCourse and driver.ppc:getCourse() == course or false
     self.connectorClearance = {harvester = harvester, course = course, distance = clearance, attempt = attempt,
+        followActiveCourse = followActiveCourse,
+        lookAheadDistance = self:getHarvesterTurnClearanceDistance(harvester) + 20,
         failedTargets = current and current.harvester == harvester and current.failedTargets or {},
         reverseAttempts = current and current.harvester == harvester and current.reverseAttempts or 0}
     self.standbyYieldingToHarvester = harvester
-    if self:isRigClearOfCourse(course, clearance) then
+    if self:isRigClearOfConnectorClearance(self.connectorClearance) then
         self:holdAtStandbyPosition()
         return true
     end
     local x, _, z = getWorldTranslation(self.vehicle.rootNode)
-    local _, dx, dz = self.getDistanceFromConnectingCourse(course, x, z)
+    local fromIx, toIx = self:getConnectorClearanceRange(self.connectorClearance)
+    local _, dx, dz = self.getDistanceFromConnectingCourse(course, x, z, fromIx, toIx)
     local boundary = self:getFieldworkBoundaryForRig()
     local trainLength = self.getTrainLength(self.vehicle)
     local offset = clearance + trainLength / 2 + 5
@@ -3373,7 +3401,7 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
                             (pass == 2 or not PathfinderUtil.hasFruit(targetX, targetZ, width + 2, trainLength + 2)) and
                             self:isConnectorClearanceTargetFree(targetX, targetZ, width, trainLength) and
                             self:isNewConnectorClearanceTarget(targetX, targetZ) and
-                            self.getDistanceFromConnectingCourse(course, targetX, targetZ) >= clearance + trainLength / 2 then
+                            self.getDistanceFromConnectingCourse(course, targetX, targetZ, fromIx, toIx) >= clearance + trainLength / 2 then
                         self:debug('Clearing %s connecting route by %.1f m%s', CpUtil.getName(harvester),
                                 distance, pass == 2 and ' (emergency route through crop)' or '')
                         self:startPathfindingToStandby(harvester,

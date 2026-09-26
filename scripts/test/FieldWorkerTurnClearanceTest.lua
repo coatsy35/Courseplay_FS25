@@ -147,3 +147,26 @@ assert(workingController:getMaxSpeed(30, 10) == 0,
 local oppositeAhead, oppositeBehind = rearApproachingController:resolveTurnConvoyOrder(workingVehicle, working, false, true)
 assert(oppositeAhead and not oppositeBehind, 'Contradictory trail samples during the turn must not reverse established priority')
 print('Independent course turn regression: OK')
+
+-- The following combine already has a safe corner route. Once the leader turns across the crop,
+-- its old trail and convoy priority must not hold the follower inside the empty corner.
+local cornerCourse = {
+    getNumberOfWaypoints = function() return 2 end,
+    getWaypointPosition = function(_, ix) return 0, 0, (ix - 1) * 60 end,
+    getNextWaypointIxWithinDistance = function() return 2 end,
+}
+working.state = states.TURNING
+working.ppc = {getCourse = function() return cornerCourse end,
+    getRelevantWaypointIx = function() return 1 end}
+workingVehicle.rootNode = {x = 0, z = 0}
+turningVehicle.rootNode = {x = 0, z = 30}
+getWorldTranslation = function(node) return node.x, 0, node.z end
+localToWorld = function(node, _, _, offset) return node.x, 0, node.z + offset end
+workingController.hasSameCourse = function() return true end
+workingController.getFieldWorkProximity = function() return -20 end
+turning.getFieldWorkProximity = function() return 20 end
+assert(workingController:getMaxSpeed(30, 10) == 0,
+        'The following combine must still yield while the leader occupies its remaining corner route')
+turningVehicle.rootNode.x = 30
+assert(workingController:getMaxSpeed(30, 10) == 10,
+        'The following combine must resume when the leader turns clear of its remaining route')
