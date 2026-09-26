@@ -348,6 +348,7 @@ end
 -----------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyFieldWorkCourse:onWaypointChange(ix, course)
     self:calculateTightTurnOffset()
+    self:updateConnectingPathLookahead(ix)
     if not self.state ~= self.states.TURNING
             and self.course:isTurnStartAtIx(ix) then
         if self.state == self.states.INITIAL or self.state == self.states.PREPARING then
@@ -616,6 +617,35 @@ function AIDriveStrategyFieldWorkCourse:startPathfindingToNextWaypoint(ix)
     -- to have a course set while waiting for the pathfinder
     self:startCourse(self.fieldWorkCourse, self.waypointToContinueOnFailedPathfinding)
     self.pathfinderController:findPathToNode(context, targetNode, 0, zOffset, 1)
+end
+
+-- A path-found connector can run for hundreds of metres. The short lookahead
+-- needed for its bends makes a fast combine chase each small straight waypoint.
+function AIDriveStrategyFieldWorkCourse:updateConnectingPathLookahead(ix)
+    if self.state ~= self.states.DRIVING_TO_WORK_START_WAYPOINT or not self.connectingPathStartIx then
+        return
+    end
+    local course = self.course
+    local lastIx = course:getNumberOfWaypoints()
+    local endIx = course:getNextWaypointIxWithinDistance(ix, 15) or lastIx
+    local straight = endIx < lastIx
+    local startAngle = course:getWaypointAngleDeg(ix)
+    for i = ix, endIx - 1 do
+        local angle = course:getWaypointAngleDeg(i)
+        local nextAngle = course:getWaypointAngleDeg(i + 1)
+        if course:isReverseAt(i) or course:isReverseAt(i + 1) or
+                not startAngle or not angle or not nextAngle or
+                math.abs(CpMathUtil.getDeltaAngle(math.rad(nextAngle), math.rad(startAngle))) > math.rad(8) or
+                math.abs(CpMathUtil.getDeltaAngle(math.rad(nextAngle), math.rad(angle))) > math.rad(8) then
+            straight = false
+            break
+        end
+    end
+    if straight then
+        self.ppc:setLookaheadDistance(math.max(self.ppc.normalLookAheadDistance, 6))
+    else
+        self.ppc:setShortLookaheadDistance()
+    end
 end
 
 --- Check the direct join that would be used if pathfinding fails, before disabling collisions.

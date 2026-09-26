@@ -30,6 +30,37 @@ local strategy = setmetatable({
     getWorkWidth = function() return 15 end,
 }, {__index = AIDriveStrategyFieldWorkCourse})
 
+CpMathUtil = {getDeltaAngle = function(a, b) return (a - b + math.pi) % (2 * math.pi) - math.pi end}
+local angles, reversing = {0, 0, 0, 0}, {}
+local lookahead
+local connectorStrategy = setmetatable({
+    state = 'connecting', states = {DRIVING_TO_WORK_START_WAYPOINT = 'connecting'},
+    connectingPathStartIx = 1,
+    course = {
+        getNumberOfWaypoints = function() return 10 end,
+        getNextWaypointIxWithinDistance = function(_, ix) return math.min(ix + 3, 10) end,
+        getWaypointAngleDeg = function(_, ix) return angles[ix] or 0 end,
+        isReverseAt = function(_, ix) return reversing[ix] or false end,
+    },
+    ppc = {
+        normalLookAheadDistance = 5,
+        setLookaheadDistance = function(_, distance) lookahead = distance end,
+        setShortLookaheadDistance = function() lookahead = 'short' end,
+    },
+}, {__index = AIDriveStrategyFieldWorkCourse})
+connectorStrategy:updateConnectingPathLookahead(1)
+assert(lookahead == 6, 'A long straight connector must not use turn-length steering lookahead')
+angles[4] = 12
+connectorStrategy:updateConnectingPathLookahead(1)
+assert(lookahead == 'short', 'A bend ahead must retain the short steering lookahead')
+angles[4] = 0
+reversing[3] = true
+connectorStrategy:updateConnectingPathLookahead(1)
+assert(lookahead == 'short', 'A reversal ahead must retain the short steering lookahead')
+reversing[3] = nil
+connectorStrategy:updateConnectingPathLookahead(8)
+assert(lookahead == 'short', 'The work-start entry must retain precise steering')
+
 local localConnector = {contained = true, getLength = function() return 45 end}
 assert(not strategy:canDriveConnectingPathDirectly(localConnector),
         'A local join must retain accurate pathfinding')
