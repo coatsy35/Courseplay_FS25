@@ -693,7 +693,7 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
     -- polygon is valid, but driving it directly bypasses collision-aware routing and can hit that worker.
     if not course.getNumberOfWaypoints or not course.getWaypointPosition then return false end
     local ownWidth = math.max(AIUtil.getWidth(self.vehicle), self:getWorkWidth())
-    local parkedUnloader, parkedProgress
+    local parkedUnloader, parkedVehicle, parkedIx, parkedProgress
     local blockingWorker, workerIx, workerProgress
     for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
         if other ~= self.vehicle then
@@ -735,7 +735,8 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
                                             blockingWorker, workerIx, workerProgress = other, ix, progress
                                         end
                                     elseif not parkedProgress or progress < parkedProgress then
-                                        parkedUnloader, parkedProgress = otherStrategy, progress
+                                        parkedUnloader, parkedVehicle, parkedIx, parkedProgress =
+                                                otherStrategy, other, ix, progress
                                     end
                                     break
                                 end
@@ -755,7 +756,7 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
             parkedUnloader:requestToMoveOutOfWay(self.vehicle, nil, course)
         end
         self:debug('Connecting path occupied by a trailer; waiting for clearance')
-        return true, 'unloader'
+        return true, 'unloader', parkedVehicle, parkedIx
     end
     if blockingWorker then
         self:debug('Connecting path crosses %s; waiting for the worker to clear', CpUtil.getName(blockingWorker))
@@ -783,15 +784,15 @@ function AIDriveStrategyFieldWorkCourse:getConnectingPathRejoinIx(course, blocke
     return nil
 end
 
---- A generated connector can double back across the same combine several times. Choosing a point just
---- beyond its first crossing leaves the suffix obstructed and rejects every successful detour.
+--- A generated connector can double back across a combine or parked trailer several times. Choosing a point
+--- just beyond its first crossing leaves the suffix obstructed and rejects every successful detour.
 function AIDriveStrategyFieldWorkCourse:getClearConnectingPathRejoinIx(course, blockedIx, otherWorker)
     local rejoinIx = self:getConnectingPathRejoinIx(course, blockedIx, otherWorker)
     while rejoinIx and rejoinIx < course:getNumberOfWaypoints() do
         local remainder = course:copy(self.vehicle, rejoinIx + 1)
         local blocked, blocker, worker, remainderIx = self:isConnectingPathBlockedByWorker(remainder)
         if not blocked then return rejoinIx end
-        if blocker ~= 'fieldWorker' or not remainderIx then return nil end
+        if not remainderIx or (blocker ~= 'fieldWorker' and blocker ~= 'unloader') then return nil end
         local nextIx = self:getConnectingPathRejoinIx(course, rejoinIx + remainderIx, worker)
         if not nextIx or nextIx <= rejoinIx then return nil end
         rejoinIx = nextIx
@@ -862,14 +863,23 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
             local otherStrategy = otherWorker.getCpDriveStrategy and otherWorker:getCpDriveStrategy()
             local workerStalled = otherStrategy and otherStrategy.proximityController and
                     otherStrategy.proximityController:isStopped() and AIUtil.isStopped(otherWorker)
+            local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+            local ox, _, oz = getWorldTranslation(otherWorker.rootNode)
+            local physicalDistance = MathUtil.vector2Length(ox - x, oz - z)
+            local turnClearance = otherStrategy and self.fieldWorkerProximityController and
+                    self.fieldWorkerProximityController:getPhysicalTurnClearance(otherWorker, otherStrategy) or
+                    2 * self:getWorkWidth() + 10
+            local workerClearOfTurn = physicalDistance > turnClearance + 5
             -- Wait for the preceding worker first. If it cannot clear, try a collision-aware
             -- detour periodically. The lead worker may detour immediately around a follower;
             -- the follower must not repeatedly search the entire connector through the lead worker.
+            -- Once the worker is outside the physical turn envelope, start that checked detour now;
+            -- an occupied point farther along a long connector is not a reason to keep this corner stopped.
             self.connectingPathWorkerDetourAt = self.connectingPathWorkerDetourAt or
                     g_currentMission.time + 15000
-            if (workerAhead and (not workerStalled or self.connectingPathWorkerLastSearchAt and
+            if not workerClearOfTurn and ((workerAhead and (not workerStalled or self.connectingPathWorkerLastSearchAt and
                     g_currentMission.time < self.connectingPathWorkerLastSearchAt + 30000)) or
-                    (workerAhead == nil and g_currentMission.time < self.connectingPathWorkerDetourAt) then
+                    (workerAhead == nil and g_currentMission.time < self.connectingPathWorkerDetourAt)) then
                 self:debug('Connecting path occupied by another field worker; waiting for it to clear')
                 self.connectingPathRetryAt = g_currentMission.time + 5000
                 self.state = self.states.WAITING_FOR_PATHFINDER

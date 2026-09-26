@@ -45,7 +45,8 @@ function getWorldTranslation(node) return node.x, 0, node.z end
 function localToWorld(node, _, _, offset) return node.x, 0, node.z + offset end
 local follower = {rootNode = {x = 40, z = 0}, getIsCpFieldWorkActive = function() return true end}
 g_currentMission = {vehicleSystem = {vehicles = {follower}}}
-strategy.fieldWorkerProximityController = {hasSameCourse = function() return true end}
+strategy.fieldWorkerProximityController = {hasSameCourse = function() return true end,
+    getPhysicalTurnClearance = function() return 50 end}
 strategy.proximityController = {unregisterBlockingObjectListener = function() end,
     registerBlockingObjectListener = function() end,
     checkBlockingVehicleFront = function() return math.huge end,
@@ -103,6 +104,13 @@ g_currentMission.time = 22000
 strategy:startConnectingPath(1)
 assert(searches == 1,
         'A failed detour must not turn into repeated whole-field searches while the worker remains')
+follower.rootNode.x = 100
+g_currentMission.time = 23000
+strategy:startConnectingPath(1)
+assert(searches == 2,
+        'A worker beyond the turn-clearance distance must allow an immediate collision-aware detour')
+follower.rootNode.x = 40
+g_currentMission.time = 22000
 strategy.vehicle.rootNode = {x = 0, z = 0}
 strategy.waypointToContinueOnFailedPathfinding = 4
 assert(strategy:isNextWaypointBlockedByWorker(),
@@ -180,6 +188,18 @@ strategy.connectingPathRejoinIx = nil
 strategy:onPathfindingDoneToConnectingPathEnd(nil, true, detour, false)
 assert(drivenCourse == detour and strategy.connectingPathRetryAt == nil,
         'A collision-free pathfinder detour must proceed when a parked trailer cannot clear the connector')
+local function section(first)
+    return {getNumberOfWaypoints = function() return 11 - first end,
+        getWaypointPosition = function(_, ix) return (first + ix - 2) * 20, 0, 0 end,
+        copy = function(_, _, ix) return section(first + ix - 1) end}
+end
+local extendedConnector = section(1)
+trailer.rootNode.x = 100
+trailer.getChildVehicles = function() return {{rootNode = {x = 88, z = 0}}} end
+local trailerRejoin = strategy:getClearConnectingPathRejoinIx(extendedConnector, 2, follower)
+assert(trailerRejoin and trailerRejoin > 4,
+        'A parked trailer farther along the connector must move the local rejoin beyond it')
+trailer.rootNode.x = 60
 trailer.rootNode.z = 40
 trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 40}}} end
 assert(strategy:canDriveConnectingPathDirectly(longConnector),
