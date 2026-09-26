@@ -107,6 +107,12 @@ strategy:updateStandbyCoordinator()
 assert(not strategy.connectorClearance and strategy.state == strategy.states.WAITING_IN_STANDBY and
         strategy.standbyYieldingToHarvester == combine,
     'A clearing trailer must stop when the combine turns away from its remaining connector')
+strategy.connectorClearance = {harvester = combine, course = pastCourse, distance = 12}
+combine.getIsCpActive = function() return false end
+strategy:updateStandbyCoordinator()
+assert(not strategy.connectorClearance,
+    'A parked trailer must discard an obsolete clearance request when the combine job ends')
+combine.getIsCpActive = nil
 g_currentMission.vehicleSystem.vehicles = {tractor, parkedTractor}
 combine.rootNode = nil
 

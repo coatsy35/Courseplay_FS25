@@ -283,6 +283,38 @@ _, _, _, speed = frame:getDriveData(16)
 assert(speed == 0 and resumed == 1, 'A queued call must remain stopped while checking whether it may depart')
 print('Unloader update dispatcher regressions: OK')
 
+-- When the final combine stops after emptying, a partly filled trailer must leave its pipe
+-- before handing off for delivery. A surviving combine still needs that trailer available.
+local finished = unloader(0)
+finished.updateLowFrequencyImplementControllers = function() end
+finished.calculateAutoAimPipeOffsetX = function() end
+finished.ppc = {isReversing = function() return false end,
+    getGoalPointPosition = function() return 1, 0, 1 end}
+finished.checkProximitySensors = function() end
+finished.checkCollisionWarning = function() end
+finished.isDriveUnloadNowRequested = function() return false end
+finished.combineUnloadStates = {finished.states.UNLOADING_STOPPED_COMBINE}
+finished.getFillLevelPercentage = function() return 35 end
+finished.combineToUnload = a
+finished.state = finished.states.UNLOADING_STOPPED_COMBINE
+a.getIsCpActive = function() return false end
+local departing
+finished.startMovingBackFromCombine = function(_, state, combine)
+    departing = state == finished.states.MOVING_BACK_WITH_TRAILER_FULL and combine == a
+    finished.state = state
+end
+finished:getDriveData(16)
+assert(departing and finished.combineToUnload == nil,
+        'A partly loaded trailer must depart when its final combine ends work')
+a.getIsCpActive = function() return true end
+local remaining = harvester(50)
+g_currentMission.vehicleSystem.vehicles = {a, remaining}
+getWorldTranslation = function(node) return node.x, 0, node.z end
+finished.isServingPosition = function(_, x) return x == 50 end
+assert(finished:areThereAnyCombinesOrLoaderLeftoverOnTheField(a),
+        'The remaining combine position, not the stopped combine position, identifies field demand')
+g_currentMission.vehicleSystem.vehicles = {}
+
 -- Large-field searches must reach their own bounded completion, rather than lose the call after 30 seconds.
 local frameCombine, frameCombineStrategy = harvester(100)
 frameCombineStrategy.registerUnloader = function() end

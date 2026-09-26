@@ -397,19 +397,21 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         end
     end
 
-    if self.combineToUnload == nil or not self.combineToUnload:getIsCpActive() then
-        if CpUtil.isStateOneOf(self.state, self.combineUnloadStates) then
-
-        end
-    end
-
     if self:hasToWaitForAssignedCombine() then
         --- Safety check to make sure a combine is assigned, when needed.
         self:setMaxSpeed(0)
-        self:debugSparse("Combine to unload lost during unload, waiting for something todo.")
         if self:isDriveUnloadNowRequested() then
             self:debug('Drive unload now requested')
             self:startUnloadingTrailers()
+        elseif self.combineToUnload and self:getFillLevelPercentage() > 0.1 and
+                not self:areThereAnyCombinesOrLoaderLeftoverOnTheField(self.combineToUnload) then
+            local finishedCombine = self.combineToUnload
+            self:debug('Assigned combine stopped with crop in the trailer; clearing it before delivery')
+            self:releaseCombine()
+            self:startMovingBackFromCombine(self.states.MOVING_BACK_WITH_TRAILER_FULL, finishedCombine)
+        else
+            self:debug('Assigned combine stopped; releasing the call for another active combine')
+            self:startWaitingForSomethingToDo()
         end
     elseif self.state == self.states.WAITING_FOR_FIELD_BOUNDARY_DETECTION then
         self:setMaxSpeed(0)
@@ -604,13 +606,12 @@ function AIDriveStrategyUnloadCombine:hasToWaitForAssignedCombine()
 end
 
 ---@param combine table
----@param combineDriver AIDriveStrategyCombineCourse
-function AIDriveStrategyUnloadCombine:areThereAnyCombinesOrLoaderLeftoverOnTheField(combine, combineDriver)
+function AIDriveStrategyUnloadCombine:areThereAnyCombinesOrLoaderLeftoverOnTheField(combine)
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         if vehicle ~= combine and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
-            local x, _, z = getWorldTranslation(combine.rootNode)
+            local x, _, z = getWorldTranslation(vehicle.rootNode)
             if self:isServingPosition(x, z, 10) then
-                --- At least one more combine oder loader is working on this field.
+                --- At least one more combine or loader is working on this field.
                 return true
             end
         end
@@ -3260,6 +3261,7 @@ function AIDriveStrategyUnloadCombine:getConnectorClearanceRange(clearance)
 end
 
 function AIDriveStrategyUnloadCombine:isRigClearOfConnectorClearance(clearance)
+    if clearance.harvester.getIsCpActive and not clearance.harvester:getIsCpActive() then return true end
     local fromIx, toIx = self:getConnectorClearanceRange(clearance)
     return not fromIx or self:isRigClearOfCourse(clearance.course, clearance.distance, fromIx, toIx)
 end
