@@ -2969,9 +2969,9 @@ function AIDriveStrategyUnloadCombine:startMovingBackFromCombine(newState, combi
         return
     end
 
-    -- This is the post-unload departure, not the larger clearance used while a combine is turning. Trial a
-    -- ten per cent shorter release distance; both the trailer and combine use this same measured threshold.
-    local requestedDistance = self:getHarvesterTurnClearanceDistance(combine) * 0.9
+    -- Post-unload departure needs less room than an active combine turn. Keep the planned reverse and
+    -- measured release threshold together so the rig can extend only if it still obstructs the combine.
+    local requestedDistance = self:getHarvesterTurnClearanceDistance(combine) * 0.72
     self.clearanceReverseExtensions = 0
     UnloaderCoordinator:registerClearingUnloader(self, combine, requestedDistance)
     local reverseCourse, reverseDistance = self:createClearanceReverseCourse(requestedDistance)

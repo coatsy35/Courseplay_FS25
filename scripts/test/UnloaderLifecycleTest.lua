@@ -167,15 +167,16 @@ full.combineToUnload = a
 full.unloadTargetType = AIDriveStrategyUnloadCombine.UNLOAD_TYPES.COMBINE
 full.settings = {reverseSpeed = setting(5)}
 full.getHarvesterTurnClearanceDistance = function() return 50 end
-full.createClearanceReverseCourse = function() return {}, 30 end
+local plannedReverseDistance
+full.createClearanceReverseCourse = function(_, distance) plannedReverseDistance = distance; return {}, distance end
 full.isDriveUnloadNowRequested = function() return false end
 full.getAllTrailersFull = function() return true end
 assert(full:changeToUnloadWhenTrailerFull())
-assert(full.combineToUnload == a and full.state.properties.clearanceDistance == 45,
-    'A short reverse route must not reduce the new 90%-of-envelope physical clearance')
+assert(full.combineToUnload == a and full.state.properties.clearanceDistance == 36 and plannedReverseDistance == 36,
+    'The post-unload route and measured clearance must both be 20% shorter')
 full:releaseCombine()
 assert(UnloaderCoordinator:isStillClearingHarvester(nil, a), 'Deregistration must not authorise a premature pocket return')
-full.vehicle.rootNode.x = 146
+full.vehicle.rootNode.x = 137
 assert(not UnloaderCoordinator:isStillClearingHarvester(nil, a))
 
 -- Firm relief cannot be stolen by an earlier demand in the next rebalance.
