@@ -237,6 +237,7 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
     self:limitSpeed()
     self:checkProximitySensors(moveForwards)
     self:checkDistanceToOtherFieldWorkers()
+    self:checkStoppedWorkerOnConnectingPath()
 
     return gx, gz, moveForwards, self.maxSpeed, 100
 end
@@ -740,7 +741,7 @@ function AIDriveStrategyFieldWorkCourse:canDriveConnectingPathDirectly(course)
     return not self:isConnectingPathBlockedByWorker(course)
 end
 
-function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
+function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, workerSafetyMargin, workerOnly)
     -- A long generated connector can double back along a headland occupied by a following worker. Its field
     -- polygon is valid, but driving it directly bypasses collision-aware routing and can hit that worker.
     if not course.getNumberOfWaypoints or not course.getWaypointPosition then return false end
@@ -754,7 +755,7 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
                     self.fieldWorkerProximityController and self.fieldWorkerProximityController:hasSameCourse(other)
             -- An assigned unloader is still a physical obstacle. Only the request to move is restricted
             -- to a staging rig; an active call must not be cancelled merely to clear this connector.
-            local unloader = otherStrategy and otherStrategy.requestToMoveOutOfWay and
+            local unloader = not workerOnly and otherStrategy and otherStrategy.requestToMoveOutOfWay and
                     otherStrategy.getCombineToUnload
             if fieldWorker or unloader then
                 local parts = {other}
@@ -768,7 +769,8 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
                         local otherWidth = math.max(AIUtil.getWidth(part),
                                 part == other and otherStrategy and otherStrategy.getWorkWidth and
                                 otherStrategy:getWorkWidth() or 0)
-                        local clearance = (ownWidth + otherWidth) / 2 + 5
+                        local clearance = (ownWidth + otherWidth) / 2 +
+                                (fieldWorker and (workerSafetyMargin or 5) or 5)
                         local halfLength = AIUtil.getLength(part) / 2
                         for _, offset in ipairs({-halfLength, 0, halfLength}) do
                             local ox, _, oz = localToWorld(part.rootNode, 0, 0, offset)
@@ -815,6 +817,33 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course)
         return true, 'fieldWorker', blockingWorker, workerIx
     end
     return false
+end
+
+--- A stopped combine can enter a previously planned connector after pathfinding completed. Replan before
+--- proximity braking leaves both headers nose to nose; adjacent parallel rows are not treated as blocked.
+function AIDriveStrategyFieldWorkCourse:checkStoppedWorkerOnConnectingPath()
+    if self.state ~= self.states.DRIVING_TO_WORK_START_WAYPOINT or not self.connectingPathStartIx or
+            self.connectorRecoveryActive or g_currentMission.time < (self.nextConnectingWorkerCheckAt or 0) then
+        return
+    end
+    self.nextConnectingWorkerCheckAt = g_currentMission.time + 1000
+    local ix = self.course:getCurrentWaypointIx()
+    local lastIx = self.course:getNumberOfWaypoints()
+    if not ix or ix >= lastIx then return end
+    local lookAheadIx = self.course:getNextWaypointIxWithinDistance(ix, math.max(35, 2 * self:getWorkWidth()))
+    local toIx = math.min(lastIx, lookAheadIx or ix + 12)
+    if toIx <= ix then return end
+    local upcoming = self.course:copy(self.vehicle, ix, toIx)
+    -- Use the inner corridor for this early warning; the normal collision check still guards full rig width.
+    local blocked, blocker, worker = self:isConnectingPathBlockedByWorker(upcoming, -3, true)
+    if blocked and blocker == 'fieldWorker' and worker and AIUtil.isStopped(worker) then
+        self:debug('Stopped worker %s occupies the upcoming connector; replanning before the header',
+                CpUtil.getName(worker))
+        self.connectorRecoveryActive = true
+        self.connectorRecoveryResumeIx = ix
+        self:setMaxSpeed(0)
+        self:startBlockedConnectorRecovery()
+    end
 end
 
 --- Rejoin beyond the obstructing machine rather than searching to the end of a whole-field connector.

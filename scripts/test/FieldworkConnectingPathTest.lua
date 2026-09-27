@@ -310,6 +310,34 @@ assert(strategy.state == strategy.states.WAITING_FOR_PATHFINDER and strategy.con
 -- A blocked centre-work approach must replan rather than remain stopped at a tree indefinitely.
 local restartedAt
 strategy.startBlockedConnectorRecovery = function(self) restartedAt = self.connectorRecoveryResumeIx end
+local scanCourse = {
+    getCurrentWaypointIx = function() return 1 end,
+    getNumberOfWaypoints = function() return 6 end,
+    getNextWaypointIxWithinDistance = function() return 5 end,
+    copy = function() return {
+        getNumberOfWaypoints = function() return 5 end,
+        getWaypointPosition = function(_, ix) return 0, 0, (ix - 1) * 10 end,
+    } end,
+}
+strategy.course = scanCourse
+strategy.state = strategy.states.DRIVING_TO_WORK_START_WAYPOINT
+strategy.connectingPathStartIx = 1
+strategy.connectorRecoveryActive = nil
+strategy.nextConnectingWorkerCheckAt = nil
+strategy.setMaxSpeed = function(_, speed) assert(speed == 0) end
+follower.rootNode = {x = 15.2, z = 20}
+g_currentMission.time = 35000
+strategy:checkStoppedWorkerOnConnectingPath()
+assert(restartedAt == nil, 'A stopped combine in an adjacent parallel row must not interrupt the approach')
+follower.rootNode.x = 0
+g_currentMission.time = 36000
+strategy:checkStoppedWorkerOnConnectingPath()
+assert(restartedAt == 1 and strategy.connectorRecoveryActive,
+        'A stopped combine on the upcoming route must trigger collision-aware recovery before contact')
+restartedAt = nil
+strategy.connectorRecoveryActive = nil
+g_currentMission.time = 35000
+follower.rootNode = {x = 40, z = 0}
 strategy.course = {getCurrentWaypointIx = function() return 723 end}
 strategy.state = strategy.states.DRIVING_TO_WORK_START_WAYPOINT
 strategy.connectingPathStartIx = 723
