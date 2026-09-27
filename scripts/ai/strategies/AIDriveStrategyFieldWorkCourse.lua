@@ -228,6 +228,9 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
         if maxSpeed ~= nil then
             self:setMaxSpeed(maxSpeed)
         end
+        if self.connectingPathCurveSpeedLimit then
+            self:setMaxSpeed(self.connectingPathCurveSpeedLimit)
+        end
     end
 
     self:setAITarget()
@@ -628,23 +631,34 @@ function AIDriveStrategyFieldWorkCourse:updateConnectingPathLookahead(ix)
     local course = self.course
     local lastIx = course:getNumberOfWaypoints()
     local endIx = course:getNextWaypointIxWithinDistance(ix, 15) or lastIx
-    local straight = endIx < lastIx
+    local precise = endIx >= lastIx
+    local broadCurve = false
     local startAngle = course:getWaypointAngleDeg(ix)
     for i = ix, endIx - 1 do
         local angle = course:getWaypointAngleDeg(i)
         local nextAngle = course:getWaypointAngleDeg(i + 1)
         if course:isReverseAt(i) or course:isReverseAt(i + 1) or
-                not startAngle or not angle or not nextAngle or
-                math.abs(CpMathUtil.getDeltaAngle(math.rad(nextAngle), math.rad(startAngle))) > math.rad(8) or
-                math.abs(CpMathUtil.getDeltaAngle(math.rad(nextAngle), math.rad(angle))) > math.rad(8) then
-            straight = false
+                not startAngle or not angle or not nextAngle then
+            precise = true
             break
         end
+        local totalChange = math.abs(CpMathUtil.getDeltaAngle(math.rad(nextAngle), math.rad(startAngle)))
+        local pointChange = math.abs(CpMathUtil.getDeltaAngle(math.rad(nextAngle), math.rad(angle)))
+        if totalChange > math.rad(28) or pointChange > math.rad(12) then
+            precise = true
+            break
+        end
+        broadCurve = broadCurve or totalChange > math.rad(8) or pointChange > math.rad(8)
     end
-    if straight then
-        self.ppc:setLookaheadDistance(math.max(self.ppc.normalLookAheadDistance, 6))
-    else
+    if precise then
         self.ppc:setShortLookaheadDistance()
+        self.connectingPathCurveSpeedLimit = 18
+    elseif broadCurve then
+        self.ppc:setLookaheadDistance(math.max(self.ppc.normalLookAheadDistance, 8))
+        self.connectingPathCurveSpeedLimit = 24
+    else
+        self.ppc:setLookaheadDistance(math.max(self.ppc.normalLookAheadDistance, 6))
+        self.connectingPathCurveSpeedLimit = nil
     end
 end
 

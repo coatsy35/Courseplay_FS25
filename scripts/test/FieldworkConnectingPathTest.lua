@@ -52,7 +52,12 @@ connectorStrategy:updateConnectingPathLookahead(1)
 assert(lookahead == 6, 'A long straight connector must not use turn-length steering lookahead')
 angles[4] = 12
 connectorStrategy:updateConnectingPathLookahead(1)
-assert(lookahead == 'short', 'A bend ahead must retain the short steering lookahead')
+assert(lookahead == 8 and connectorStrategy.connectingPathCurveSpeedLimit == 24,
+        'A broad bend must use a longer lookahead and moderate travelling speed')
+angles[4] = 35
+connectorStrategy:updateConnectingPathLookahead(1)
+assert(lookahead == 'short' and connectorStrategy.connectingPathCurveSpeedLimit == 18,
+        'A sharp bend must retain precise steering at a lower speed')
 angles[4] = 0
 reversing[3] = true
 connectorStrategy:updateConnectingPathLookahead(1)
@@ -60,6 +65,9 @@ assert(lookahead == 'short', 'A reversal ahead must retain the short steering lo
 reversing[3] = nil
 connectorStrategy:updateConnectingPathLookahead(8)
 assert(lookahead == 'short', 'The work-start entry must retain precise steering')
+connectorStrategy:updateConnectingPathLookahead(1)
+assert(lookahead == 6 and connectorStrategy.connectingPathCurveSpeedLimit == nil,
+        'A straight connector must restore the normal travelling speed')
 
 local localConnector = {contained = true, getLength = function() return 45 end}
 assert(not strategy:canDriveConnectingPathDirectly(localConnector),
