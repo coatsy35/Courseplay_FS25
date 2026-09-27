@@ -362,6 +362,7 @@ function AIDriveStrategyFieldWorkCourse:onWaypointChange(ix, course)
         end
         self:startTurn(ix)
     elseif self.state == self.states.WORKING then
+        self:scoutUpcomingConnectingPath(ix)
         if (self.course:isOnConnectingPath(ix + 1) and not self.course:isOnConnectingPath(ix)) or
                 self.course:shouldUsePathfinderToNextWaypoint(ix) then
             local fm, bm = self:getFrontAndBackMarkers()
@@ -396,6 +397,9 @@ end
 
 --- Called when the last waypoint of a course is passed
 function AIDriveStrategyFieldWorkCourse:onLastWaypointPassed()
+    -- PPC can exhaust a short temporary course while a connector search fails synchronously or
+    -- waits to retry. Only the real fieldwork end completes the job; the pending search owns this handover.
+    if self.state == self.states.WAITING_FOR_PATHFINDER and self.connectingPathStartIx then return end
     -- reset offset we used for the course ending to not miss anything
     self.aiOffsetZ = 0
     self:debug('Last waypoint of the course reached.')
@@ -776,7 +780,7 @@ end
 --- holds the worker stationary and can exhaust its global search before selecting that connector as its fallback.
 ---@param course Course
 ---@return boolean
-function AIDriveStrategyFieldWorkCourse:canDriveConnectingPathDirectly(course)
+function AIDriveStrategyFieldWorkCourse:canDriveConnectingPathDirectly(course, useLiveUnloaderClearance)
     if not course then return false end
     local localManeuverDistance = math.max(4 * self.turningRadius, 2 * self:getWorkWidth())
     if course:getLength() <= localManeuverDistance then return false end
@@ -784,7 +788,47 @@ function AIDriveStrategyFieldWorkCourse:canDriveConnectingPathDirectly(course)
     -- envelope and prevents a direct connector from crossing the field polygon or an island.
     local boundary = FieldworkBoundary.forVehicle(self.vehicle, 0)
     if not FieldworkBoundary.containsCourse(boundary, course) then return false end
-    return not self:isConnectingPathBlockedByWorker(course)
+    return not self:isConnectingPathBlockedByWorker(course, nil, useLiveUnloaderClearance)
+end
+
+--- A long generated connector already exists before the row ends. Parked trailers are handled by
+--- the physical scout/braking checks, not by replacing hundreds of metres with a fresh global search.
+--- Worker crossings still require a checked detour; short joins and field containment retain their checks.
+function AIDriveStrategyFieldWorkCourse:tryStartGeneratedConnectingPath()
+    if self.connectorRecoveryActive or not self:canDriveConnectingPathDirectly(self.workStarterCourse, true) then
+        return false
+    end
+    self:debug('Using the %.1f m generated connector with live trailer clearance', self.workStarterCourse:getLength())
+    self.connectingPathRetryAt = nil
+    self.connectingPathUnloaderBlocker = nil
+    self.connectingPathUnloaderWaitSince = nil
+    self.connectingPathRejoinIx = nil
+    self.connectingPathWorkerDetourAt = nil
+    self.connectingPathWorkerLastSearchAt = nil
+    self:startCourseToWorkStart(self.workStarterCourse)
+    -- Acceptance is not permission to move through a nearby rig. Scan the installed route now,
+    -- before this update can return positive drive speed, even if the previous scan was recent.
+    self.nextConnectingWorkerCheckAt = nil
+    self:checkWorkerOnConnectingPath()
+    return true
+end
+
+--- Warn parked rigs before finishing the row. Keep harvesting and leave PPC/turn ownership untouched;
+--- only an eligible standby unloader physically intersecting the upcoming route receives a request.
+function AIDriveStrategyFieldWorkCourse:scoutUpcomingConnectingPath(ix)
+    if self.course ~= self.fieldWorkCourse or not (self.vehicle.spec_combine or self.callUnloader) then return end
+    local course = self.fieldWorkCourse
+    local last = course:getNextWaypointIxWithinDistance(ix, math.max(90, 3 * self:getWorkWidth())) or
+            course:getNumberOfWaypoints()
+    for i = ix + 1, last do
+        if course:isOnConnectingPath(i) then
+            local upcoming = course:copy(self.vehicle, ix, last)
+            self:isConnectingPathBlockedByWorker(upcoming, 0, false, true)
+            return
+        end
+        -- A separate intervening turn owns its geometry and clearance.
+        if course:isTurnStartAtIx(i) then return end
+    end
 end
 
 function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, workerSafetyMargin, workerOnly, liveUnloaderScan)
@@ -1123,6 +1167,9 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
         else
             self.workStarterCourse = Course(self.vehicle, connectingPath, true)
         end
+        -- Do this before the broad staging checks. A trailer at the far end (or behind the departure)
+        -- must not start a 15-second wait and then a search across the whole field.
+        if #connectingPath >= 2 and self:tryStartGeneratedConnectingPath() then return end
         local blocked, blocker, otherWorker, blockedIx = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
         self.connectingPathRejoinIx = nil
         if blocked and blocker == 'unloader' then
@@ -1187,13 +1234,6 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
             self.connectingPathWorkerDetourAt = nil
             self.connectingPathWorkerLastSearchAt = nil
         end
-        if not self.connectorRecoveryActive and #connectingPath >= 2 and
-                self:canDriveConnectingPathDirectly(self.workStarterCourse) then
-            self:debug('Connecting path is a %.1f m generated route; drive it directly instead of pathfinding to its end',
-                    self.workStarterCourse:getLength())
-            self:startCourseToWorkStart(self.workStarterCourse)
-            return
-        end
         self:debug('Connecting path has %d waypoints; pathfinding to %s', #connectingPath,
                 self.connectingPathRejoinIx and string.format('local rejoin %d', self.connectingPathRejoinIx) or
                         string.format('work waypoint %d', targetWaypointIx))
@@ -1224,16 +1264,13 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingFailedToConnectingPathEnd(c
         self:debug('Retry connecting path with vehicle-width clearance; crop detour for another combine: %s',
                 tostring(avoidingCombine == true))
         self:setConnectingPathBoundary(lastContext, 0)
-        lastContext:ignoreFruit(avoidingCombine == true)
+        lastContext:ignoreFruit(not self.settings.avoidFruit:getValue() or avoidingCombine == true)
         controller:retry(lastContext)
     end
 end
 
 function AIDriveStrategyFieldWorkCourse:retryOrDriveGeneratedConnectingPath()
-    if not self.connectorRecoveryActive and self:canDriveConnectingPathDirectly(self.workStarterCourse) then
-        self:debug('Pathfinding failed; the generated connector is clear and field-contained')
-        self:startCourseToWorkStart(self.workStarterCourse)
-    else
+    if not self:tryStartGeneratedConnectingPath() then
         self:debug('No safe connecting path; waiting before replanning')
         self:waitForConnectingPathRetry(30000)
     end

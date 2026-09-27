@@ -312,3 +312,36 @@ cutting; the other combine's waiting turn is a subsequent obstruction. The scree
 
 The full source and packaged-runtime release gate is required. In-game validation must confirm CR11/318 now
 enters the clear row and the following combine can complete its turn; those physics are not simulated by the tests.
+
+## Build 2969: start the generated connector and clear trailers before row end
+
+The 27 September 2968 log records CR11/318 finishing its row at 23:50:58.413. The initial connector check waits
+for T7.300/322, then T7.300/323 about 270 m away. At 23:51:25.340 it abandons that wait and starts a search to
+the far work point: 26.927 seconds after row completion. The coarse search is still running at 23:53:26.807,
+121.467 seconds later. A 211-waypoint, 709.1 m generated connector was already available throughout.
+
+Historical comparison against pre-refactor `604246d4`, refactor commits `1430b334`/`84883707`, and build 2968
+finds that the initial broad trailer wait and full-route dispatch survived the helper extraction. Replaying both
+historical dispatch functions in the same regression harness reproduces the unnecessary wait. JPS and its search
+constraints were not replaced by the refactor. The later live physical checks did not repair this earlier gate.
+
+1. Select a long, field-contained generated connector before applying broad staging-trailer waits. Full-route
+   field-worker crossings still require checked detours. Install the route, then immediately run the physical
+   trailer scout/braking check before permitting movement; a genuine nearby obstruction still holds the combine.
+   Distant trailers are handled as the combine approaches, without replacing the route with a whole-field search.
+2. Request eligible standby-trailer clearance while harvesting when the connector comes within the 90 m scout
+   horizon. Keep the harvesting course, turn context and speed/state unchanged; an intervening turn keeps ownership
+   of its manoeuvre. Clear obsolete detour targets and retry timers when accepting a usable generated connector.
+3. Prevent a temporary connector's last waypoint from completing the job during a pending search or retry.
+   CR11/319's one-waypoint recovery exhausted at 23:52:21.960 after synchronous goal rejection and incorrectly
+   reported WORK_FINISHED. The pending join now retains ownership; normal replacement-route and field-end callbacks work.
+4. Preserve the user's crop-avoidance setting on retries. Disabling avoidance explicitly remains effective;
+   with avoidance enabled, only another obstructing combine authorises the established crop-detour exception.
+5. Add integrated dispatch, early harvesting-clearance, immediate header braking/release, actual combine-crossing,
+   synchronous failed-recovery and callback tests. Replay the saved connector and preceding work points with the
+   map's static field outline and logged rig positions. Dispatch measured about 0.44 seconds with zero pathfinder
+   searches in the local harness; the nearby rig still causes a physical hold, and receives notice before row end.
+
+The geometry fixture reconstructs drawbars and uses the static map outline because CP's detected live polygon is
+not persisted. Timing is from the local Lua harness, not the game. Full source and packaged-runtime release checks
+are required; actual trailer movement, collision shapes and row-entry physics still need the matching in-game run.

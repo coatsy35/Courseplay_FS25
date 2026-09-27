@@ -194,6 +194,29 @@ Other fieldwork rigs retain their existing corridor. Crop exceptions still requi
 the first live movement check together. It covers actual initial overlaps as well as harmless neighbouring rigs;
 it does not simulate GIANTS physics or measure in-game pathfinder time.
 
+Build 2969 separates **route selection** from **permission to move**. `tryStartGeneratedConnectingPath` accepts
+only a long connector passing the existing field corridor and full-route field-worker checks. Trailer occupancy
+is then assessed on the installed route by the physical live scan, synchronously before returning drive speed.
+Do not restore the full-course staging-trailer veto here: a rig hundreds of metres away caused a 27-second wait
+followed by a two-minute global search despite the existing 709 m route. Short joins, recovery routes, invalid
+field corridors and other combine crossings retain checked planning. Do not omit the immediate physical scan
+or inherit its old throttle when installing a route; that would create one update of unsafe movement.
+
+`scoutUpcomingConnectingPath` runs from working waypoint changes to request parked-rig clearance before row end.
+It may issue a standby clearance request but must not replace the harvesting PPC course, turn context or speed.
+It stops looking through an intervening turn. A new clear generated departure clears old detour targets/timers;
+the normal live scan handles approaching, braking, release and bounded recovery for an unavailable nearby unloader.
+
+The final-waypoint callback must not finish fieldwork while `WAITING_FOR_PATHFINDER` owns a connector. PPC can
+exhaust a one-point temporary course in the same update as a synchronously rejected search; retain its retry.
+The replacement approach and actual fieldwork end still receive their normal callbacks. Crop-avoidance retries
+use the configured setting plus the authorised combine-detour exception, rather than silently re-enabling avoidance.
+
+`VehicleRouteConflictTest` exercises dispatch through physical braking and early clearance, including the saved
+211-point connector, logged combine/trailer positions and static field outline. Its timing excludes GIANTS physics;
+drawbar poses are approximations. Historical dispatch functions from pre-refactor `604246d4` and build 2968 fail
+the new clear-departure regression. That comparison isolates the departure decision, not an entire historical game run.
+
 ### Distant headland turns (2964)
 
 A long `CourseTurn` is not a fieldwork connector state: the turn owns waypoint callbacks. Its accepted pathfinder

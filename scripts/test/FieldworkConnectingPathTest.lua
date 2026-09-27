@@ -173,10 +173,17 @@ end, ignoreFruit = function(self, ignore) self.ignoreFruitValue = ignore end}, f
 assert(retriedWithBoundary, 'A local detour may retry through crop while retaining collisions')
 follower.spec_combine = nil
 local avoidsCrop = false
+strategy.settings.avoidFruit.getValue = function() return true end
 strategy:onPathfindingFailedToConnectingPathEnd({retry = function(_, context)
     avoidsCrop = context.ignoreFruitValue == false
 end}, {ignoreFruit = function(self, value) self.ignoreFruitValue = value end}, false, 1)
 assert(avoidsCrop, 'Another kind of field worker must not authorise a crop detour')
+strategy.settings.avoidFruit.getValue = function() return false end
+local ignoresCropBySetting = false
+strategy:onPathfindingFailedToConnectingPathEnd({retry = function(_, context)
+    ignoresCropBySetting = context.ignoreFruitValue == true
+end}, {ignoreFruit = function(self, value) self.ignoreFruitValue = value end}, false, 1)
+assert(ignoresCropBySetting, 'A retry must preserve the user disabling crop avoidance')
 follower.spec_combine = {}
 strategy:onPathfindingFailedToConnectingPathEnd(nil, {}, true, 2)
 assert(strategy.connectingPathRetryAt == 6000 and strategy.state == strategy.states.WAITING_FOR_PATHFINDER,
@@ -252,15 +259,16 @@ trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 40}}} end
 assert(strategy:canDriveConnectingPathDirectly(longConnector),
         'The combine may proceed when the full tractor and trailer have cleared its route')
 
--- A staging trailer should finish its short clearance move before a whole-field search starts.
+-- A trailer must not discard the existing long connector in favour of a whole-field search.
+-- This fixture checks dispatch; the production physical gate is exercised with full geometry below.
 trailer.rootNode.z = 0
 trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 0}}} end
 parkedStrategy.state = {}
 g_currentMission.time = 40000
 local searchesBeforeClearance = searches
 strategy:startConnectingPath(1)
-assert(strategy.connectingPathRetryAt == 42000 and searches == searchesBeforeClearance,
-        'A staging trailer moving clear must not trigger a whole-field path search')
+assert(drivenCourse == longConnector and strategy.connectingPathRetryAt == nil and searches == searchesBeforeClearance,
+        'Retain the long generated connector immediately and let live clearance handle the trailer')
 trailer.rootNode.z = 40
 trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 40}}} end
 g_currentMission.time = 42000
@@ -274,8 +282,8 @@ g_currentMission.time = 44000
 strategy:startConnectingPath(1)
 g_currentMission.time = 60000
 strategy:startConnectingPath(1)
-assert(searches > searchesBeforeClearance,
-        'A trailer that cannot clear must eventually permit collision-aware pathfinding')
+assert(drivenCourse == longConnector and searches == searchesBeforeClearance,
+        'Changing trailers or waiting 15 seconds must not trigger a search to the far end of the field')
 
 longConnector.contained = false
 assert(not strategy:canDriveConnectingPathDirectly(longConnector),

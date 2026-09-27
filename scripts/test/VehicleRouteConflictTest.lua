@@ -6,6 +6,10 @@ function localDirectionToWorld(n, x, y, z)
     local h = n.heading or 0
     return math.cos(h) * x + math.sin(h) * z, y, -math.sin(h) * x + math.cos(h) * z
 end
+function localToWorld(n, x, y, z)
+    local dx, dy, dz = localDirectionToWorld(n, x, y, z)
+    return n.x + dx, dy, n.z + dz
+end
 function localToLocal(from, to, x, _, z)
     local fh, th = from.heading or 0, to.heading or 0
     local wx = from.x + math.cos(fh) * x + math.sin(fh) * z - to.x
@@ -316,3 +320,297 @@ strategy:checkWorkerOnConnectingPath()
 assert(speedLimit == nil and strategy.connectingWorkerWaitFor == nil and requests == 4,
         'The combine must proceed towards row entry immediately with the distant trailer clear')
 print('VehicleRouteConflictTest: OK')
+
+-- End-to-end connector dispatch: real context/boundary/rig/sweep/clearance decisions. The course
+-- container, engine transforms and driver commands are supplied; no occupancy answer is stubbed.
+do
+    local function route(points)
+        local r = course(points)
+        function r:getLength()
+            local distance = 0
+            for i = 2, #points do
+                distance = distance + MathUtil.vector2Length(points[i][1] - points[i - 1][1],
+                        points[i][2] - points[i - 1][2])
+            end
+            return distance
+        end
+        function r:getCurrentWaypointIx() return 1 end
+        function r:isLastWaypointIx(ix) return ix == #points end
+        function r:getNextWaypointIxWithinDistance(ix, distance)
+            for i = ix + 1, #points do
+                distance = distance - MathUtil.vector2Length(points[i][1] - points[i - 1][1],
+                        points[i][2] - points[i - 1][2])
+                if distance <= 0 then return i end
+            end
+            return #points
+        end
+        function r:copy(_, first, last)
+            local copy = {}
+            for i = first or 1, last or #points do copy[#copy + 1] = points[i] end
+            return route(copy)
+        end
+        function r:isOnConnectingPath(ix) return ix >= 2 and ix < #points end
+        function r:isTurnStartAtIx() return false end
+        function r:shouldUsePathfinderToNextWaypoint() return false end
+        return r
+    end
+    Course = function(_, points)
+        local converted = {}
+        for i, p in ipairs(points) do converted[i] = {p.x, p.z} end
+        return route(converted)
+    end
+    RowStartOrFinishContext = function() return {getTurnEndNodeAndOffsets = function() return {}, 0 end} end
+    local function departure(points, obstacles, v)
+        v = v or cr11(0, 0, 0)
+        v.spec_combine = {}
+        v.cpGetFieldPolygon = v.cpGetFieldPolygon or function()
+            return {{x = -100, z = -100}, {x = 100, z = -100}, {x = 100, z = 800}, {x = -100, z = 800}}
+        end
+        local s = setmetatable({vehicle = v, turningRadius = 4.7, workWidth = 15.2,
+            settings = {avoidFruit = {getValue = function() return true end}},
+            states = {WORKING = 'work', TURNING = 'turn', DRIVING_TO_WORK_START_WAYPOINT = 'travel',
+                WAITING_FOR_PATHFINDER = 'search'}, state = 'turn', debug = function() end,
+            getWorkWidth = function() return 15.2 end,
+            getAllowReversePathfinding = function() return true end,
+            getFrontAndBackMarkers = function() return 5.6, 5 end,
+            getTurnEndSideOffset = function() return 0 end, getTurnEndForwardOffset = function() return 0 end,
+            raiseImplements = function() end,
+            ppc = {setShortLookaheadDistance = function() end, getRelevantWaypointIx = function() return 1 end},
+            proximityController = {unregisterBlockingObjectListener = function() end,
+                registerBlockingObjectListener = function() end},
+            fieldWorkCourse = route(points), searches = 0, speed = nil, moves = 0,
+            startCourse = function(self, c) self.course = c end,
+            setMaxSpeed = function(self, speed) self.speed = speed end,
+            pathfinderController = {registerListeners = function() end},
+        }, {__index = AIDriveStrategyFieldWorkCourse})
+        s.pathfinderController.findPathToNode = function() s.searches = s.searches + 1 end
+        s.pathfinderController.findPathToWaypoint = s.pathfinderController.findPathToNode
+        for _, other in ipairs(obstacles) do
+            other.getCpDriveStrategy = function() return {
+                getCombineToUnload = function() return nil end,
+                isAvailableForStaging = function() return true end,
+                isConnectorClearancePending = function() return true end,
+                requestToMoveOutOfWay = function() s.moves = s.moves + 1 end,
+            } end
+        end
+        g_currentMission = {time = 1000, vehicleSystem = {vehicles = obstacles}}
+        s.course = s.fieldWorkCourse
+        return s
+    end
+    local points = {{0, -5}}
+    for z = 0, 700, 10 do points[#points + 1] = {0, z} end
+    points[#points + 1] = {0, 705}
+    local clear = departure(points, {vehicle(12, -3, 3, 5), vehicle(0, 270, 3, 9)})
+    clear.connectingPathRejoinIx, clear.connectingPathWorkerDetourAt, clear.connectingPathWorkerLastSearchAt = 5, 60000, 1000
+    clear:startConnectingPath(1)
+    assert(clear.state == 'travel' and clear.searches == 0 and clear.speed == nil and clear.moves == 0,
+            'A clear departure with an adjacent rig and a distant trailer must launch without a timer or search')
+    assert(clear.connectingPathRejoinIx == nil and clear.connectingPathWorkerDetourAt == nil and
+            clear.connectingPathWorkerLastSearchAt == nil,
+            'A clear generated departure must clear stale detour targets and retry timers')
+    local remote = departure(points, {vehicle(0, 80, 3, 9)})
+    remote:startConnectingPath(1)
+    assert(remote.state == 'travel' and remote.searches == 0 and remote.speed == nil and remote.moves == 1,
+            'A trailer inside the scout horizon must receive notice while the combine approaches')
+    local worker = cr11(0, 100, 0)
+    worker.spec_combine = {}
+    worker.getIsCpFieldWorkActive = function() return true end
+    local crossing = departure(points, {worker})
+    crossing.fieldWorkerProximityController = {hasSameCourse = function() return true end,
+        getPhysicalTurnClearance = function() return 50 end}
+    crossing:startConnectingPath(1)
+    assert(crossing.state == 'search' and crossing.searches == 1,
+            'A genuine combine crossing must still use checked local detour planning')
+    for _, blocker in ipairs({vehicle(0, 25, 3, 9), vehicle(6, 4.4, 3, 3)}) do
+        local held = departure(points, {blocker})
+        held.nextConnectingWorkerCheckAt = 99999
+        held:startConnectingPath(1)
+        assert(held.state == 'travel' and held.searches == 0 and held.speed == 0 and held.moves == 1,
+                'Accepting a generated route must brake for near/header obstruction in that same update')
+        local accepted = held.course
+        blocker.rootNode.x = 30
+        held.speed, g_currentMission.time = nil, 2000
+        held:checkWorkerOnConnectingPath()
+        assert(held.speed == nil and held.course == accepted and held.searches == 0,
+                'Clearance must release the existing route without another path search')
+    end
+    local harvesting = departure(points, {vehicle(0, 60, 3, 9)})
+    harvesting.state = 'work'
+    harvesting.course.isOnConnectingPath = function(_, ix) return ix >= 6 and ix < #points end
+    local workingRoute, turnContext = harvesting.course, {}
+    harvesting.turnContext = turnContext
+    harvesting.calculateTightTurnOffset = function() end
+    harvesting:onWaypointChange(1, workingRoute)
+    assert(harvesting.moves == 1 and harvesting.state == 'work' and harvesting.speed == nil and
+            harvesting.course == workingRoute and harvesting.turnContext == turnContext and harvesting.searches == 0,
+            'Pre-row-end clearance must preserve harvesting, PPC course and turn context')
+    harvesting.course.isTurnStartAtIx = function(_, ix) return ix == 2 end
+    harvesting.course.isOnConnectingPath = function(_, ix) return ix >= 4 end
+    harvesting:scoutUpcomingConnectingPath(1)
+    assert(harvesting.moves == 1, 'An intervening turn must retain ownership of its own clearance geometry')
+
+    -- One-waypoint recovery exhaustion is a pending join, never the end of fieldwork. Both an active
+    -- asynchronous search and a scheduled retry retain ownership; the replacement route still hands over.
+    local pending = departure(points, {})
+    pending.connectingPathStartIx, pending.connectorRecoveryActive = 1, true
+    pending.course, pending.state = route({{0, 0}}), 'search'
+    local finished, handovers = 0, 0
+    pending.finishFieldWork = function() finished = finished + 1 end
+    pending:onWaypointPassed(1, pending.course)
+    pending.connectingPathRetryAt = 31000
+    pending:onWaypointPassed(1, pending.course)
+    assert(finished == 0 and pending.state == 'search' and pending.connectingPathRetryAt == 31000,
+            'PPC reaching the temporary endpoint must neither finish the job nor erase its retry')
+    local steeringParameters = AIUtil.getSteeringParameters
+    AIUtil.getSteeringParameters = function() return false, 6 end
+    pending.activeConnectingPathCourse = route({{0, 0}})
+    pending.retreatFromBlockingTurningWorker = function() return false end
+    pending.turnContext = RowStartOrFinishContext()
+    pending.pathfinderController.findPathToNode = function(controller, context)
+        pending:onPathfindingFailedToConnectingPathEnd(controller, context, true, 1)
+    end
+    pending.connectingPathRetryAt = nil
+    pending:startBlockedConnectorRecovery()
+    pending:onWaypointPassed(1, pending.course)
+    assert(finished == 0 and pending.state == 'search' and pending.connectingPathRetryAt == 31000,
+            'Synchronous failure followed by PPC endpoint notification must preserve the real recovery retry')
+    AIUtil.getSteeringParameters = steeringParameters
+    pending.state = 'travel'
+    pending.workStarter = {onLastWaypoint = function() handovers = handovers + 1 end}
+    pending:onWaypointPassed(1, pending.course)
+    assert(handovers == 1 and finished == 0, 'The replacement approach must still own its final waypoint')
+    pending.state, pending.connectingPathStartIx = 'work', nil
+    pending:onLastWaypointPassed()
+    assert(finished == 1, 'Normal fieldwork completion must remain enabled')
+
+    -- Build 2968 savegame20: CR11/318, original waypoints 660..907. Actual connector 696..906 is
+    -- 211 points/709 m. Field11's static map outline is used; CP's live detected polygon is not persisted.
+    -- Logged trailer/root positions are snapshots; drawbar poses below are reconstructed approximations.
+    local recordedPoints = {
+        {-384.17, -274.96}, {-386.78, -275.37}, {-389.61, -275.81}, {-392.38, -276.23},
+        {-395.05, -276.61}, {-397.74, -277.02}, {-400.49, -277.44}, {-403.22, -277.86},
+        {-405.93, -278.26}, {-408.64, -278.67}, {-411.36, -279.08}, {-414.09, -279.49},
+        {-416.80, -279.90}, {-419.52, -280.31}, {-422.24, -280.73}, {-424.96, -281.13},
+        {-427.68, -281.55}, {-430.97, -282.05}, {-434.26, -282.53}, {-433.56, -285.95},
+        {-432.85, -289.38}, {-432.38, -292.36}, {-431.92, -294.92}, {-431.43, -297.62},
+        {-430.94, -300.32}, {-430.45, -303.03}, {-429.46, -308.44}, {-428.97, -311.15},
+        {-428.48, -313.86}, {-427.99, -316.56}, {-427.50, -319.26}, {-427.01, -321.98},
+        {-426.52, -324.68}, {-425.54, -330.09}, {-425.05, -332.79}, {-424.56, -335.50},
+        {-439.49, -335.41}, {-439.98, -332.70}, {-440.96, -327.30}, {-441.45, -324.58},
+        {-441.94, -321.88}, {-442.43, -319.17}, {-442.92, -316.48}, {-443.41, -313.76},
+        {-443.90, -311.05}, {-444.88, -305.64}, {-445.37, -302.94}, {-445.86, -300.23},
+        {-446.35, -297.52}, {-446.84, -294.81}, {-447.28, -292.01}, {-447.86, -289.23},
+        {-448.42, -286.73}, {-448.72, -284.55}, {-448.87, -282.46}, {-448.67, -275.55},
+        {-445.76, -270.98}, {-441.74, -268.94}, {-438.07, -268.27}, {-435.31, -267.86},
+        {-432.59, -267.44}, {-429.87, -267.03}, {-427.15, -266.62}, {-424.43, -266.21},
+        {-421.71, -265.80}, {-418.99, -265.39}, {-416.27, -264.98}, {-413.55, -264.58},
+        {-410.83, -264.17}, {-408.11, -263.75}, {-405.40, -263.36}, {-402.67, -262.94},
+        {-399.95, -262.52}, {-397.24, -262.11}, {-394.53, -261.71}, {-391.80, -261.30},
+        {-389.04, -260.88}, {-386.36, -260.46}, {-383.71, -260.07}, {-380.91, -259.69},
+        {-378.06, -259.23}, {-376.16, -258.88}, {-373.45, -258.40}, {-370.74, -257.92},
+        {-365.33, -256.95}, {-359.91, -255.98}, {-354.50, -255.01}, {-351.79, -254.53},
+        {-349.08, -254.05}, {-343.67, -253.08}, {-338.26, -252.11}, {-335.55, -251.63},
+        {-332.84, -251.15}, {-330.13, -250.66}, {-327.42, -250.18}, {-324.61, -249.74},
+        {-321.84, -249.18}, {-319.43, -248.62}, {-316.75, -248.00}, {-314.07, -247.37},
+        {-311.39, -246.75}, {-308.71, -246.12}, {-303.36, -244.87}, {-298.00, -243.63},
+        {-292.65, -242.38}, {-289.98, -241.75}, {-287.30, -241.13}, {-281.93, -239.88},
+        {-276.58, -238.63}, {-273.90, -238.01}, {-271.23, -237.38}, {-268.55, -236.76},
+        {-265.87, -236.14}, {-263.19, -235.46}, {-260.50, -234.88}, {-257.65, -234.32},
+        {-254.86, -233.55}, {-253.70, -233.19}, {-251.09, -232.32}, {-248.46, -231.44},
+        {-245.85, -230.57}, {-243.25, -229.70}, {-240.64, -228.83}, {-238.03, -227.96},
+        {-232.81, -226.22}, {-230.20, -225.35}, {-227.59, -224.48}, {-222.38, -222.75},
+        {-219.77, -221.88}, {-217.16, -221.01}, {-211.94, -219.27}, {-209.33, -218.40},
+        {-206.72, -217.53}, {-201.50, -215.79}, {-198.90, -214.92}, {-196.29, -214.05},
+        {-193.68, -213.18}, {-191.07, -212.31}, {-185.85, -210.57}, {-183.24, -209.70},
+        {-180.63, -208.83}, {-178.02, -207.96}, {-175.42, -207.09}, {-172.81, -206.22},
+        {-170.20, -205.35}, {-167.59, -204.48}, {-164.98, -203.61}, {-159.76, -201.87},
+        {-157.15, -201.00}, {-154.54, -200.14}, {-151.94, -199.27}, {-149.34, -198.40},
+        {-144.12, -196.66}, {-141.50, -195.79}, {-138.89, -194.92}, {-136.28, -194.05},
+        {-133.67, -193.18}, {-131.06, -192.31}, {-128.45, -191.44}, {-123.14, -189.67},
+        {-118.17, -188.38}, {-114.09, -188.63}, {-109.26, -191.43}, {-107.12, -195.17},
+        {-106.25, -198.81}, {-105.68, -201.44}, {-105.22, -203.95}, {-104.44, -208.79},
+        {-103.56, -214.22}, {-102.68, -219.65}, {-101.81, -225.08}, {-101.37, -227.79},
+        {-100.93, -230.51}, {-100.05, -235.94}, {-99.61, -238.65}, {-99.17, -241.36},
+        {-98.73, -244.08}, {-98.29, -246.79}, {-97.41, -252.22}, {-96.54, -257.65},
+        {-95.66, -263.08}, {-94.78, -268.51}, {-93.90, -273.94}, {-93.02, -279.37},
+        {-92.15, -284.80}, {-91.27, -290.23}, {-90.39, -295.67}, {-89.95, -298.37},
+        {-89.51, -301.09}, {-88.63, -306.52}, {-87.76, -311.95}, {-86.88, -317.38},
+        {-86.44, -320.09}, {-86.00, -322.80}, {-85.56, -325.52}, {-85.12, -328.26},
+        {-84.69, -330.96}, {-84.25, -333.65}, {-83.79, -336.38}, {-83.37, -339.10},
+        {-82.96, -341.82}, {-82.49, -344.52}, {-81.98, -347.24}, {-81.61, -349.97},
+        {-81.27, -352.96}, {-80.61, -355.86}, {-79.70, -358.94}, {-78.94, -361.77},
+        {-77.82, -364.84}, {-76.55, -367.88}, {-75.33, -370.40}, {-74.39, -372.98},
+        {-73.39, -375.94}, {-71.57, -378.70}, {-69.98, -380.60}, {-68.03, -382.24},
+        {-66.27, -383.48}, {-64.35, -384.30}, {-60.20, -385.61}, {-57.66, -386.02},
+        {-53.99, -386.81}, {-52.12, -386.95}, {-50.10, -386.72}, {-46.37, -385.95},
+        {-43.53, -385.34}, {-40.74, -384.52}, {-38.01, -383.58}, {-35.28, -382.63},
+        {-32.67, -381.72}, {-30.08, -380.81}, {-27.48, -379.91}, {-24.88, -379.00},
+        {-19.70, -377.18}, {-17.11, -376.28}, {-14.50, -375.37}, {-11.90, -374.46},
+        {-9.31, -373.55}, {-4.39, -371.84}, {-1.46, -371.00}, {1.89, -369.56},
+        {5.45, -367.62}, {7.85, -366.28}, {10.25, -364.95}, {12.66, -363.61},
+        {15.06, -362.27}, {19.64, -359.74}, {22.96, -358.11}, {34.27, -375.47},
+    }
+    local recordedOutline = {
+        {x = -390.85300, z = -603.38700}, {x = -392.26245, z = -614.95330}, {x = -396.88901, z = -630.14840},
+        {x = -402.27880, z = -643.08160}, {x = -405.96080, z = -656.71090}, {x = -405.96080, z = -991.21700},
+        {x = -401.36260, z = -1001.71700}, {x = -396.32358, z = -1005.29300}, {x = -388.89164, z = -1007.07600},
+        {x = -74.89300, z = -1007.07600}, {x = -61.88800, z = -1004.65800}, {x = -50.58200, z = -997.78300},
+        {x = -40.17000, z = -994.11900}, {x = -13.71700, z = -989.10700}, {x = -3.64000, z = -986.44000},
+        {x = 7.78800, z = -978.32900}, {x = 24.58100, z = -960.21900}, {x = 30.60400, z = -952.39800},
+        {x = 34.28200, z = -944.76700}, {x = 36.44500, z = -932.88500}, {x = 34.72100, z = -923.88500},
+        {x = 10.49200, z = -871.24400}, {x = -0.57600, z = -839.99700}, {x = -5.41800, z = -821.06700},
+        {x = -5.50700, z = -811.99600}, {x = -2.48500, z = -806.21700}, {x = 4.83800, z = -798.57600},
+        {x = 58.81700, z = -745.98500}, {x = 109.22100, z = -686.29410}, {x = 124.42800, z = -661.26500},
+        {x = 129.52700, z = -636.64290}, {x = 127.46600, z = -567.58620}, {x = 127.46600, z = -419.51100},
+        {x = 125.92600, z = -400.19600}, {x = 118.59900, z = -368.15100}, {x = 111.35500, z = -352.29500},
+        {x = 106.42500, z = -343.05800}, {x = 96.76700, z = -322.80100}, {x = 93.91000, z = -319.88600},
+        {x = 81.70900, z = -314.92600}, {x = 74.58200, z = -314.33000}, {x = 66.06000, z = -316.46100},
+        {x = 60.00500, z = -319.95700}, {x = 40.89600, z = -335.31800}, {x = 19.77400, z = -352.89700},
+        {x = 1.41100, z = -362.68200}, {x = -47.78200, z = -380.25200}, {x = -57.04300, z = -380.63300},
+        {x = -66.06100, z = -376.38700}, {x = -70.60000, z = -367.46500}, {x = -74.36100, z = -355.45500},
+        {x = -100.44800, z = -194.21600}, {x = -101.91300, z = -188.44100}, {x = -109.18600, z = -182.87400},
+        {x = -114.60600, z = -181.69000}, {x = -121.57300, z = -182.08300}, {x = -150.90500, z = -192.35900},
+        {x = -202.96300, z = -209.90600}, {x = -249.85100, z = -225.51200}, {x = -333.73220, z = -245.04400},
+        {x = -380.90720, z = -252.89400}, {x = -441.15640, z = -262.12500}, {x = -449.79620, z = -264.47800},
+        {x = -453.14330, z = -266.99400}, {x = -456.31380, z = -273.63800}, {x = -455.37290, z = -283.46300},
+        {x = -416.88520, z = -495.98500}, {x = -410.91840, z = -521.12990}, {x = -408.90740, z = -526.43310},
+        {x = -404.19750, z = -533.41640}, {x = -392.80936, z = -546.22120}, {x = -390.85300, z = -553.85610},
+    }
+    local lead = cr11(-425.41, -330.86, math.rad(169))
+    lead.cpGetFieldPolygon = function() return recordedOutline end
+    local function tractorTrailer(x, z, heading, trailerHeading)
+        local v = vehicle(x, z, 2.8, 5.4, heading)
+        local th = trailerHeading or heading
+        local trailer = vehicle(x - math.sin(th) * 6, z - math.cos(th) * 6, 2.62, 8.36, th, 0.4)
+        trailer.getAttacherVehicle = function() return v end
+        v.children = {trailer}
+        return v
+    end
+    local rigs = {tractorTrailer(-451.06, -329.05, math.rad(170)),
+        tractorTrailer(-183.79, -210.19, math.rad(115), math.rad(63))}
+    local recorded = departure(recordedPoints, rigs, lead)
+    local startedAt = os.clock()
+    recorded.fieldWorkCourse.isOnConnectingPath = function(_, ix) return ix >= 37 and ix < #recordedPoints end
+    recorded:startConnectingPath(36)
+    local duration = os.clock() - startedAt
+    assert(recorded.workStarterCourse:getNumberOfWaypoints() == 211 and
+            recorded.workStarterCourse:getLength() > 709 and recorded.workStarterCourse:getLength() < 710,
+            'The fixture must retain the complete recorded connector rather than a simplified straight line')
+    assert(recorded.state == 'travel' and recorded.searches == 0 and recorded.connectingPathRetryAt == nil,
+            'The recorded connector must be retained immediately instead of waiting then searching 475 m to its end')
+    assert(duration < 2, 'The recorded dispatch must complete without a pathfinder iteration budget')
+    print(string.format('Recorded 709 m connector: %.3f s, %d searches, speed limit %s, %d clearance requests',
+            duration, recorded.searches, tostring(recorded.speed), recorded.moves))
+    local p, nextP = recordedPoints[16], recordedPoints[17]
+    local earlyLead = cr11(p[1], p[2], math.atan2(nextP[1] - p[1], nextP[2] - p[2]))
+    earlyLead.cpGetFieldPolygon = function() return recordedOutline end
+    local early = departure(recordedPoints, rigs, earlyLead)
+    early.fieldWorkCourse.isOnConnectingPath = recorded.fieldWorkCourse.isOnConnectingPath
+    early.state = 'work'
+    early.calculateTightTurnOffset = function() end
+    early:onWaypointChange(16, early.fieldWorkCourse)
+    assert(early.moves == 1 and early.state == 'work' and early.speed == nil and early.searches == 0 and
+            early.course == early.fieldWorkCourse,
+            'The recorded row must request nearby-trailer clearance before finishing, without interrupting cutting')
+end
+print('Connector departure, early clearance and recovery handover regressions: OK')
