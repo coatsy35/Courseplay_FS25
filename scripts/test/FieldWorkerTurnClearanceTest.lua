@@ -115,10 +115,12 @@ assert(not workingController:mustYieldPhysicalTurnClearance(approachingTurnVehic
         'The established lead combine must retain priority until it has cleared the corner')
 assert(workingController:hasPhysicalTurnPriority(approachingTurnVehicle, approachingTurn, false, true),
         'The lead combine must not stop for a follower that is approaching the same corner')
-assert(turningController:mustYieldPhysicalTurnClearance(waitingVehicle, waiting, false, true),
+assert(turningController:mustYieldPhysicalTurnClearance(waitingVehicle, waiting, true, false),
         'A turning combine must not reverse into a stopped worker calculating its connecting route')
-assert(not turningController:hasPhysicalTurnPriority(waitingVehicle, waiting, false, true),
+assert(not turningController:hasPhysicalTurnPriority(waitingVehicle, waiting, true, false),
         'Cached trail order must not grant turn priority over a stationary connecting worker')
+assert(not turningController:mustYieldPhysicalTurnClearance(waitingVehicle, waiting, false, true),
+        'A lead combine must not give the right of way to a waiting follower behind it')
 
 local otherAhead, selfAhead = rearApproachingController:resolveTurnConvoyOrder(
         workingVehicle, working, true, false)
@@ -194,6 +196,7 @@ turningController.isWorkerClearOfRemainingCourse = function() return true end
 turningController.updateTrail = function() end
 turningController.debugSparse = function() end
 turningController.slowDownFactor = {update = function() end, get = function() return 1 end}
+turningController.otherVehicleAheadOnTrail = {[waitingVehicle] = true}
 g_currentMission.vehicleSystem.vehicles = {turningVehicle, waitingVehicle}
 assert(turningController:getMaxSpeed(30, 10) == 0,
         'A turning combine must stop outside the stationary connecting worker even when its old trail had priority')

@@ -142,9 +142,12 @@ local function isWaitingForConnectingPath(strategy)
             strategy.connectingPathStartIx ~= nil
 end
 
-function FieldWorkerProximityController:hasConnectingWorkerReservation(otherVehicle, otherStrategy)
+function FieldWorkerProximityController:hasConnectingWorkerReservation(otherVehicle, otherStrategy,
+                                                                        otherIsAheadOnTrail)
     self.connectingWorkerReservations = self.connectingWorkerReservations or {}
-    if isWaitingForConnectingPath(otherStrategy) then
+    if otherIsAheadOnTrail ~= true then
+        self.connectingWorkerReservations[otherVehicle] = nil
+    elseif isWaitingForConnectingPath(otherStrategy) then
         if AIUtil.isStopped(otherVehicle) then
             self.connectingWorkerReservations[otherVehicle] = true
         end
@@ -194,9 +197,10 @@ function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehi
     local otherStarting = isDrivingToWorkStart(otherStrategy)
     local myManeuvering = isTurningOrManeuvering(myStrategy)
     local otherManeuvering = isTurningOrManeuvering(otherStrategy)
-    -- A worker held while its connecting route is calculated cannot yield any farther. In particular, a
-    -- headland turn must not reverse into it merely because an earlier trail sample gave the turn priority.
-    if myManeuvering and self:hasConnectingWorkerReservation(otherVehicle, otherStrategy) then
+    -- A lead worker held while its connecting route is calculated cannot yield any farther. Keep the
+    -- follower out until that worker starts its row, without granting this priority to a worker behind us.
+    if myManeuvering and self:hasConnectingWorkerReservation(otherVehicle, otherStrategy,
+            otherIsAheadOnTrail) then
         return true
     end
     -- Course progress establishes the convoy order before a corner. Approaching a turn must not let the rear
@@ -229,7 +233,8 @@ function FieldWorkerProximityController:hasPhysicalTurnPriority(otherVehicle, ot
     local otherStarting = isDrivingToWorkStart(otherStrategy)
     local myManeuvering = isTurningOrManeuvering(myStrategy)
     local otherManeuvering = isTurningOrManeuvering(otherStrategy)
-    if myManeuvering and self:hasConnectingWorkerReservation(otherVehicle, otherStrategy) then
+    if myManeuvering and self:hasConnectingWorkerReservation(otherVehicle, otherStrategy,
+            otherIsAheadOnTrail) then
         return false
     end
     if otherIsAheadOnTrail ~= selfIsAheadOnTrail and
@@ -329,7 +334,8 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 local selfIsAheadOnTrail = distanceFromMe > 0 and distanceFromMe < math.huge
                 otherIsAheadOnTrail, selfIsAheadOnTrail = self:resolveTurnConvoyOrder(otherVehicle, otherStrategy,
                         otherIsAheadOnTrail, selfIsAheadOnTrail)
-                local connectingWorkerReserved = self:hasConnectingWorkerReservation(otherVehicle, otherStrategy)
+                local connectingWorkerReserved = self:hasConnectingWorkerReservation(otherVehicle, otherStrategy,
+                        otherIsAheadOnTrail)
                 local clearOfRemainingCourse = (isDrivingToWorkStart(self.vehicle:getCpDriveStrategy()) or
                         isTurningOrManeuvering(self.vehicle:getCpDriveStrategy())) and
                         not connectingWorkerReserved and

@@ -354,6 +354,25 @@ local safeDetour = {contained = true,
 strategy:onPathfindingDoneToConnectingPathEnd(nil, true, safeDetour, false)
 assert(acceptedRoute == safeDetour,
         'A safe calculated detour must join a vehicle-width generated suffix without an endless retry')
+local savedFindPathToNode = strategy.pathfinderController.findPathToNode
+local seamReplanned = false
+strategy.pathfinderController.findPathToNode = function() seamReplanned = true end
+strategy.isConnectingPathBlockedByWorker = function(_, route, margin)
+    if route:getWaypointPosition(1) == 20 then
+        assert(margin == 0, 'The join must preserve both complete combine header widths')
+        return true
+    end
+    return false
+end
+strategy.connectingPathRejoinIx = 1
+local unsafeJoin = {contained = true,
+    getNumberOfWaypoints = function() return 2 end,
+    getWaypointPosition = function(_, ix) return ix * 10, 0, 0 end,
+    append = function() error('A join crossing another vehicle must not be accepted') end}
+strategy:onPathfindingDoneToConnectingPathEnd(nil, true, unsafeJoin, false)
+assert(seamReplanned and strategy.connectingPathRejoinIx == nil,
+        'A detour-to-connector join crossing another worker must be pathfound around')
+strategy.pathfinderController.findPathToNode = savedFindPathToNode
 strategy.workStarterCourse, strategy.isConnectingPathBlockedByWorker, strategy.startCourseToWorkStart =
         savedStarter, savedBlocked, savedStart
 
@@ -377,21 +396,37 @@ strategy.nextConnectingWorkerCheckAt = nil
 strategy.setMaxSpeed = function(_, speed) assert(speed == 0) end
 follower.rootNode = {x = 15.2, z = 20}
 g_currentMission.time = 35000
-strategy:checkStoppedWorkerOnConnectingPath()
+strategy:checkWorkerOnConnectingPath()
 assert(restartedAt == nil, 'A stopped combine in an adjacent parallel row must not interrupt the approach')
+follower.rootNode.x = 14.9
+assert(strategy:isConnectingPathBlockedByWorker(scanCourse:copy(strategy.vehicle, 1, 5), 0, true),
+        'A neighbouring header overlapping the full connecting corridor must be detected')
 follower.rootNode.x = 0
 g_currentMission.time = 36000
-strategy:checkStoppedWorkerOnConnectingPath()
+strategy:checkWorkerOnConnectingPath()
 assert(restartedAt == 1 and strategy.connectorRecoveryActive,
         'A stopped combine on the upcoming route must trigger collision-aware recovery before contact')
 follower.getIsCpFieldWorkActive = function() return false end
 restartedAt = nil
 strategy.connectorRecoveryActive = nil
 g_currentMission.time = 37000
-strategy:checkStoppedWorkerOnConnectingPath()
+strategy:checkWorkerOnConnectingPath()
 assert(restartedAt == 1 and strategy.connectorRecoveryActive,
         'A stopped combine must remain an obstacle after its AI job has stopped')
 follower.getIsCpFieldWorkActive = function() return true end
+restartedAt = nil
+strategy.connectorRecoveryActive = nil
+strategy.nextConnectingWorkerCheckAt = nil
+AIUtil.isStopped = function() return false end
+g_currentMission.time = 38000
+strategy:checkWorkerOnConnectingPath()
+assert(restartedAt == nil and strategy.connectingWorkerWaitFor == follower,
+        'A moving combine entering the connector must stop the approach immediately')
+g_currentMission.time = 44000
+strategy:checkWorkerOnConnectingPath()
+assert(restartedAt == 1,
+        'A moving combine that remains across the connector must trigger a new checked route')
+AIUtil.isStopped = function() return leadIsStopped end
 restartedAt = nil
 strategy.connectorRecoveryActive = nil
 g_currentMission.time = 35000

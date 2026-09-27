@@ -237,7 +237,7 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
     self:limitSpeed()
     self:checkProximitySensors(moveForwards)
     self:checkDistanceToOtherFieldWorkers()
-    self:checkStoppedWorkerOnConnectingPath()
+    self:checkWorkerOnConnectingPath()
 
     return gx, gz, moveForwards, self.maxSpeed, 100
 end
@@ -854,9 +854,9 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
     return false
 end
 
---- A stopped combine can enter a previously planned connector after pathfinding completed. Replan before
---- proximity braking leaves both headers nose to nose; adjacent parallel rows are not treated as blocked.
-function AIDriveStrategyFieldWorkCourse:checkStoppedWorkerOnConnectingPath()
+--- Another combine can enter a previously planned connector after pathfinding completed. Stop before
+--- its header reaches the corridor; adjacent parallel rows are not treated as blocked.
+function AIDriveStrategyFieldWorkCourse:checkWorkerOnConnectingPath()
     if self.state ~= self.states.DRIVING_TO_WORK_START_WAYPOINT or not self.connectingPathStartIx or
             self.connectorRecoveryActive or g_currentMission.time < (self.nextConnectingWorkerCheckAt or 0) then
         return
@@ -865,19 +865,31 @@ function AIDriveStrategyFieldWorkCourse:checkStoppedWorkerOnConnectingPath()
     local ix = self.course:getCurrentWaypointIx()
     local lastIx = self.course:getNumberOfWaypoints()
     if not ix or ix >= lastIx then return end
-    local lookAheadIx = self.course:getNextWaypointIxWithinDistance(ix, math.max(35, 2 * self:getWorkWidth()))
+    local lookAheadIx = self.course:getNextWaypointIxWithinDistance(ix, math.max(45, 3 * self:getWorkWidth()))
     local toIx = math.min(lastIx, lookAheadIx or ix + 12)
     if toIx <= ix then return end
     local upcoming = self.course:copy(self.vehicle, ix, toIx)
-    -- Use the inner corridor for this early warning; the normal collision check still guards full rig width.
-    local blocked, blocker, worker = self:isConnectingPathBlockedByWorker(upcoming, -3, true)
-    if blocked and blocker == 'fieldWorker' and worker and AIUtil.isStopped(worker) then
-        self:debug('Stopped worker %s occupies the upcoming connector; replanning before the header',
-                CpUtil.getName(worker))
-        self.connectorRecoveryActive = true
-        self.connectorRecoveryResumeIx = ix
+    -- Use both full header widths. A negative margin can allow their physical spans to overlap before braking.
+    local blocked, blocker, worker = self:isConnectingPathBlockedByWorker(upcoming, 0, true)
+    if blocked and blocker == 'fieldWorker' and worker then
         self:setMaxSpeed(0)
-        self:startBlockedConnectorRecovery()
+        if self.connectingWorkerWaitFor ~= worker then
+            self.connectingWorkerWaitFor = worker
+            self.connectingWorkerWaitSince = g_currentMission.time
+        end
+        if AIUtil.isStopped(worker) or
+                g_currentMission.time - self.connectingWorkerWaitSince >= 5000 then
+            self:debug('Worker %s occupies the upcoming connector; replanning before the header',
+                    CpUtil.getName(worker))
+            self.connectingWorkerWaitFor = nil
+            self.connectingWorkerWaitSince = nil
+            self.connectorRecoveryActive = true
+            self.connectorRecoveryResumeIx = ix
+            self:startBlockedConnectorRecovery()
+        end
+    else
+        self.connectingWorkerWaitFor = nil
+        self.connectingWorkerWaitSince = nil
     end
 end
 
@@ -1130,6 +1142,24 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToConnectingPathEnd(con
                 self:debug('Calculated detour cannot safely join the generated connector; replanning')
                 self.connectingPathRetryAt = g_currentMission.time + 5000
                 self.state = self.states.WAITING_FOR_PATHFINDER
+                return
+            end
+            local seam = {
+                getNumberOfWaypoints = function() return 2 end,
+                getWaypointPosition = function(_, ix)
+                    if ix == 1 then return fromX, 0, fromZ end
+                    return toX, 0, toZ
+                end,
+            }
+            if self:isConnectingPathBlockedByWorker(seam, 0) then
+                self:debug('Calculated detour joins through another vehicle; pathfinding directly to work start')
+                self.connectingPathRejoinIx = nil
+                local context = PathfinderContext(self.vehicle):allowReverse(self:getAllowReversePathfinding())
+                        :mustBeAccurate(true):ignoreFruit(not self.settings.avoidFruit:getValue())
+                self:setConnectingPathBoundary(context, AIUtil.getWidth(self.vehicle) + 4)
+                local _, steeringLength = AIUtil.getSteeringParameters(self.vehicle)
+                local targetNode, zOffset = self.turnContext:getTurnEndNodeAndOffsets(steeringLength)
+                self.pathfinderController:findPathToNode(context, targetNode, 0, zOffset, 1)
                 return
             end
             course:append(remainder)
