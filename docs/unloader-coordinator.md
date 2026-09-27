@@ -4,6 +4,9 @@ Courseplay coordinates available combine unloaders across all active harvesters 
 coordinator assigns at most one standby unloader to each harvester and one harvester to each standby, preventing
 independent unloaders from clustering behind the nearest machine.
 
+For code responsibilities, state ownership and safe extension points, see the
+[maintainer guide](unloader-coordinator-maintenance.md). Current behaviour below supersedes the historical build notes.
+
 ## Coverage
 
 - A combine receives one soft relief reservation. The reserved trailer remains in a distant field pool until its
@@ -17,10 +20,9 @@ independent unloaders from clustering behind the nearest machine.
   can arrive at least ten seconds sooner. During an active route search, the improvement must also exceed a quarter
   of the assigned trailer's travel estimate, avoiding repeated cancellation for small gains. If the assigned trailer has remained stopped for ten seconds, the
   replacement also releases it onto a reverse escape course using normal CP proximity control.
-- Unloaders beyond the active and configured standby requirements receive interruptible field-pool positions. Each
-  trailer enters the field and parks in a separate rear layer. When predicted demand advances materially, the next
-  trailer may move to a nearer course-derived layer and park again. Pool distance accounts for time until demand,
-  header width and the number of waiting trailers.
+- Unloaders beyond the active and configured standby requirements receive interruptible field-pool reservations.
+  A `POOL` assignment holds the trailer where it is; a calculated pool waypoint does not authorise a journey.
+  Promotion to `STANDBY`, an accepted unload call or a genuine obstruction can require movement.
 - A pooled trailer inside an approaching combine's swept path moves clear before the normal blocked-vehicle timeout.
   Fruit-protected access-point waits remain stationary until the combine passes, as configured.
 - A trailer waiting ahead with fruit avoidance enabled stays at its access-point pool until the harvester passes and
@@ -42,11 +44,16 @@ The nearest suitable trailer becomes the stable combine lead; a nearby partly fi
 time is within ten seconds of the nearest option. Before the configured call percentage, it only advances in
 deliberate staging moves to harvested positions and parks between moves. It does not actively follow the combine.
 At the configured percentage, Courseplay promotes that parked lead and starts its unloading approach. Rear pool
-trailers stay parked until the active lead's measured fill rate predicts that it will need relief, or its compatible
-free capacity is already smaller than the crop in the combine's tank. Relief prediction also accounts for ongoing
-harvest consuming the capacity left after that tank. Future staging points account for predicted travel along the
-course but must already be harvested. Departure timing allows for closing the gap to a moving harvester. A parked
-lead remains still when its predicted need is distant. Failed staging is retried and does not count as arrival.
+trailers stay parked while the active grain trailer owns the nearby working corridor. Relief predictions help plan
+the next reservation; they do not permit a second grain trailer to enter that occupied corridor. Future staging
+points account for predicted travel along the course but must already be harvested. Departure timing allows for
+closing the gap to a moving harvester. Failed staging is retried and does not count as arrival.
+
+Nearby grain combines share a serving trailer only when its serving area and the game's fill-type compatibility
+check permit it. This does not allow mixed loads. Compatibility and free space have different purposes: a full
+compatible rig still protects its corridor while reversing clear. After release, actual calls require compatible
+free capacity and obey the configured departure threshold, so a suitable partial trailer can serve the next combine
+or a replacement can take over. Forager relief remains separate.
 
 The configured call percentage governs normal harvesting calls. A combine already waiting for unloading, including
 a finished row or course below that percentage, can always request a trailer. A queued departure can yield to a
@@ -87,6 +94,10 @@ clearance until the lead has cleared the corner. The lead ignores the follower's
 mutual-yield deadlocks. Physical turn clearance also applies to machines using different course names; their course
 trails are not used to infer convoy order. Simultaneous turns without an established order use a stable vehicle order.
 
+After the last active worker on the served field stops, a trailer that has completed an unload and reversed clear
+can deliver its remaining partial load from idle or standby. Fresh jobs, empty trailers, active calls and unfinished
+obstruction clearance do not trigger that final-load departure.
+
 ## Settings
 
 Each combine or forage harvester has an **Unloader coordination** section:
@@ -94,10 +105,15 @@ Each combine or forage harvester has an **Unloader coordination** section:
 - **Nearby standby unloader** enables one additional staged or relief unloader.
 - **Standby distance** selects a target distance of 30–80 metres behind the harvester.
 
-Staging pauses during turns and manoeuvres. Targets must be on fruit-free ground, remain inside the field polygon,
-and retain collision avoidance. Reached pool and staging targets remain fixed until coverage or urgency changes.
+Ordinary staging pauses during turns and manoeuvres and selects harvested targets within the field. A trailer
+blocking a combine's connector has a separate clearance procedure: it first seeks a harvested holding point,
+then permits a field-contained emergency route through crop if necessary. Collision checks still apply.
+Finishing that escape does not permit crossing back into the connector before the combine finishes its approach.
 
 ## Behaviour checklist for test build 2928
+
+This checklist and the 2924–2928 notes below record earlier development. In particular, their advancing pool
+positions and capacity-based sharing rules have been superseded by the current coverage rules above.
 
 | Requirement | Automated coverage | In-game acceptance |
 | --- | --- | --- |
@@ -178,3 +194,15 @@ See [the branch review](unloader-coordinator-review.md) for the comparison base,
 lifecycle/coordination defects, refactoring, release checks and remaining in-game validation. This supersedes
 the older capacity-based sharing descriptions above: an active compatible trailer retains corridor ownership
 through full-trailer reverse clearance; capacity governs the replacement after it releases.
+
+## Build 2963: maintainability
+
+1. Split fleet rebalancing into candidate selection, reserved/pool assignment creation and complete-plan publication.
+   Candidate order, scoring, timing and driver callback order are preserved.
+2. Share the standby-to-active call transition and the existing departure-clearance calculation between their callers.
+3. Document reservation, active-call and physical-clearance lifetimes, callback generations and connector handover
+   beside the code; add a [maintainer guide](unloader-coordinator-maintenance.md) and correct outdated behaviour notes.
+4. Add regression coverage for driver callbacks seeing the complete fleet plan, including an ongoing clearance.
+
+This is a refactor with no intended driving behaviour change from build 2962. The same release gate checks source
+and packaged code. Results from the ongoing 2962 in-game test remain relevant.

@@ -426,6 +426,8 @@ function AIDriveStrategyCombineCourse:driveUnloadOnField()
         end
     elseif self.unloadState == self.states.WAITING_FOR_UNLOADER_TO_LEAVE then
         self:setMaxSpeed(0)
+        -- The minimum pause and actual rig clearance are independent requirements. Call deregistration or
+        -- completion of a short reverse course does not mean the trailer has cleared the header's next move.
         local minimumWaitFinished = self.waitingForUnloaderSince + 5000 < g_currentMission.time
         local unloaderStillClearing = UnloaderCoordinator:isStillClearingHarvester(
                 self.unloader:get(), self.vehicle)

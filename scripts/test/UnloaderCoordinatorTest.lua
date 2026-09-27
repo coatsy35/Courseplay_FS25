@@ -588,3 +588,45 @@ UnloaderCoordinator.assignments = {[clearing] = clearingAssignment}
 UnloaderCoordinator:rebalance(true)
 assert(UnloaderCoordinator.assignments[clearing] == clearingAssignment and clearing.assignment == clearingAssignment,
         'A clearing trailer must keep its assignment until the whole rig leaves the connector')
+
+-- Driver callbacks can query the coordinator. They must see a complete old or new fleet plan, never a partial one.
+local plannedCombine = makeHarvester('Publication combine', 500, false, 10, 500)
+local nextLead = makeUnloader('Publication lead', 460, true, nil, 40)
+local nextSpare = makeUnloader('Publication spare', 350, true, nil, 0)
+local retired = makeUnloader('Retired reservation', 100, false, nil, 0)
+local retained = makeUnloader('Ongoing clearance', 100, false, nil, 0)
+retained.isConnectorClearancePending = function() return true end
+local retainedAssignment = {harvester = lead, role = 'STANDBY', reserved = true}
+local oldPlan = {
+    [retired] = {harvester = lead, role = 'POOL', reserved = false},
+    [retained] = retainedAssignment,
+}
+local released, notified = false, 0
+retired.clearStandbyAssignment = function(self, assignment)
+    assert(UnloaderCoordinator.assignments == oldPlan and assignment == oldPlan[self],
+            'Release callbacks must retain access to the previous reservation')
+    released = true
+end
+local function acceptPublishedPlan(self, assignment)
+    local plan = UnloaderCoordinator.assignments
+    assert(released and plan ~= oldPlan and not plan[retired],
+            'Obsolete reservations must be released before new driver notifications')
+    assert(plan[nextLead] and plan[nextLead].reserved and plan[nextSpare] and not plan[nextSpare].reserved,
+            'Every notification must see both the reserved lead and the remaining pool')
+    assert(plan[retained] == retainedAssignment and plan[self] == assignment,
+            'Physical clearance must survive in the published plan before any driver resumes')
+    self.assignment = assignment
+    notified = notified + 1
+end
+nextLead.setStandbyAssignment = acceptPublishedPlan
+nextSpare.setStandbyAssignment = acceptPublishedPlan
+retained.setStandbyAssignment = acceptPublishedPlan
+AIDriveStrategyUnloadCombine.activeUnloaders = {
+    [nextLead] = nextLead.vehicle, [nextSpare] = nextSpare.vehicle,
+    [retired] = retired.vehicle, [retained] = retained.vehicle,
+}
+g_currentMission.vehicleSystem.vehicles = {plannedCombine}
+UnloaderCoordinator.assignments = oldPlan
+UnloaderCoordinator:rebalance(true)
+assert(notified == 3, 'The complete plan must be delivered to each retained or newly assigned driver')
+print('Fleet plan publication and clearance retention: OK')

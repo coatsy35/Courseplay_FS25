@@ -434,6 +434,8 @@ function AIDriveStrategyFieldWorkCourse:isTurning()
     return self.state == self.states.TURNING
 end
 
+-- Cleanup belongs to a successful fieldwork/turn handover. A last-waypoint callback may synchronously start
+-- alignment recovery, so unconditional cleanup after that callback would erase the replacement connector.
 function AIDriveStrategyFieldWorkCourse:clearConnectingPath()
     if self.connectingPathStartIx then
         self.proximityController:unregisterBlockingObjectListener()
@@ -967,6 +969,7 @@ function AIDriveStrategyFieldWorkCourse:createConnectingPathContext(preferredPat
 end
 
 function AIDriveStrategyFieldWorkCourse:waitForConnectingPathRetry(delayMs)
+    -- This state also represents a timed obstacle wait; it does not guarantee a running pathfinder coroutine.
     self.connectingPathRetryAt = g_currentMission.time + delayMs
     self.state = self.states.WAITING_FOR_PATHFINDER
 end
@@ -995,6 +998,9 @@ function AIDriveStrategyFieldWorkCourse:replanConnectingPathToWorkStart()
     self:findConnectingPath(self:createConnectingPathContext())
 end
 
+-- connectingPathStartIx belongs to fieldWorkCourse. activeConnectingPathCourse is the accepted temporary
+-- approach; connectorRecoveryResumeIx indexes that approach, not the original fieldwork course.
+-- See docs/unloader-coordinator-maintenance.md before changing recovery or row-entry ownership.
 function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
     self.proximityController:unregisterBlockingObjectListener()
     self.nextWaypointRetryAt = nil

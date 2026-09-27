@@ -648,7 +648,7 @@ function AIDriveStrategyUnloadCombine:startWaitingForSomethingToDo()
 end
 
 --- Release an en-route call so a stopped combine can use an eligible trailer with a materially shorter ETE.
---- Never transfer while unloading is already under way.
+--- An unloading state may yield only for blocked recovery and only while the combine is not discharging.
 ---@param combine table
 ---@param recoverFromBlock boolean|nil
 ---@return boolean
@@ -1293,6 +1293,8 @@ function AIDriveStrategyUnloadCombine:requestDriveUnloadNow()
     self.driveUnloadNowRequested:set(true, 1000)
 end
 
+--- End active-call ownership and invalidate its callbacks. Standby reservations belong to
+--- UnloaderCoordinator:release(); physical reverse-clearance records deliberately survive both releases.
 function AIDriveStrategyUnloadCombine:releaseCombine()
     self.combineRequestGeneration = (self.combineRequestGeneration or 0) + 1
     if self.pathfinderController then
@@ -1520,7 +1522,9 @@ function AIDriveStrategyUnloadCombine:startUnloadingTrailers()
     end
 end
 
--- An abandoned assignment must not deliver a result into a subsequent assignment, even if both use the same state.
+-- Used for both active calls and standby searches. combineRequestGeneration invalidates the assignment;
+-- pathfinderRequestGeneration invalidates a search within that assignment, including a same-state replacement.
+-- Cancellation alone is insufficient: an abandoned callback must not overwrite a newer route.
 function AIDriveStrategyUnloadCombine:registerCombinePathfinderListeners(done, failed, obstacle)
     self.pathfinderRequestGeneration = (self.pathfinderRequestGeneration or 0) + 1
     local request = self.pathfinderRequestGeneration
@@ -2071,6 +2075,16 @@ function AIDriveStrategyUnloadCombine:getDistanceAndEteToWaypoint(waypoint)
     return self:getDistanceAndEte(goal)
 end
 
+--- Promote provisional standby to an active call. Firm forage reservations are checked by isAllowedToBeCalled().
+--- Invalidate the old assignment before cancelling its search, then install the new owner before departure queuing.
+function AIDriveStrategyUnloadCombine:beginCombineCall(combine)
+    self.postUnloadClearanceHarvester = nil
+    UnloaderCoordinator:release(self)
+    self.combineRequestGeneration = (self.combineRequestGeneration or 0) + 1
+    if self.pathfinderController then self.pathfinderController:cancel() end
+    self.combineToUnload = combine
+end
+
 --- Pre-call for a combine that will make a pocket instead of unloading alongside on the first headland. The lead
 --- becomes the active assignment immediately, approaches a harvested point behind the combine, then follows at the
 --- configured standby distance until the combine is waiting in its pocket.
@@ -2085,11 +2099,7 @@ function AIDriveStrategyUnloadCombine:callForPocket(combine)
         self:debug('callForPocket: no safe harvested standby waypoint available yet')
         return false
     end
-    self.postUnloadClearanceHarvester = nil
-    UnloaderCoordinator:release(self)
-    self.combineRequestGeneration = (self.combineRequestGeneration or 0) + 1
-    if self.pathfinderController then self.pathfinderController:cancel() end
-    self.combineToUnload = combine
+    self:beginCombineCall(combine)
     if self:queueForDeparture(combine, waypoint, true) then return true end
     self:holdNearbyStandbyUnloadersForDeparture()
     self.rendezvousWaypoint = waypoint
@@ -2110,13 +2120,7 @@ end
 --- unloader to come to the combine.
 ---@return boolean true if the unloader has accepted the request
 function AIDriveStrategyUnloadCombine:call(combine, waypoint)
-    -- A real unload call always supersedes provisional staging. Firm forage reservations are filtered by
-    -- isAllowedToBeCalled(), so reaching this point also performs the atomic standby-to-active promotion.
-    self.postUnloadClearanceHarvester = nil
-    UnloaderCoordinator:release(self)
-    self.combineRequestGeneration = (self.combineRequestGeneration or 0) + 1
-    if self.pathfinderController then self.pathfinderController:cancel() end
-    self.combineToUnload = combine
+    self:beginCombineCall(combine)
     if self:queueForDeparture(combine, waypoint, false) then return true end
     self.approachingPocketStandby = nil
     local xOffset, zOffset = self:getPipeOffset(combine)
@@ -2325,7 +2329,8 @@ function AIDriveStrategyUnloadCombine:holdAtStandbyPosition()
     self:setMaxSpeed(0)
 end
 
----@param assignment table|nil
+--- Removing a reservation must not abandon an unfinished physical escape from a combine's connector.
+---@param assignment UnloaderStandbyAssignment|nil
 function AIDriveStrategyUnloadCombine:clearStandbyAssignment(assignment)
     if assignment and self.standbyAssignment and assignment.harvester ~= self.standbyAssignment.harvester then
         return
@@ -2346,7 +2351,7 @@ function AIDriveStrategyUnloadCombine:clearStandbyAssignment(assignment)
     end
 end
 
----@param assignment table
+---@param assignment UnloaderStandbyAssignment
 function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
     if not assignment or not self:isAvailableForStaging() then
         return
@@ -2370,6 +2375,8 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
         end
         self.connectorClearance = nil
     end
+    -- Being physically clear ends the escape, but does not permit staging back across a live connector.
+    -- Keep this separate from connectorClearance so the combine can pass without another pool movement.
     local yieldingTo = self.standbyYieldingToHarvester
     if yieldingTo and yieldingTo.getIsCpActive and yieldingTo:getIsCpActive() then
         local driver = yieldingTo:getCpDriveStrategy()
@@ -3524,13 +3531,10 @@ end
 ---@return AIDriveStrategyUnloadCombine|nil
 function AIDriveStrategyUnloadCombine:getNearbyDepartingUnloader()
     local x, _, z = getWorldTranslation(self.vehicle.rootNode)
-    local ownLength = self.getTrainLength(self.vehicle)
     for strategy, _ in pairs(self.activeUnloaders or {}) do
         if strategy ~= self and self.isDepartingForActiveCall(strategy) then
             local otherX, _, otherZ = getWorldTranslation(strategy.vehicle.rootNode)
-            local clearance = math.max(30,
-                    (ownLength + self.getTrainLength(strategy.vehicle)) / 2 +
-                            math.max(self.turningRadius, strategy.turningRadius))
+            local clearance = self:getUnloaderDepartureClearance(strategy)
             if MathUtil.vector2Length(otherX - x, otherZ - z) < clearance then
                 return strategy
             end
