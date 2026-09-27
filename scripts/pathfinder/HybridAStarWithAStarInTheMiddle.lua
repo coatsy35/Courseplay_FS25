@@ -49,7 +49,7 @@ function HybridAStarWithAStarInTheMiddle:start(start, goal, turnRadius, allowRev
     self.startNode, self.goalNode = State3D.copy(start), State3D.copy(goal)
     self.originalStartNode = State3D.copy(self.startNode)
     self.turnRadius, self.allowReverse, self.hitchLength = turnRadius, allowReverse, hitchLength
-    self.hybridRange = self.turnRadius * 4
+    self.hybridRange = self.hybridRangeOverride or self.turnRadius * 4
     self.constraints = constraints
     self.hybridRange = self.hybridRange and self.hybridRange or turnRadius * 3
     -- how far is start/goal apart?

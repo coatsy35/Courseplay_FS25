@@ -217,6 +217,15 @@ target = nil
 strategy:setStandbyAssignment({harvester = combine, role = 'STANDBY', waypoint = {x = 20, z = 0}})
 assert(strategy.state == strategy.states.WAITING_IN_STANDBY and not target,
     'A safe standby trailer must remain parked until the combine finishes its connector')
+driver.states.TURNING = {}
+driver.state = driver.states.TURNING
+driver.aiTurn = {isDistantPathfinderTurn = true}
+strategy:setStandbyAssignment({harvester = combine, role = 'STANDBY', waypoint = {x = 20, z = 0}})
+assert(strategy.state == strategy.states.WAITING_IN_STANDBY and not target and
+        strategy.standbyYieldingToHarvester == combine,
+    'Clearing a distant CourseTurn must not send the trailer back while the combine retries or travels')
+driver.aiTurn = nil
+driver.state = driver.states.DRIVING_TO_WORK_START_WAYPOINT
 
 -- If forward-only pathfinding cannot turn past a combine header, a clear straight reverse makes
 -- enough room for another route search. An occupied rear corridor must never be used.

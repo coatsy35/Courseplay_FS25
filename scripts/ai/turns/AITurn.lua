@@ -119,7 +119,9 @@ function AITurn:startRecoveryTurn(...)
 end
 
 function AITurn:onBlocked()
-    if self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then return end
+    if self.state == self.states.WAITING_FOR_PATHFINDER or
+            (self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP) or
+            (self.states.WAITING_FOR_TURN_PATH and self.state == self.states.WAITING_FOR_TURN_PATH) then return end
     self:startRecoveryTurn(1 * self.turningRadius)
 end
 
@@ -271,12 +273,17 @@ function AITurn:getDriveData(dt)
     elseif self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then
         self:updateLoopSearch()
         maxSpeed = 0
+    elseif self.states.WAITING_FOR_TURN_PATH and self.state == self.states.WAITING_FOR_TURN_PATH then
+        self:updateDistantTurnPathRetry()
+        maxSpeed = 0
     else
         -- Performing the actual turn
         gx, gz, moveForwards, maxSpeed = self:turn(dt)
     end
     -- finishRow can enter the waiting state in this same update.
-    if self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP then maxSpeed = 0 end
+    if self.state == self.states.WAITING_FOR_PATHFINDER or
+            (self.states.WAITING_FOR_LOOP and self.state == self.states.WAITING_FOR_LOOP) or
+            (self.states.WAITING_FOR_TURN_PATH and self.state == self.states.WAITING_FOR_TURN_PATH) then maxSpeed = 0 end
     return gx, gz, moveForwards, maxSpeed
 end
 
@@ -487,6 +494,7 @@ CourseTurn = CpObject(AITurn)
 ---@param fieldWorkCourse Course needed only when generating a pathfinder turn, this is where it gets the headland
 function CourseTurn:init(vehicle, driveStrategy, ppc, proximityController, turnContext, fieldWorkCourse, workWidth, name)
     AITurn.init(self, vehicle, driveStrategy, ppc, proximityController, turnContext, workWidth, name or 'CourseTurn')
+    self:addState('WAITING_FOR_TURN_PATH')
 
     self.forceTightTurnOffset = false
     self.enableTightTurnOffset = false
@@ -507,6 +515,9 @@ function CourseTurn:getForwardSpeed()
     if self.turnCourse and self.turnCourse.chainReturn then
         return AITurn.getForwardSpeed(self)
     end
+    if self.pathfinderTurnCourse and self.pathfinderTurnCourse == self.turnCourse then
+        return self:updatePathfinderTurnTravel()
+    end
     if self.turnCourse then
         local currentWpIx = self.turnCourse:getCurrentWaypointIx()
         if self.turnCourse:getDistanceFromFirstWaypoint(currentWpIx) > 10 and
@@ -519,6 +530,34 @@ function CourseTurn:getForwardSpeed()
         end
     end
     return AITurn.getForwardSpeed(self)
+end
+
+--- A pathfinder turn may include hundreds of metres of headland travel. The turn owns PPC's callbacks,
+--- so the fieldwork connector's lookahead policy does not run here. Match travelling speed with a travelling
+--- lookahead, and reserve short lookahead/turn speed for bends, reversing and implement-lowering approaches.
+function CourseTurn:updatePathfinderTurnTravel()
+    local course = self.turnCourse
+    local ix = course:getCurrentWaypointIx()
+    local lookahead = math.max(self.ppc.normalLookAheadDistance, 6)
+    local previewDistance = math.max(15, 2 * lookahead)
+    local lastIx = course:getNextWaypointIxWithinDistance(ix, previewDistance)
+    local precise = self.state ~= self.states.TURNING or self.ppc:isReversing() or
+            course:getDistanceFromFirstWaypoint(ix) <= 10 or course:getDistanceToLastWaypoint(ix) <= 20
+    for i = ix, lastIx do
+        if course:isReverseAt(i) or
+                TurnManeuver.hasTurnControl(course, i, TurnManeuver.LOWER_IMPLEMENT_AT_TURN_END) then
+            precise = true
+            break
+        end
+    end
+    local radius = course:getMinRadiusWithinDistance(ix, previewDistance)
+    if radius and radius < 2 * self.turningRadius then precise = true end
+    if precise then
+        self.ppc:setShortLookaheadDistance()
+        return AITurn.getForwardSpeed(self)
+    end
+    self.ppc:setLookaheadDistance(lookahead)
+    return self.settings.fieldSpeed:getValue()
 end
 
 -- this turn starts when the vehicle reached the point where the implements are raised.
@@ -572,6 +611,7 @@ function CourseTurn:startTurn()
         self:generateCalculatedTurn()
         self.state = self.states.TURNING
     elseif self.turnContext:isPathfinderTurn(2 * self.turningRadius, self.workWidth) then
+        self.isDistantPathfinderTurn = self.driveStrategy.callUnloader ~= nil
         self:debug('Starting a pathfinder turn on headland')
         self:generatePathfinderTurn(true)
     elseif canTurnOnField then
@@ -602,7 +642,8 @@ function CourseTurn:startTurn()
             self:debug('No headland loop passed the detected chain geometry checks')
             self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
             return
-        elseif not self.headlandLoopGeometryChecked and not self:fitCalculatedTurnToBoundary() then
+        elseif not self.isDistantPathfinderTurn and not self.headlandLoopGeometryChecked and
+                not self:fitCalculatedTurnToBoundary() then
             if self.headlandLoopWidthChecked then
                 self:debug('No width-checked headland loop fits the field corridor')
                 self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
@@ -673,6 +714,10 @@ function CourseTurn:turn()
             self.turnContext.chainReturnFollowsFieldwork = self.turnCourse.chainReturn.fieldCourse ~= nil
         end
         self.state = self.states.ENDING_TURN
+        if self.pathfinderTurnCourse == self.turnCourse then
+            self.ppc:setShortLookaheadDistance()
+            maxSpeed = math.min(maxSpeed, AITurn.getForwardSpeed(self))
+        end
         self:debug('About to end turn')
     end
     return gx, gz, moveForwards, maxSpeed
@@ -858,6 +903,8 @@ function CourseTurn:fitForwardHeadlandLoop(boundary)
 end
 
 function CourseTurn:generateCalculatedTurn()
+    if self.pathfinderTurnCourse then self.ppc:setShortLookaheadDistance() end
+    self.pathfinderTurnCourse = nil
     local turnManeuver
     self.headlandLoopGeometryChecked = false
     self.headlandLoopWidthChecked = false
@@ -912,18 +959,41 @@ function CourseTurn:generateCalculatedTurn()
     self.turnCourse = turnManeuver:getCourse()
 end
 
+--- Distant row transfers cannot use the local analytical fallback: moving that entire path backwards to
+--- fit the departure edge can create a hundred-metre reverse at both ends. Retry a different headland join
+--- on a later update instead. Four headland joins and one free search form a batch. All searches retain
+--- collision checks and crop penalties; the free search is not permission to ignore standing crop.
+function CourseTurn:waitForDistantTurnPath()
+    self.distantTurnPathAttempt = ((self.distantTurnPathAttempt or 0) + 1) % 5
+    self.distantTurnPathRetryAt = g_currentMission.time + (self.distantTurnPathAttempt == 0 and 5000 or 500)
+    self.state = self.states.WAITING_FOR_TURN_PATH
+    self:debug('Distant headland transfer unavailable; waiting to retry join %d, without a reversing fallback',
+            self.distantTurnPathAttempt + 1)
+end
+
+function CourseTurn:updateDistantTurnPathRetry()
+    if g_currentMission.time >= self.distantTurnPathRetryAt then
+        self.distantTurnPathRetryAt = nil
+        self:generatePathfinderTurn(true)
+    end
+end
+
 function CourseTurn:generatePathfinderTurn(useHeadland)
     self.pathfindingStartedAt = g_currentMission.time
     local result
     local turnEndNode, goalOffset = self.turnContext:getTurnEndNodeAndOffsets(self.steeringLength)
     local _, backMarkerDistance = self.driveStrategy:getFrontAndBackMarkers()
     self:debug('Pathfinder turn (useHeadland: %s): generate turn with hybrid A*, goal offset %.1f', useHeadland, goalOffset)
+    local allowReverse = not self.isDistantPathfinderTurn and self.driveStrategy:getAllowReversePathfinding()
+    local attempt = self.distantTurnPathAttempt or 0
+    local joinDistance = self.isDistantPathfinderTurn and (4 * self.turningRadius + 20 * attempt) or nil
+    if self.isDistantPathfinderTurn and attempt == 4 then useHeadland = false end
     self.driveStrategy.pathfinder, result = PathfinderUtil.findPathForTurn(self.vehicle, 0, turnEndNode, goalOffset,
-            self.turningRadius, self.driveStrategy:getAllowReversePathfinding(),
+            self.turningRadius, allowReverse,
             useHeadland and self.fieldWorkCourse or nil,
             self.driveStrategy:getWorkWidth(), backMarkerDistance,
             self.driveStrategy:isTurnOnFieldActive(), self.turnContext:getBoundaryId(),
-            FieldworkBoundary.forVehicle(self.vehicle, self.workWidth))
+            FieldworkBoundary.forVehicle(self.vehicle, self.workWidth), joinDistance)
     if result.done then
         return self:onPathfindingDone(result.path)
     else
@@ -944,11 +1014,37 @@ function CourseTurn:onPathfindingDone(path)
         self:debug('Extending course at direction switch for reversing to %.1f m (or at least 1m)', -x)
         self.turnCourse:adjustForReversing(math.max(1, -x))
         TurnManeuver.setLowerImplements(self.turnCourse, endingTurnLength, true)
+        self.pathfinderTurnCourse = self.turnCourse
     else
+        if self.isDistantPathfinderTurn then
+            -- A failed searched hand-off may never reach the normal acceptance check. Its intended
+            -- headland still identifies a parked rig that must yield, rather than backing the combine away.
+            local pathfinder = self.driveStrategy.pathfinder
+            if pathfinder and pathfinder.turnHeadlandCourse and self.driveStrategy.isConnectingPathBlockedByWorker then
+                self.driveStrategy:isConnectingPathBlockedByWorker(pathfinder.turnHeadlandCourse, 0)
+            end
+            self:waitForDistantTurnPath()
+            return
+        end
         self:debug('No path found in %d ms, falling back to normal turn course generator', g_currentMission.time - (self.pathfindingStartedAt or 0))
         self:generateCalculatedTurn()
     end
-    if self.headlandLoopGeometryChecked and not self.turnCourse then
+    if self.isDistantPathfinderTurn then
+        local boundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
+        if not self.turnCourse:isForwardOnly() or not self:turnCourseFitsField(boundary) then
+            self:waitForDistantTurnPath()
+            return
+        end
+        -- The normal connector checker asks an idle blocking rig to clear the actual route. Give it that
+        -- chance before moving the combine; never substitute a translated reverse to get round the trailer.
+        local driver = self.driveStrategy
+        if driver.isConnectingPathBlockedByWorker then
+            if driver:isConnectingPathBlockedByWorker(self.turnCourse, 0) then
+                self:waitForDistantTurnPath()
+                return
+            end
+        end
+    elseif self.headlandLoopGeometryChecked and not self.turnCourse then
         self:debug('No headland loop passed the detected chain geometry checks')
         self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
         return
@@ -960,6 +1056,7 @@ function CourseTurn:onPathfindingDone(path)
     self.ppc:setCourse(self.turnCourse)
     self.ppc:initialize(1)
     self.state = self.states.TURNING
+    if self.pathfinderTurnCourse == self.turnCourse then self:updatePathfinderTurnTravel() end
 end
 
 function CourseTurn:drawDebug()

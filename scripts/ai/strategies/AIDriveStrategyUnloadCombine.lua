@@ -2381,7 +2381,8 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
     if yieldingTo and yieldingTo.getIsCpActive and yieldingTo:getIsCpActive() then
         local driver = yieldingTo:getCpDriveStrategy()
         if driver and driver.states and (driver.state == driver.states.WAITING_FOR_PATHFINDER or
-                driver.state == driver.states.DRIVING_TO_WORK_START_WAYPOINT) then
+                driver.state == driver.states.DRIVING_TO_WORK_START_WAYPOINT or
+                (driver.state == driver.states.TURNING and driver.aiTurn and driver.aiTurn.isDistantPathfinderTurn)) then
             -- Do not re-enter the connecting corridor just after yielding to the combine driving through it.
             self:holdAtStandbyPosition()
             return

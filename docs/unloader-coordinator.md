@@ -206,3 +206,19 @@ through full-trailer reverse clearance; capacity governs the replacement after i
 
 This is a refactor with no intended driving behaviour change from build 2962. The same release gate checks source
 and packaged code. Results from the ongoing 2962 in-game test remain relevant.
+
+## Build 2964: headland travel and trailer priority
+
+1. Give accepted long pathfinder turns travelling lookahead. Tight bends and row-entry/lowering sections retain
+   precise steering and the configured turn speed. Calculated turns and chain-planned loops are unchanged.
+2. Replace the failed distant-combine-turn analytical fallback with scheduled forward-only route retries to the
+   original row start. The captured 2962 failure had generated a 103.7 m reverse followed by another long reverse.
+3. Request parked-trailer clearance even when a searched headland hand-off fails. Refuse occupied assembled routes
+   and keep the trailer yielding until the combine completes its distant turn.
+4. Remove the automatic crop-avoidance override for trailer and unrelated connector failures. Only an identified
+   obstructing combine authorises that override; normal crop avoidance remains CP's cost preference.
+5. Add regressions for synchronous failure/braking, timed retries, original row targets, rejected routes, steering
+   transitions, trailer clearance and the crop exception. Includes the 2963 maintainability changes above.
+
+The source and packaged-runtime release checks must pass before publication. Steering behaviour, alternative
+headland joins and trailer clearance still require the matching in-game run.

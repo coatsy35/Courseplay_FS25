@@ -1116,7 +1116,16 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
 end
 
 function AIDriveStrategyFieldWorkCourse:onPathfindingFailedToConnectingPathEnd(controller, lastContext, wasLastRetry, currentRetryAttempt)
-    local blocked = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
+    local blocked, blocker, otherWorker = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
+    local otherStrategy = otherWorker and otherWorker.getCpDriveStrategy and otherWorker:getCpDriveStrategy()
+    local avoidingCombine = blocker == 'fieldWorker' and
+            (otherWorker.spec_combine ~= nil or (otherStrategy and otherStrategy.callUnloader ~= nil))
+    -- Each retry re-evaluates the exception. A parked trailer must yield; its presence (or an unrelated
+    -- pathfinding failure) must not disable crop avoidance and send the harvester across standing crop.
+    if blocked and blocker == 'unloader' then
+        self:waitForConnectingPathRetry(2000)
+        return
+    end
     if blocked and wasLastRetry then
         -- Keep collision checks on the narrower-field retry. If that also fails, wait for the
         -- blocking machine rather than driving the generated connector through it.
@@ -1127,9 +1136,10 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingFailedToConnectingPathEnd(c
     if wasLastRetry then
         self:retryOrDriveGeneratedConnectingPath()
     else
-        self:debug('Connecting path blocked; retry through crop with vehicle-width field clearance')
+        self:debug('Retry connecting path with vehicle-width clearance; crop detour for another combine: %s',
+                tostring(avoidingCombine == true))
         self:setConnectingPathBoundary(lastContext, 0)
-        lastContext:ignoreFruit(true)
+        lastContext:ignoreFruit(avoidingCombine == true)
         controller:retry(lastContext)
     end
 end

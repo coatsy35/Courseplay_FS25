@@ -16,6 +16,7 @@ Paths below are relative to the repository root. Search for the named functions 
 | `scripts/ai/strategies/AIDriveStrategyUnloadCombine.lua` | One tractor/trailer rig: eligibility, call promotion, departure queues, standby travel, unloading, reversing, obstruction clearance and final delivery. Start at `getDriveData`, `beginCombineCall`, `setStandbyAssignment` and `startConnectorClearance`. |
 | `scripts/ai/strategies/AIDriveStrategyCombineCourse.lua` | Harvesting demand, unloader registration, pockets and the return to cutting. The `WAITING_FOR_UNLOADER_TO_LEAVE` branch requires both its minimum pause and physical trailer clearance. |
 | `scripts/ai/strategies/AIDriveStrategyFieldWorkCourse.lua` | Shared fieldwork connector search, blocked-route recovery and aligned row entry. Follow `startConnectingPath`, `prepareConnectingPathResult`, `startCourseToWorkStart` and `resumeFieldworkAfterTurn`. |
+| `scripts/ai/turns/AITurn.lua` | `CourseTurn` owns turn-course PPC callbacks, including long journeys on a headland. `updatePathfinderTurnTravel` pairs speed with lookahead; distant combine transfers use `WAITING_FOR_TURN_PATH` after a failed search. |
 | `scripts/ai/FieldWorkerProximityController.lua` | Nearby worker order, turn/row-entry priority and speed limits. `getPhysicalTurnDecision` gives one consistent priority/yield decision per worker; `isWorkerClearOfRemainingCourse` checks the route still ahead. |
 | `scripts/ai/PathfinderController.lua` | Shared search lifecycle, retries, cancellation and completion callbacks. It does not own trailer reservations. |
 | `scripts/ai/util/FieldworkBoundary.lua` | Boundary geometry used by route and manoeuvre checks. A route preference and a hard corridor check are different constraints; inspect the caller's context. |
@@ -132,6 +133,30 @@ the leader clears its remaining route. Conversely, a nearby leader still turning
 Inspect the aggregate minimum speed across all workers; a later non-blocking worker must not cancel an earlier hold.
 Existing tests cover all 120 iteration orders for five combines, not a live physics simulation.
 
+### Distant headland turns (2964)
+
+A long `CourseTurn` is not a fieldwork connector state: the turn owns waypoint callbacks. Its accepted pathfinder
+course uses travelling lookahead in the forward middle, returning to short lookahead and configured turn speed
+before tight bends, reverse sections and implement lowering. Calculated turns and chain-planned loops retain
+their existing policy. Never make a shared PPC change to compensate for the wrong caller's lookahead.
+
+Only combines' distant pathfinder turns use the new retry policy. A failed search does not enter the local
+analytical generator: translating a hundreds-of-metres route to fit the departure edge caused the recorded
+103.7 m reverse. Four headland hand-offs (the normal four-turning-radius range, then 20/40/60 m farther along)
+are tried, followed by a free forward search to the same row target. Each failure schedules a later update;
+after the five-candidate batch, wait five seconds. Synchronous solver failure must never recurse or leave one
+frame of non-zero driving speed. The source row target and lowering approach are preserved on every attempt.
+
+`PathfinderUtil.findPathForTurn` optionally preserves `turnHeadlandCourse` for clearance requests when a searched
+hand-off fails. It is an intended corridor, not permission to drive the solver's unvalidated middle section.
+Acceptance checks the assembled course's forward gear, field corridor and other workers/trailer occupancy.
+A parked rig receives the normal clearance request; both classes of vehicle obstruction prevent acceptance.
+Once clear, that rig continues yielding while the combine's distant turn searches or travels.
+
+Connector retries disable crop avoidance only when the obstructing field worker is another combine. A trailer
+obstruction waits for clearance instead. CP's ordinary crop avoidance remains a pathfinding cost preference,
+not a guarantee that every raised-header footprint stays outside crop; field and collision checks remain active.
+
 ## Units and verification
 
 Geometry and route distances use metres. CP speed values use the game's internal km/h convention; mph is a display
@@ -145,6 +170,7 @@ are 0–100; compatible capacity and grain tank contents are litres.
 | Calls, generation guards, restart, release and final partial delivery | `UnloaderLifecycleTest.lua` |
 | Standby obstruction, whole-rig clearance and crop fallback | `UnloaderConnectorClearanceTest.lua` |
 | Connector retry, alignment recovery, callback handover and travel | `FieldworkConnectingPathTest.lua` |
+| Long-turn steering, distant-transfer retries, forward-only acceptance and hand-off ranges | `PathfinderTurnTravelTest.lua` |
 | Nearby turn order, row entry and five-worker aggregation | `FieldWorkerTurnClearanceTest.lua` |
 | Reverse/recovery and route constraints | `UnloaderRecoveryTest.lua`, `UnloaderGridRoutingTest.lua`, `FieldworkBoundarySegmentTest.lua` |
 | Pocket planning and independent state properties | `PocketCoursePlanningTest.lua`, `CpUtilStateIsolationTest.lua` |

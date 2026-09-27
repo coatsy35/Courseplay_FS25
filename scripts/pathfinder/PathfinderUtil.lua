@@ -377,6 +377,7 @@ end
 ---@param backMarkerDistance number
 ---@param boundaryId string|nil id of the boundary (field or island), to make sure we stay on the same headland as
 --- the headland number alone may also be one of the island headlands.
+---@param headlandJoinDistance number|nil optional searched hand-off distance for a distant-turn retry
 ---@return State3D[]
 local function findShortestPathOnHeadland(start, goal, course, turnRadius, workingWidth, backMarkerDistance, boundaryId)
     local headlandWidth = course:getNumberOfHeadlands() * workingWidth
@@ -451,7 +452,8 @@ end
 ---@return PathfinderInterface pathfinder
 ---@return PathfinderResult
 function PathfinderUtil.findPathForTurn(vehicle, startOffset, goalReferenceNode, goalOffset, turnRadius, allowReverse,
-                                        courseWithHeadland, workingWidth, backMarkerDistance, turnOnField, boundaryId, fieldworkBoundary)
+                                        courseWithHeadland, workingWidth, backMarkerDistance, turnOnField, boundaryId, fieldworkBoundary,
+                                        headlandJoinDistance)
     local x, z, yRot = PathfinderUtil.getNodePositionAndDirection(vehicle:getAIDirectionNode(), 0, startOffset or 0)
     local start = State3D(x, -z, CpMathUtil.angleFromGame(yRot))
     x, z, yRot = PathfinderUtil.getNodePositionAndDirection(goalReferenceNode, 0, goalOffset or 0)
@@ -460,7 +462,7 @@ function PathfinderUtil.findPathForTurn(vehicle, startOffset, goalReferenceNode,
     -- use an analyticSolver which only yields courses ending in forward gear. This is to
     -- avoid reaching the end of turn in reverse. Implement lowering at turn end in reverse works only properly
     -- when we are driving straight, but an analytic path ending in reverse will always also end in a curve
-    local analyticSolver = ReedsSheppSolver(ReedsShepp.ForwardEndingPathWords)
+    local analyticSolver = allowReverse and ReedsSheppSolver(ReedsShepp.ForwardEndingPathWords) or DubinsSolver()
 
     PathfinderUtil.overlapBoxes = {}
     local pathfinder
@@ -475,6 +477,18 @@ function PathfinderUtil.findPathForTurn(vehicle, startOffset, goalReferenceNode,
             local dirDeg = math.deg(math.abs(math.atan2(dx, dz)))
             PathfinderUtil.logger:debug(vehicle, 'First headland waypoint isn\'t in front of us (%.1f), remove first few waypoints to avoid making a circle %.1f %.1f', dirDeg, dx, dz)
             pathfinder = HybridAStarWithPathInTheMiddle(vehicle, 200, headlandPath, true, analyticSolver)
+            -- Distant turn retries move the searched hand-offs along the same harvested headland. The
+            -- initial hand-off can be blocked even when the final row-start goal is perfectly reachable.
+            pathfinder.hybridRangeOverride = headlandJoinDistance
+            if headlandJoinDistance then
+                -- Preserve the intended headland independently of the solver's trimming/smoothing. The
+                -- turn uses it only to request trailer clearance after a failed hand-off, never to drive it.
+                local clearancePoints = {}
+                for _, point in ipairs(headlandPath) do
+                    table.insert(clearancePoints, {x = point.x, z = -point.y})
+                end
+                pathfinder.turnHeadlandCourse = Course(vehicle, clearancePoints, true)
+            end
         end
     end
     if pathfinder == nil then

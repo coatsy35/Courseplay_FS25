@@ -83,7 +83,7 @@ AIUtil = {getWidth = function() return 4 end, getLength = function() return 6 en
 MathUtil = {vector2Length = function(x, z) return math.sqrt(x * x + z * z) end}
 function getWorldTranslation(node) return node.x, 0, node.z end
 function localToWorld(node, _, _, offset) return node.x, 0, node.z + offset end
-local follower = {rootNode = {x = 40, z = 0}, getIsCpFieldWorkActive = function() return true end}
+local follower = {rootNode = {x = 40, z = 0}, spec_combine = {}, getIsCpFieldWorkActive = function() return true end}
 g_currentMission = {vehicleSystem = {vehicles = {follower}}}
 strategy.fieldWorkerProximityController = {hasSameCourse = function() return true end,
     getPhysicalTurnClearance = function() return 50 end}
@@ -171,6 +171,13 @@ end}, {collisionMask = function()
     error('An occupied connector must not disable collision checks')
 end, ignoreFruit = function(self, ignore) self.ignoreFruitValue = ignore end}, false, 1)
 assert(retriedWithBoundary, 'A local detour may retry through crop while retaining collisions')
+follower.spec_combine = nil
+local avoidsCrop = false
+strategy:onPathfindingFailedToConnectingPathEnd({retry = function(_, context)
+    avoidsCrop = context.ignoreFruitValue == false
+end}, {ignoreFruit = function(self, value) self.ignoreFruitValue = value end}, false, 1)
+assert(avoidsCrop, 'Another kind of field worker must not authorise a crop detour')
+follower.spec_combine = {}
 strategy:onPathfindingFailedToConnectingPathEnd(nil, {}, true, 2)
 assert(strategy.connectingPathRetryAt == 6000 and strategy.state == strategy.states.WAITING_FOR_PATHFINDER,
         'A failed detour must wait and retry rather than drive through the following worker')
@@ -209,17 +216,16 @@ assert(not strategy:canDriveConnectingPathDirectly(longConnector),
 strategy:isConnectingPathBlockedByWorker(longConnector)
 assert(requestedMoves == 1, 'An assigned trailer must not receive a standby clearance request')
 parkedStrategy.getCombineToUnload = function() return nil end
-local occupiedRetry = false
-strategy:onPathfindingFailedToConnectingPathEnd({retry = function(_, context)
-    occupiedRetry = context._fieldworkBoundary.width == 0 and context.ignoreFruitValue
+strategy:onPathfindingFailedToConnectingPathEnd({retry = function()
+    error('A parked trailer must clear before another global pathfinding attempt')
 end}, {collisionMask = function()
     error('A trailer-obstructed connector must retain collision checks')
 end, ignoreFruit = function(self, ignore) self.ignoreFruitValue = ignore end}, false, 1)
-assert(occupiedRetry and requestedMoves == 1,
-        'An occupied connector must retry with narrower field clearance and retained collisions')
+assert(strategy.connectingPathRetryAt == 3000 and requestedMoves == 1,
+        'An occupied connector must give the trailer time to clear without disabling crop avoidance')
 strategy:onPathfindingFailedToConnectingPathEnd(nil, {}, true, 2)
-assert(strategy.connectingPathRetryAt == 6000,
-        'The combine waits only after its collision-aware detour retry also fails')
+assert(strategy.connectingPathRetryAt == 3000,
+        'A trailer obstruction waits for clearance on every retry')
 local detour = {getNumberOfWaypoints = function() return 2 end,
     getWaypointPosition = function(_, ix) return ix * 20, 0, 10 end,
     contained = true}
