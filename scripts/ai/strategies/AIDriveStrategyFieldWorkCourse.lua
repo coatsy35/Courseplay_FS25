@@ -463,6 +463,25 @@ function AIDriveStrategyFieldWorkCourse:resumeFieldworkAfterTurn(ix)
         self:startTurn(cornerIx)
         return
     end
+    if found and self.connectingPathStartIx and self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT and
+            self.course ~= course and startIx < course:getNumberOfWaypoints() then
+        local ax, _, az = course:getWaypointPosition(startIx)
+        local bx, _, bz = course:getWaypointPosition(startIx + 1)
+        local dx, dz = bx - ax, bz - az
+        local length = MathUtil.vector2Length(dx, dz)
+        if length > 0.01 then
+            local node = self.vehicle:getAIDirectionNode()
+            local x, _, z = getWorldTranslation(node)
+            local forwardX, _, forwardZ = localDirectionToWorld(node, 0, 0, 1)
+            local lateral = math.abs((x - ax) * dz - (z - az) * dx) / length
+            local heading = (forwardX * dx + forwardZ * dz) / length
+            if lateral > math.min(1.5, self.workWidth * 0.1) or heading < math.cos(math.rad(12)) then
+                self:debugSparse('Work-start line not aligned yet: lateral %.1f m, heading cosine %.2f',
+                        lateral, heading)
+                found = false
+            end
+        end
+    end
     if not found then
         -- The implements can finish lowering before the appended approach has brought the vehicle onto
         -- the work line. Keep following that checked route while it still has waypoints to align us.

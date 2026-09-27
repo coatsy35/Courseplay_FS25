@@ -486,4 +486,33 @@ strategy:resumeFieldworkAfterTurn(923)
 assert(alignmentJobStopped,
         'Repeated failed alignment must stop safely rather than loop indefinitely')
 
+-- A forward waypoint alone is not enough: the header must follow the row line before cutting.
+strategy.fieldWorkCourse.getNextFwdWaypointIxFromVehiclePosition = function() return 923, true end
+strategy.fieldWorkCourse.getWaypointPosition = function(_, ix) return 0, 0, (ix - 923) * 10 end
+strategy.course = {getCurrentWaypointIx = function() return 263 end,
+    getNumberOfWaypoints = function() return 264 end}
+strategy.vehicle.rootNode = {x = 5.8, z = 0}
+strategy.vehicle.getAIDirectionNode = function(self) return self.rootNode end
+local forwardX, forwardZ = 0, 1
+function localDirectionToWorld() return forwardX, 0, forwardZ end
+local workingCourse
+strategy.startWaitingForLower = function() end
+strategy.lowerImplements = function() end
+strategy.startCourse = function(_, route) workingCourse = route end
+strategy.ppc = {setNormalLookaheadDistance = function() end}
+strategy.debugSparse = function() end
+strategy.workStartAlignmentRecoveryCount = nil
+alignmentRecoveryStarted, alignmentJobStopped = nil, nil
+strategy:resumeFieldworkAfterTurn(923)
+assert(not workingCourse and not alignmentRecoveryStarted and not alignmentJobStopped,
+        'A 5.8 m lateral error must continue the final approach instead of starting to cut')
+strategy.vehicle.rootNode.x = 0.8
+forwardX, forwardZ = 0.5, math.sqrt(0.75)
+strategy:resumeFieldworkAfterTurn(923)
+assert(not workingCourse, 'A combine crossing the row at an angle must not start cutting')
+forwardX, forwardZ = 0, 1
+strategy:resumeFieldworkAfterTurn(923)
+assert(workingCourse == strategy.fieldWorkCourse and not strategy.workStartAlignmentRecoveryCount,
+        'The combine may start cutting once it is centred and facing down the row')
+
 print('FieldworkConnectingPathTest: OK')
