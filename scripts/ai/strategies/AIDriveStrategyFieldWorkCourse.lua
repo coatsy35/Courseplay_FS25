@@ -472,11 +472,24 @@ function AIDriveStrategyFieldWorkCourse:resumeFieldworkAfterTurn(ix)
                     self.course:getCurrentWaypointIx(), self.course:getNumberOfWaypoints())
             return
         end
+        if self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT and self.activeConnectingPathCourse and
+                (self.workStartAlignmentRecoveryCount or 0) < 2 then
+            self.workStartAlignmentRecoveryCount = (self.workStartAlignmentRecoveryCount or 0) + 1
+            self:debug('Work-start alignment missed; finding a checked route to the row (%d/2)',
+                    self.workStartAlignmentRecoveryCount)
+            self.connectorRecoveryActive = true
+            self.connectorRecoveryResumeIx = math.min(self.course:getCurrentWaypointIx(),
+                    self.activeConnectingPathCourse:getNumberOfWaypoints())
+            self:setMaxSpeed(0)
+            self:startBlockedConnectorRecovery()
+            return
+        end
         self:debug('No forward continuation after waypoint %d; refusing an unaligned fieldwork handover', ix)
         self:raiseImplements()
         self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
         return
     end
+    self.workStartAlignmentRecoveryCount = nil
     self.ppc:setNormalLookaheadDistance()
     self:startWaitingForLower()
     self:lowerImplements()
@@ -751,7 +764,10 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
     for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
         if other ~= self.vehicle then
             local otherStrategy = other.getCpDriveStrategy and other:getCpDriveStrategy()
-            local fieldWorker = other.getIsCpFieldWorkActive and other:getIsCpFieldWorkActive() and
+            -- An AI job may have stopped after an approach failure. Its combine and header remain
+            -- obstacles on the same course even though getIsCpFieldWorkActive() is now false.
+            local fieldWorker = other.getIsCpFieldWorkActive and
+                    (other:getIsCpFieldWorkActive() or AIUtil.isStopped(other)) and
                     self.fieldWorkerProximityController and self.fieldWorkerProximityController:hasSameCourse(other)
             -- An assigned unloader is still a physical obstacle. Only the request to move is restricted
             -- to a staging rig; an active call must not be cancelled merely to clear this connector.
@@ -937,6 +953,27 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
         end
         local blocked, blocker, otherWorker, blockedIx = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
         self.connectingPathRejoinIx = nil
+        if blocked and blocker == 'unloader' then
+            local unloader = otherWorker.getCpDriveStrategy and otherWorker:getCpDriveStrategy()
+            -- Give a staging rig time to complete the move just requested above. Searching the
+            -- entire connecting path while it moves can keep this combine stopped for minutes.
+            if unloader and unloader.getCombineToUnload and not unloader:getCombineToUnload() then
+                if self.connectingPathUnloaderBlocker ~= otherWorker then
+                    self.connectingPathUnloaderBlocker = otherWorker
+                    self.connectingPathUnloaderWaitSince = g_currentMission.time
+                end
+                if g_currentMission.time - self.connectingPathUnloaderWaitSince < 15000 then
+                    self:debug('Waiting for staging trailer to clear the connecting path')
+                    self.connectingPathRetryAt = g_currentMission.time + 2000
+                    self.state = self.states.WAITING_FOR_PATHFINDER
+                    self:startCourse(self.workStarterCourse, 1)
+                    return
+                end
+            end
+        else
+            self.connectingPathUnloaderBlocker = nil
+            self.connectingPathUnloaderWaitSince = nil
+        end
         if blocked and blocker == 'fieldWorker' then
             local convoyOrder = self.fieldWorkerProximityController and
                     self.fieldWorkerProximityController.otherVehicleAheadOnTrail

@@ -244,6 +244,31 @@ trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 40}}} end
 assert(strategy:canDriveConnectingPathDirectly(longConnector),
         'The combine may proceed when the full tractor and trailer have cleared its route')
 
+-- A staging trailer should finish its short clearance move before a whole-field search starts.
+trailer.rootNode.z = 0
+trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 0}}} end
+parkedStrategy.state = {}
+g_currentMission.time = 40000
+local searchesBeforeClearance = searches
+strategy:startConnectingPath(1)
+assert(strategy.connectingPathRetryAt == 42000 and searches == searchesBeforeClearance,
+        'A staging trailer moving clear must not trigger a whole-field path search')
+trailer.rootNode.z = 40
+trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 40}}} end
+g_currentMission.time = 42000
+strategy:startConnectingPath(1)
+assert(drivenCourse == longConnector and searches == searchesBeforeClearance,
+        'Once the trailer clears, the contained generated connector should start without a global search')
+trailer.rootNode.z = 0
+trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 0}}} end
+parkedStrategy.state = {}
+g_currentMission.time = 44000
+strategy:startConnectingPath(1)
+g_currentMission.time = 60000
+strategy:startConnectingPath(1)
+assert(searches > searchesBeforeClearance,
+        'A trailer that cannot clear must eventually permit collision-aware pathfinding')
+
 longConnector.contained = false
 assert(not strategy:canDriveConnectingPathDirectly(longConnector),
         'A connector that leaves the field must not bypass pathfinding')
@@ -334,6 +359,14 @@ g_currentMission.time = 36000
 strategy:checkStoppedWorkerOnConnectingPath()
 assert(restartedAt == 1 and strategy.connectorRecoveryActive,
         'A stopped combine on the upcoming route must trigger collision-aware recovery before contact')
+follower.getIsCpFieldWorkActive = function() return false end
+restartedAt = nil
+strategy.connectorRecoveryActive = nil
+g_currentMission.time = 37000
+strategy:checkStoppedWorkerOnConnectingPath()
+assert(restartedAt == 1 and strategy.connectorRecoveryActive,
+        'A stopped combine must remain an obstacle after its AI job has stopped')
+follower.getIsCpFieldWorkActive = function() return true end
 restartedAt = nil
 strategy.connectorRecoveryActive = nil
 g_currentMission.time = 35000
@@ -426,5 +459,31 @@ local edgeContext = {}
 strategy:setConnectingPathBoundary(edgeContext, 8)
 assert(edgeContext._preferFieldworkBoundary,
         'A machine already outside the margin may search inward; the accepted course remains checked')
+
+-- Missing the work line at the end of an approach should try a checked rejoin before ending the AI job.
+local alignmentRecoveryStarted, alignmentJobStopped
+strategy.startBlockedConnectorRecovery = function() alignmentRecoveryStarted = (alignmentRecoveryStarted or 0) + 1 end
+strategy.vehicle.stopCurrentAIJob = function() alignmentJobStopped = true end
+strategy.fieldWorkCourse = {
+    getNumberOfWaypoints = function() return 1000 end,
+    isTurnStartAtIx = function() return false end,
+    getNextFwdWaypointIxFromVehiclePosition = function() return 923, false end,
+}
+strategy.course = {getCurrentWaypointIx = function() return 263 end,
+    getNumberOfWaypoints = function() return 263 end}
+strategy.activeConnectingPathCourse = {getNumberOfWaypoints = function() return 254 end}
+strategy.workWidth = 15
+strategy.state = strategy.states.DRIVING_TO_WORK_START_WAYPOINT
+strategy:resumeFieldworkAfterTurn(923)
+assert(alignmentRecoveryStarted == 1 and not alignmentJobStopped and
+        strategy.connectorRecoveryResumeIx == 254,
+        'An unaligned final approach must attempt a collision-checked rejoin from its final connector point')
+strategy:resumeFieldworkAfterTurn(923)
+assert(alignmentRecoveryStarted == 2 and not alignmentJobStopped,
+        'A second missed alignment may retry once more without entering fieldwork unaligned')
+AIMessageCpErrorNoPathFound = {new = function() return {} end}
+strategy:resumeFieldworkAfterTurn(923)
+assert(alignmentJobStopped,
+        'Repeated failed alignment must stop safely rather than loop indefinitely')
 
 print('FieldworkConnectingPathTest: OK')
