@@ -206,3 +206,42 @@ assert(turningController:getMaxSpeed(30, 10) == 0,
 waiting.state = states.WORKING
 assert(turningController:getMaxSpeed(30, 10) == 10,
         'The follower may resume once the first combine has started working and cleared its route')
+
+-- With five machines, iteration order must neither overwrite a nearby hold nor turn a distant reservation
+-- into a field-wide stop. Exercise the real speed aggregation for every ordering of the mission vehicles.
+local fleet = {turningVehicle}
+local fleetStrategies = {}
+for i = 1, 4 do
+    local v, s = makeVehicle('Fleet combine ' .. i, states.WAITING_FOR_PATHFINDER, 14, 10)
+    v.rootNode = {x = 0, z = i == 1 and 35 or 200 + i * 100}
+    v.getAIDirectionNode = function() return v.rootNode end
+    v.getIsCpFieldWorkActive = function() return true end
+    v.getCpSettings = waitingVehicle.getCpSettings
+    s.connectingPathStartIx = 1202
+    s.getFieldWorkProximity = function() return math.huge end
+    fleet[#fleet + 1], fleetStrategies[i] = v, s
+    turningController.otherVehicleAheadOnTrail[v] = true
+end
+AIUtil.isStopped = function(v) return v:getCpDriveStrategy().state == states.WAITING_FOR_PATHFINDER end
+local orders = 0
+local function checkOrders(first)
+    if first > #fleet then
+        g_currentMission.vehicleSystem.vehicles = fleet
+        assert(turningController:getMaxSpeed(30, 10) == 0,
+                'Every mission ordering must retain the nearby combine\'s row-entry hold')
+        fleetStrategies[1].state = states.WORKING
+        assert(turningController:getMaxSpeed(30, 10) == 10,
+                'Farther waiting combines must not prevent release after the nearby machine starts work')
+        fleetStrategies[1].state = states.WAITING_FOR_PATHFINDER
+        orders = orders + 1
+        return
+    end
+    for i = first, #fleet do
+        fleet[first], fleet[i] = fleet[i], fleet[first]
+        checkOrders(first + 1)
+        fleet[first], fleet[i] = fleet[i], fleet[first]
+    end
+end
+checkOrders(1)
+assert(orders == 120)
+print('Five-combine proximity aggregation: 120 vehicle orderings OK')

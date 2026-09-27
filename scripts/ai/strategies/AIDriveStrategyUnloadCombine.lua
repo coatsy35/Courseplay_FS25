@@ -397,7 +397,10 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
         end
     end
 
-    if self:hasToWaitForAssignedCombine() then
+    if self:shouldDeliverFinalLoad() then
+        self:debug('Final field worker stopped after clearance; delivering the remaining load')
+        self:startUnloadingTrailers()
+    elseif self:hasToWaitForAssignedCombine() then
         --- Safety check to make sure a combine is assigned, when needed.
         self:setMaxSpeed(0)
         if self:isDriveUnloadNowRequested() then
@@ -536,8 +539,12 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
 
         self:setMaxSpeed(self.settings.reverseSpeed:getValue())
         if self.state.properties.holdCombine then
-            self:debugSparse('Holding combine while backing up')
-            self.combineToUnload:getCpDriveStrategy():hold(1000)
+            local combine = self.state.properties.vehicle
+            local strategy = combine and combine:getCpDriveStrategy()
+            if strategy and strategy.hold then
+                self:debugSparse('Holding combine while backing up')
+                strategy:hold(1000)
+            end
         end
         -- drive back until the combine is in front of us
         local d, _, dz = self:getDistanceFromCombine(self.state.properties.vehicle)
@@ -617,6 +624,16 @@ function AIDriveStrategyUnloadCombine:areThereAnyCombinesOrLoaderLeftoverOnTheFi
         end
     end
     return false
+end
+
+--- Only a trailer that has completed an unload and cleared the combine may deliver a partial final load.
+--- Freshly started trailers, active calls and rigs still clearing an obstruction retain their current work.
+function AIDriveStrategyUnloadCombine:shouldDeliverFinalLoad()
+    local previous = self.postUnloadClearanceHarvester
+    return previous ~= nil and self.combineToUnload == nil and
+            (self:isIdle() or self:isInStandbyState()) and not self:isConnectorClearancePending() and
+            not previous:getIsCpActive() and self:getFillLevelPercentage() > 0.1 and
+            not self:areThereAnyCombinesOrLoaderLeftoverOnTheField(previous)
 end
 
 function AIDriveStrategyUnloadCombine:startWaitingForSomethingToDo()
@@ -1462,6 +1479,7 @@ end
 ------------------------------------------------------------------------------------------------------------------------
 function AIDriveStrategyUnloadCombine:startUnloadingTrailers()
     self:setMaxSpeed(0)
+    self.postUnloadClearanceHarvester = nil
     UnloaderCoordinator:release(self)
     self:releaseCombine()
 
@@ -1532,6 +1550,17 @@ end
 function AIDriveStrategyUnloadCombine:canRetryCombineApproach(combine)
     return not self.failedCombineApproaches or not self.failedCombineApproaches[combine] or
             (g_time or 0) >= self.failedCombineApproaches[combine]
+end
+
+--- Compatibility is independent of free space: a full rig must finish clearing before replacement.
+function AIDriveStrategyUnloadCombine:canAcceptFillTypeFromHarvester(harvester)
+    local fillType = harvester:getCpDriveStrategy():getFillType()
+    for _, target in ipairs(self.trailerNodes or {}) do
+        if fillType == FillType.UNKNOWN or target.trailer:getFillUnitAllowsFillType(target.fillUnitIx, fillType) then
+            return true
+        end
+    end
+    return false
 end
 
 function AIDriveStrategyUnloadCombine:getFreeCapacityForHarvester(harvester)
@@ -3530,7 +3559,7 @@ end
 -- Only one active call leaves an overlapping entry cluster at a time. The first accepted call owns departure;
 -- later calls remain assigned while waiting, so the combine does not repeatedly replace them.
 function AIDriveStrategyUnloadCombine:queueForDeparture(combine, waypoint, pocket)
-    if self:getNearbyDepartingUnloader() or UnloaderCoordinator:isStillClearingHarvester(nil, combine) then
+    if self:getNearbyDepartingUnloader() or UnloaderCoordinator:isStillClearingHarvester(nil, combine, self.vehicle) then
         self.pendingDepartureCall = {combine = combine, waypoint = waypoint, pocket = pocket, startedAt = g_time or 0}
         self:setNewState(self.states.WAITING_FOR_DEPARTURE)
         return true
@@ -3552,7 +3581,7 @@ function AIDriveStrategyUnloadCombine:resumeDepartureCall()
         end
         return
     end
-    if UnloaderCoordinator:isStillClearingHarvester(nil, pending.combine) then return end
+    if UnloaderCoordinator:isStillClearingHarvester(nil, pending.combine, self.vehicle) then return end
     self.pendingDepartureCall = nil
     if pending.pocket then self:callForPocket(pending.combine) else self:call(pending.combine, pending.waypoint) end
 end

@@ -142,8 +142,8 @@ local function isWaitingForConnectingPath(strategy)
             strategy.connectingPathStartIx ~= nil
 end
 
-function FieldWorkerProximityController:hasConnectingWorkerReservation(otherVehicle, otherStrategy,
-                                                                        otherIsAheadOnTrail)
+function FieldWorkerProximityController:updateConnectingWorkerReservation(otherVehicle, otherStrategy,
+                                                                          otherIsAheadOnTrail)
     self.connectingWorkerReservations = self.connectingWorkerReservations or {}
     if otherIsAheadOnTrail ~= true then
         self.connectingWorkerReservations[otherVehicle] = nil
@@ -189,9 +189,11 @@ end
 ---@param otherStrategy table
 ---@param otherIsAheadOnTrail boolean|nil
 ---@param selfIsAheadOnTrail boolean|nil
----@return boolean
-function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy,
-                                                                        otherIsAheadOnTrail, selfIsAheadOnTrail)
+---@param connectingWorkerReserved boolean
+---@return boolean mustYield
+---@return boolean hasPriority
+function FieldWorkerProximityController:getPhysicalTurnDecision(otherVehicle, otherStrategy,
+        otherIsAheadOnTrail, selfIsAheadOnTrail, connectingWorkerReserved)
     local myStrategy = self.vehicle:getCpDriveStrategy()
     local myStarting = isDrivingToWorkStart(myStrategy)
     local otherStarting = isDrivingToWorkStart(otherStrategy)
@@ -199,26 +201,35 @@ function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehi
     local otherManeuvering = isTurningOrManeuvering(otherStrategy)
     -- A lead worker held while its connecting route is calculated cannot yield any farther. Keep the
     -- follower out until that worker starts its row, without granting this priority to a worker behind us.
-    if myManeuvering and self:hasConnectingWorkerReservation(otherVehicle, otherStrategy,
-            otherIsAheadOnTrail) then
-        return true
+    if myManeuvering and connectingWorkerReserved then
+        return true, false
     end
     -- Course progress establishes the convoy order before a corner. Approaching a turn must not let the rear
     -- vehicle claim priority from the machine whose trail it is following.
     if otherIsAheadOnTrail ~= selfIsAheadOnTrail and
             (myStarting or otherStarting or myManeuvering or otherManeuvering) then
-        return otherIsAheadOnTrail == true
+        return otherIsAheadOnTrail == true, selfIsAheadOnTrail == true
     end
     if myStarting ~= otherStarting then
-        return myStarting
+        return myStarting, otherStarting
     end
     if myManeuvering ~= otherManeuvering then
-        return not myManeuvering
+        return not myManeuvering, myManeuvering
     end
     if myManeuvering and otherManeuvering then
-        return self.vehicle.rootNode > otherVehicle.rootNode
+        return self.vehicle.rootNode > otherVehicle.rootNode, self.vehicle.rootNode < otherVehicle.rootNode
     end
-    return false
+    return false, false
+end
+
+-- Standalone queries refresh the reservation; the speed check shares one update and decision per worker.
+function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy,
+                                                                        otherIsAheadOnTrail, selfIsAheadOnTrail)
+    local reserved = isTurningOrManeuvering(self.vehicle:getCpDriveStrategy()) and
+            self:updateConnectingWorkerReservation(otherVehicle, otherStrategy, otherIsAheadOnTrail)
+    local mustYield = self:getPhysicalTurnDecision(otherVehicle, otherStrategy,
+            otherIsAheadOnTrail, selfIsAheadOnTrail, reserved)
+    return mustYield
 end
 
 ---@param otherVehicle table
@@ -228,29 +239,11 @@ end
 ---@return boolean
 function FieldWorkerProximityController:hasPhysicalTurnPriority(otherVehicle, otherStrategy,
                                                                  otherIsAheadOnTrail, selfIsAheadOnTrail)
-    local myStrategy = self.vehicle:getCpDriveStrategy()
-    local myStarting = isDrivingToWorkStart(myStrategy)
-    local otherStarting = isDrivingToWorkStart(otherStrategy)
-    local myManeuvering = isTurningOrManeuvering(myStrategy)
-    local otherManeuvering = isTurningOrManeuvering(otherStrategy)
-    if myManeuvering and self:hasConnectingWorkerReservation(otherVehicle, otherStrategy,
-            otherIsAheadOnTrail) then
-        return false
-    end
-    if otherIsAheadOnTrail ~= selfIsAheadOnTrail and
-            (myStarting or otherStarting or myManeuvering or otherManeuvering) then
-        return selfIsAheadOnTrail == true
-    end
-    if myStarting ~= otherStarting then
-        return otherStarting
-    end
-    if myManeuvering ~= otherManeuvering then
-        return myManeuvering
-    end
-    if myManeuvering and otherManeuvering then
-        return self.vehicle.rootNode < otherVehicle.rootNode
-    end
-    return false
+    local reserved = isTurningOrManeuvering(self.vehicle:getCpDriveStrategy()) and
+            self:updateConnectingWorkerReservation(otherVehicle, otherStrategy, otherIsAheadOnTrail)
+    local _, hasPriority = self:getPhysicalTurnDecision(otherVehicle, otherStrategy,
+            otherIsAheadOnTrail, selfIsAheadOnTrail, reserved)
+    return hasPriority
 end
 
 ---@param otherVehicle table
@@ -334,7 +327,7 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 local selfIsAheadOnTrail = distanceFromMe > 0 and distanceFromMe < math.huge
                 otherIsAheadOnTrail, selfIsAheadOnTrail = self:resolveTurnConvoyOrder(otherVehicle, otherStrategy,
                         otherIsAheadOnTrail, selfIsAheadOnTrail)
-                local connectingWorkerReserved = self:hasConnectingWorkerReservation(otherVehicle, otherStrategy,
+                local connectingWorkerReserved = self:updateConnectingWorkerReservation(otherVehicle, otherStrategy,
                         otherIsAheadOnTrail)
                 local clearOfRemainingCourse = (isDrivingToWorkStart(self.vehicle:getCpDriveStrategy()) or
                         isTurningOrManeuvering(self.vehicle:getCpDriveStrategy())) and
@@ -342,8 +335,8 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                         self:isWorkerClearOfRemainingCourse(otherVehicle, otherStrategy)
                 self:debugSparse('have same course as %s (done %s, convoy distance %.1f), distance %.1f',
                         CpUtil.getName(otherVehicle), otherIsDone, otherConvoyDistance, distanceFromOther)
-                local hasTurnPriority = self:hasPhysicalTurnPriority(otherVehicle, otherStrategy,
-                        otherIsAheadOnTrail, selfIsAheadOnTrail)
+                local mustYield, hasTurnPriority = self:getPhysicalTurnDecision(otherVehicle, otherStrategy,
+                        otherIsAheadOnTrail, selfIsAheadOnTrail, connectingWorkerReserved)
                 if distanceFromOther > 0 and distanceFromOther < distanceLimit and
                         not hasTurnPriority and not clearOfRemainingCourse then
                     self:debugSparse('too close (%.1f m < %.1f) to %s in front of me, slowing down.',
@@ -356,8 +349,7 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 -- Trail distance becomes misleading while another machine turns or drives back to its work-start
                 -- waypoint. The yielding machine therefore also observes the real separation and stops outside an
                 -- envelope based on both vehicle lengths and the wider header.
-                if self:mustYieldPhysicalTurnClearance(otherVehicle, otherStrategy,
-                        otherIsAheadOnTrail, selfIsAheadOnTrail) and not clearOfRemainingCourse then
+                if mustYield and not clearOfRemainingCourse then
                     local x, _, z = getWorldTranslation(self.vehicle.rootNode)
                     local ox, _, oz = getWorldTranslation(otherVehicle.rootNode)
                     local physicalDistance = MathUtil.vector2Length(ox - x, oz - z)

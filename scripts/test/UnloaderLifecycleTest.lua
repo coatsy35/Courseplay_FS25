@@ -193,6 +193,14 @@ local trailer = {getFillUnitAllowsFillType = function(_, ix) return ix == 1 end,
     getFillUnitFreeCapacity = function() return 12000 end}
 first.trailerNodes = {{trailer = trailer, fillUnitIx = 1}, {trailer = trailer, fillUnitIx = 1}, {trailer = trailer, fillUnitIx = 2}}
 assert(first:getFreeCapacityForHarvester(a) == 12000)
+assert(first:canAcceptFillTypeFromHarvester(a))
+trailer.getFillUnitFreeCapacity = function() return 0 end
+assert(first:getFreeCapacityForHarvester(a) == 0 and first:canAcceptFillTypeFromHarvester(a),
+        'A compatible full trailer must remain a corridor owner despite having no remaining capacity')
+trailer.getFillUnitAllowsFillType = function() return false end
+assert(not first:canAcceptFillTypeFromHarvester(a), 'Unsupported or mixed crop must not count as shared coverage')
+trailer.getFillUnitAllowsFillType = function(_, ix) return ix == 1 end
+trailer.getFillUnitFreeCapacity = function() return 12000 end
 
 -- Initial and replacement selections must agree for the recorded 60%-full/43s versus empty/20s candidates.
 local partial, empty = unloader(0), unloader(0)
@@ -366,3 +374,82 @@ failed:clearStandbyAssignment()
 failed:setStandbyAssignment({harvester = b, role = 'POOL', waypoint = {x = -100, z = 0}})
 assert(failed.state == failed.states.WAITING_IN_STANDBY)
 print('Accepted route retention and failed-call parking regressions: OK')
+
+-- A restarted strategy for the same physical trailer must not queue behind its own clearance record.
+local oldDriver = unloader(100)
+UnloaderCoordinator:registerClearingUnloader(oldDriver, a, 36)
+UnloaderCoordinator:unregister(oldDriver)
+local restarted = unloader(100)
+restarted.vehicle = oldDriver.vehicle
+restarted.getNearbyDepartingUnloader = function() return nil end
+restarted.holdNearbyStandbyUnloadersForDeparture = function() end
+assert(not restarted:queueForDeparture(a), 'A restarted owner must not wait for itself to clear')
+assert(UnloaderCoordinator:isStillClearingHarvester(nil, a),
+        'Ignoring self for departure must retain the combine\'s physical clearance protection')
+local replacement = unloader(100)
+replacement.getNearbyDepartingUnloader = function() return nil end
+replacement.holdNearbyStandbyUnloadersForDeparture = function() end
+assert(replacement:queueForDeparture(a), 'A different trailer must still wait for the clearing owner')
+restarted.pendingDepartureCall = {combine = a, startedAt = g_time}
+local resumedOwnCall = false
+restarted.call = function() resumedOwnCall = true end
+restarted:resumeDepartureCall()
+assert(resumedOwnCall, 'An already queued owner must also be able to resume its own call')
+oldDriver.vehicle.rootNode.x = 137
+assert(not UnloaderCoordinator:isStillClearingHarvester(nil, a))
+
+-- Exercise the update loop after stopping a combine during a held reverse.
+local parked = unloader(100)
+parked.updateLowFrequencyImplementControllers = function() end
+parked.calculateAutoAimPipeOffsetX = function() end
+parked.ppc = {isReversing = function() return true end}
+parked.getReverseDriveData = function() return 0, 0, 8 end
+parked.checkProximitySensors = function() end
+parked.checkCollisionWarning = function() end
+parked.settings = {reverseSpeed = setting(8), fullThreshold = setting(85)}
+parked.getDistanceFromCombine = function() return 0, 0, -1 end
+parked.state = parked.states.MOVING_BACK
+local ended = harvester(100)
+ended.getIsCpActive = function() return false end
+ended.getCpDriveStrategy = function() return nil end
+parked.combineToUnload = ended
+parked.state.properties = {vehicle = ended, holdCombine = true}
+parked:getDriveData(16)
+assert(parked.state == parked.states.MOVING_BACK,
+        'Stopping the combine must retain clearance movement without calling a deleted strategy')
+
+-- A served trailer can already be parked when the final combine stops.
+parked.isAtHarvesterClearance = function() return true end
+parked:startWaitingForSomethingToDo()
+assert(parked.postUnloadClearanceHarvester == ended and parked.combineToUnload == nil)
+parked.ppc = {isReversing = function() return false end, getGoalPointPosition = function() return 0, 0, 0 end}
+parked.isDriveUnloadNowRequested = function() return false end
+parked.checkForTrailerToUnloadTo = {get = function() return false end}
+parked.updateStandbyCoordinator = function() end
+parked.getFillLevelPercentage = function() return 35 end
+parked.isServingPosition = function() return true end
+local deliveries = 0
+parked.startUnloadingTrailers = function(self)
+    deliveries = deliveries + 1
+    self.state = self.states.WAITING_FOR_PATHFINDER
+end
+g_currentMission.vehicleSystem.vehicles = {remaining}
+parked:getDriveData(16)
+assert(deliveries == 0, 'A partial load remains available while another combine works in the field')
+g_currentMission.vehicleSystem.vehicles = {}
+parked.postUnloadClearanceHarvester = nil
+parked:getDriveData(16)
+assert(deliveries == 0, 'A partly loaded trailer that has not served the field must not leave automatically')
+parked.postUnloadClearanceHarvester = ended
+parked:getDriveData(16)
+assert(deliveries == 1, 'A released partial load must depart after the last field worker stops')
+parked:getDriveData(16)
+assert(deliveries == 1, 'Final-load delivery must not restart on every update')
+parked.state = parked.states.WAITING_IN_STANDBY
+parked:getDriveData(16)
+assert(deliveries == 2, 'A served trailer parked in standby must also deliver its final partial load')
+parked.state = parked.states.IDLE
+parked.getFillLevelPercentage = function() return 0 end
+parked:getDriveData(16)
+assert(deliveries == 2, 'Empty trailers must remain available at field completion')
+print('Restarted clearance, stopped combine and final parked load regressions: OK')

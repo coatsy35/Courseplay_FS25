@@ -68,6 +68,8 @@ local function makeUnloader(name, x, available, activeHarvester, fill)
         getFillLevelPercentage = function() return fill or 0 end,
         getHarvesterTurnClearanceDistance = function() return 50 end,
         isServingPosition = function() return true end,
+        getFreeCapacityForHarvester = function() return 100000 end,
+        canAcceptFillTypeFromHarvester = function() return true end,
         getDistanceAndEteToWaypoint = function(self, waypoint)
             local distance = math.abs(self.x - waypoint.x)
             return distance, distance / 5
@@ -553,6 +555,28 @@ assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
         'A temporary hold during transfer must not release the nearby corridor to a second trailer')
 servingLead.isInDeadlock = nil
 print('Adjacent combine shares en-route active trailer: OK')
+
+servingLead.canAcceptFillTypeFromHarvester = function(_, harvester) return harvester == lead end
+assert(UnloaderCoordinator:getSharedUnloader(follower) == nil and
+        UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'A rig that cannot accept the follower\'s crop must not suppress a compatible replacement')
+servingLead.getFreeCapacityForHarvester = function() return 25000 end
+servingLead.canAcceptFillTypeFromHarvester = function() return true end
+servingLead.isServingPosition = function(_, x) return x == lead.rootNode.x end
+assert(UnloaderCoordinator:getSharedUnloader(follower) == nil,
+        'An active rig assigned to another field must not suppress local demand')
+servingLead.isServingPosition = function() return true end
+assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
+        'Compatible same-field demand must still share one trailer')
+servingLead.getFreeCapacityForHarvester = function() return 0 end
+servingLead.states.MOVING_BACK_WITH_TRAILER_FULL = {}
+servingLead.state = servingLead.states.MOVING_BACK_WITH_TRAILER_FULL
+assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead and
+        not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'A full compatible rig must retain corridor ownership until its reverse clearance finishes')
+servingLead.getCombineToUnload = function() return nil end
+assert(UnloaderCoordinator:getSharedUnloader(follower) == nil,
+        'Once the full lead has cleared, ordinary harvester priority may select its replacement')
 
 -- Rebalancing must not revoke an assignment while its rig is still clearing a connector.
 local clearing = makeUnloader('Clearing trailer', 100, true, nil, 0)

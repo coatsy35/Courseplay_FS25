@@ -224,7 +224,10 @@ function UnloaderCoordinator:getSharedUnloader(harvester)
                     math.max(self.minimumPoolDistance, width * 4)
             local transferring = unloader.states and (unloader.state == unloader.states.UNLOADING_STOPPED_COMBINE or
                     unloader.state == unloader.states.UNLOADING_MOVING_COMBINE)
-            if distance <= sharingDistance and
+            -- A full compatible rig still owns the corridor until it has reversed clear. Capacity decides
+            -- the next call after release; using it here would dispatch its replacement into the reverse.
+            if distance <= sharingDistance and unloader:isServingPosition(hx, hz, 10) and
+                    unloader:canAcceptFillTypeFromHarvester(harvester) and
                     (transferring or not unloader.isInDeadlock or not unloader:isInDeadlock()) then
                 return unloader
             end
@@ -898,12 +901,13 @@ end
 --- Clearance ownership survives assignment release and AD takeover until the rig is physically clear.
 ---@param unloader AIDriveStrategyUnloadCombine|nil
 ---@param harvester table
+---@param departingVehicle table|nil ignore only this vehicle's own record when dispatching its next call
 ---@return boolean
-function UnloaderCoordinator:isStillClearingHarvester(unloader, harvester)
+function UnloaderCoordinator:isStillClearingHarvester(unloader, harvester, departingVehicle)
     for vehicle, record in pairs(self.clearingUnloaders) do
         if not entityExists(vehicle.rootNode) or not entityExists(record.harvester.rootNode) then
             self.clearingUnloaders[vehicle] = nil
-        elseif record.harvester == harvester then
+        elseif record.harvester == harvester and vehicle ~= departingVehicle then
             local x, _, z = getWorldTranslation(vehicle.rootNode)
             local hx, _, hz = getWorldTranslation(harvester.rootNode)
             if MathUtil.vector2Length(x - hx, z - hz) < record.distance then return true end

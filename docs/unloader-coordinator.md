@@ -135,7 +135,7 @@ In-game validation should cover:
 
 1. One combine with one and then two unloaders on a large field.
 2. One forage harvester with an active and relief trailer, including a full-trailer handover.
-3. Two to four mixed harvesters with fewer, equal and surplus unloaders.
+3. Two to five mixed harvesters with fewer, equal and surplus unloaders.
 4. Headland and 180-degree turns, pockets, reversing and blocked paths.
 5. Joining and leaving jobs, manual **Drive now**, field unloading and multiplayer ownership.
 
@@ -171,3 +171,10 @@ moving-combine unload also reverses clear before rejoining the pool. A rig alrea
 clear of every active harvester retains its position instead of driving farther back to
 an arbitrary pool waypoint. These paths have focused Lua regressions; live-game physics
 still needs acceptance testing.
+
+## Build 2962: complete branch review
+
+See [the branch review](unloader-coordinator-review.md) for the comparison base, reviewed areas, six corrected
+lifecycle/coordination defects, refactoring, release checks and remaining in-game validation. This supersedes
+the older capacity-based sharing descriptions above: an active compatible trailer retains corridor ownership
+through full-trailer reverse clearance; capacity governs the replacement after it releases.

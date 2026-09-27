@@ -120,6 +120,7 @@ strategy.getTurnEndForwardOffset = function() return 0 end
 strategy.getAllowReversePathfinding = function() return false end
 strategy.settings = {avoidFruit = {getValue = function() return false end}}
 strategy.states = {WAITING_FOR_PATHFINDER = {}}
+for name in pairs(AIDriveStrategyFieldWorkCourse.myStates) do strategy.states[name] = {} end
 strategy.startCourse = function(_, route) assert(route == longConnector) end
 local searches = 0
 strategy.pathfinderController = {registerListeners = function() end,
@@ -393,7 +394,11 @@ strategy.state = strategy.states.DRIVING_TO_WORK_START_WAYPOINT
 strategy.connectingPathStartIx = 1
 strategy.connectorRecoveryActive = nil
 strategy.nextConnectingWorkerCheckAt = nil
-strategy.setMaxSpeed = function(_, speed) assert(speed == 0) end
+local requestedSpeed
+strategy.setMaxSpeed = function(_, speed)
+    assert(speed == 0)
+    requestedSpeed = speed
+end
 follower.rootNode = {x = 15.2, z = 20}
 g_currentMission.time = 35000
 strategy:checkWorkerOnConnectingPath()
@@ -422,7 +427,23 @@ g_currentMission.time = 38000
 strategy:checkWorkerOnConnectingPath()
 assert(restartedAt == nil and strategy.connectingWorkerWaitFor == follower,
         'A moving combine entering the connector must stop the approach immediately')
-g_currentMission.time = 44000
+requestedSpeed = nil
+g_currentMission.time = 38100
+strategy:checkWorkerOnConnectingPath()
+assert(requestedSpeed == 0 and restartedAt == nil,
+        'The approach must stay stopped between occupancy scans, despite the per-frame speed reset')
+follower.rootNode.x = 40
+requestedSpeed = nil
+g_currentMission.time = 39000
+strategy:checkWorkerOnConnectingPath()
+assert(strategy.connectingWorkerWaitFor == nil and requestedSpeed == nil,
+        'A clear occupancy scan must release the hold immediately')
+follower.rootNode.x = 0
+g_currentMission.time = 40000
+strategy:checkWorkerOnConnectingPath()
+assert(strategy.connectingWorkerWaitSince == 40000,
+        'A new obstruction must get its own grace period after the previous worker clears')
+g_currentMission.time = 46000
 strategy:checkWorkerOnConnectingPath()
 assert(restartedAt == 1,
         'A moving combine that remains across the connector must trigger a new checked route')
@@ -534,10 +555,13 @@ strategy.course = {getCurrentWaypointIx = function() return 263 end,
 strategy.activeConnectingPathCourse = {getNumberOfWaypoints = function() return 254 end}
 strategy.workWidth = 15
 strategy.state = strategy.states.DRIVING_TO_WORK_START_WAYPOINT
-strategy:resumeFieldworkAfterTurn(923)
+strategy.connectingPathStartIx = 723
+strategy.workStarter = {onLastWaypoint = function() strategy:resumeFieldworkAfterTurn(923) end}
+strategy:onLastWaypointPassed()
 assert(alignmentRecoveryStarted == 1 and not alignmentJobStopped and
-        strategy.connectorRecoveryResumeIx == 254,
-        'An unaligned final approach must attempt a collision-checked rejoin from its final connector point')
+        strategy.connectorRecoveryResumeIx == 254 and strategy.connectingPathStartIx == 723 and
+        strategy.activeConnectingPathCourse ~= nil,
+        'The final-waypoint callback must preserve a missed row entry\'s collision-checked recovery state')
 strategy:resumeFieldworkAfterTurn(923)
 assert(alignmentRecoveryStarted == 2 and not alignmentJobStopped,
         'A second missed alignment may retry once more without entering fieldwork unaligned')
@@ -571,8 +595,19 @@ forwardX, forwardZ = 0.5, math.sqrt(0.75)
 strategy:resumeFieldworkAfterTurn(923)
 assert(not workingCourse, 'A combine crossing the row at an angle must not start cutting')
 forwardX, forwardZ = 0, 1
+local listenerRemoved = false
+strategy.proximityController.unregisterBlockingObjectListener = function() listenerRemoved = true end
+strategy.connectingPathCurveSpeedLimit = 12
+strategy.connectingWorkerWaitFor = follower
+strategy.connectingWorkerWaitSince = 46000
+strategy.nextConnectingWorkerCheckAt = 47000
 strategy:resumeFieldworkAfterTurn(923)
 assert(workingCourse == strategy.fieldWorkCourse and not strategy.workStartAlignmentRecoveryCount,
         'The combine may start cutting once it is centred and facing down the row')
+assert(listenerRemoved and strategy.connectingPathStartIx == nil and
+        strategy.activeConnectingPathCourse == nil and strategy.connectorRecoveryResumeIx == nil and
+        strategy.connectingPathCurveSpeedLimit == nil and strategy.connectingWorkerWaitFor == nil and
+        strategy.connectingWorkerWaitSince == nil and strategy.nextConnectingWorkerCheckAt == nil,
+        'An accepted early row entry must clear connector reservations, recovery state and travel speed limits')
 
 print('FieldworkConnectingPathTest: OK')
