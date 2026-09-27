@@ -2,6 +2,10 @@
 MathUtil = {vector2Length = function(x, z) return math.sqrt(x * x + z * z) end}
 function getWorldTranslation(n) return n.x, 0, n.z end
 function getWorldRotation(n) return 0, n.heading or 0, 0 end
+function localDirectionToWorld(n, x, y, z)
+    local h = n.heading or 0
+    return math.cos(h) * x + math.sin(h) * z, y, -math.sin(h) * x + math.cos(h) * z
+end
 function localToLocal(from, to, x, _, z)
     local fh, th = from.heading or 0, to.heading or 0
     local wx = from.x + math.cos(fh) * x + math.sin(fh) * z - to.x
@@ -11,6 +15,7 @@ end
 -- Use the production size accessors: GIANTS reports the attached AI agent, not one physical body.
 CpUtil = {try = function(fn, ...) return pcall(fn, ...) end}
 dofile('scripts/ai/util/AIUtil.lua')
+dofile('scripts/util/CpMathUtil.lua')
 dofile('scripts/ai/util/FieldworkBoundary.lua')
 dofile('scripts/ai/util/VehicleRouteConflict.lua')
 local function vehicle(x, z, width, length, heading, offset)
@@ -104,6 +109,115 @@ assert(FieldworkBoundary.captureRig(combine)[2].box.width == 9.25,
         'A deployed header must retain its marker width if its stored dimensions are folded')
 header.getAIMarkers = nil
 
+-- GIANTS may decompose a heading beyond 90 degrees into Euler X/Z = 180 degrees and a folded Y.
+-- The old engine stub returned heading as Y at every bearing, concealing an initial attachment jump.
+local foldedEuler = true
+function getWorldRotation(n)
+    local h = ((n.heading or 0) + math.pi) % (2 * math.pi) - math.pi
+    if foldedEuler then
+        if h > math.pi / 2 then return math.pi, math.pi - h, math.pi end
+        if h < -math.pi / 2 then return math.pi, -math.pi - h, math.pi end
+    end
+    return 0, h, 0
+end
+local function near(a, b) return math.abs(a - b) < 0.000001 end
+local function angleNear(a, b) return near((a - b + math.pi) % (2 * math.pi) - math.pi, 0) end
+local function cr11(x, z, heading)
+    local v = vehicle(x, z, 3.95, 10.5, heading, -0.65)
+    local cutter = vehicle(x + math.sin(heading) * 4.4, z + math.cos(heading) * 4.4,
+            16.6, 4, heading, 0.7)
+    cutter.getAttacherVehicle = function() return v end
+    v.children = {cutter}
+    return v
+end
+-- Real CR11/FD250/NC dimensions and the logged combine bearing; the trailer pose is a nearby-clear
+-- reproduction, not a complete replay of the game. The bad heading moves the header 8.44 m in a 0.25 m step.
+local bearing = math.rad(171)
+local rowCombine = cr11(31.4, -357.06, bearing)
+local rowRoute = course({{31.4, -357.06},
+    {31.4 + math.sin(bearing) * 25, -357.06 + math.cos(bearing) * 25}})
+local clearTrailer = vehicle(47.5, -345, 2.62, 8.36, math.rad(60), 0.4)
+local rowSweep = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(rowCombine), rowRoute, 12)
+assert(not VehicleRouteConflict.findConflict(rowSweep, FieldworkBoundary.captureRig(clearTrailer)),
+        'A folded Euler heading must not create a zero-distance obstruction from a clear neighbouring trailer')
+local overlap, bodies = VehicleRouteConflict.findConflict(rowSweep, FieldworkBoundary.captureRig(
+        vehicle(rowCombine.children[1].rootNode.x + 6 * math.cos(bearing),
+                rowCombine.children[1].rootNode.z - 6 * math.sin(bearing), 2, 2, bearing)))
+assert(overlap and overlap.distance == 0 and bodies.ownIndex == 2 and bodies.otherIndex == 1 and
+        bodies.own.node == rowCombine.children[1].rootNode,
+        'A real initial header overlap must still stop and identify the actual conflicting body pair')
+
+local function rotatedCourse(points, h, reverse)
+    local world = {}
+    for i, p in ipairs(points) do
+        world[i] = {math.cos(h) * p[1] + math.sin(h) * p[2],
+            -math.sin(h) * p[1] + math.cos(h) * p[2]}
+    end
+    return course(world, reverse)
+end
+local function sameSweep(a, b)
+    assert(#a == #b, 'Equivalent rotations must produce the same number of route samples')
+    for i, sample in ipairs(a) do
+        assert(near(sample.distance, b[i].distance))
+        for j, body in ipairs(sample.parts) do
+            local other = b[i].parts[j]
+            for _, key in ipairs({'x', 'z', 'ux', 'uz', 'vx', 'vz', 'width', 'length', 'padding'}) do
+                assert(near(body[key], other[key]), 'Euler representation changed swept geometry: ' .. key)
+            end
+        end
+    end
+end
+for degrees = -180, 180, 15 do
+    local h = math.rad(degrees)
+    local v = cr11(0, 0, h)
+    for _, sign in ipairs({-1, 1}) do
+        foldedEuler = true
+        local rig = FieldworkBoundary.captureRig(v)
+        assert(angleNear(rig[1].heading, h) and angleNear(rig[2].heading, h),
+                'Every captured body must retain its true forward bearing in all quadrants')
+        local x, z = rig[2].x, rig[2].z
+        local dx, dz = sign * 0.25 * math.sin(h), sign * 0.25 * math.cos(h)
+        FieldworkBoundary.advanceRig(rig, dx, dz, h, sign * 0.25)
+        assert(near(rig[2].x - x, dx) and near(rig[2].z - z, dz),
+                'The first forward/reverse quarter-metre must translate the header without a hitch jump')
+        local routes = {
+            rotatedCourse({{0, 0}, {0, sign * 25}}, h, sign < 0),
+            rotatedCourse({{0, 0}, {0, sign * 5}, {3, sign * 12}, {8, sign * 18}}, h, sign < 0),
+        }
+        for _, route in ipairs(routes) do
+            foldedEuler = false
+            local normal = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(v), route, 12)
+            foldedEuler = true
+            local folded = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(v), route, 12)
+            sameSweep(normal, folded)
+        end
+    end
+    -- A wheeled implement with a real drawbar must keep its hitch connected across heading wrap, too.
+    local tow = vehicle(0, 0, 3, 6, h)
+    local th = h + math.rad(12)
+    local pivot = {x = -4 * math.sin(h), z = -4 * math.cos(h), heading = th}
+    local towed = vehicle(pivot.x - 6 * math.sin(th), pivot.z - 6 * math.cos(th), 3, 10, th)
+    towed.spec_wheels = {}
+    towed.getAttacherVehicle = function() return tow end
+    towed.getActiveInputAttacherJoint = function() return {node = pivot} end
+    tow.children = {towed}
+    for _, sign in ipairs({-1, 1}) do
+        local rig = FieldworkBoundary.captureRig(tow)
+        local beforeX, beforeZ = rig[2].x, rig[2].z
+        FieldworkBoundary.advanceRig(rig, sign * 0.25 * math.sin(h), sign * 0.25 * math.cos(h),
+                h + sign * 0.01, sign * 0.25)
+        local body, parent = rig[2], rig[1]
+        local childX = body.x + math.cos(body.heading) * body.hx + math.sin(body.heading) * body.hz
+        local childZ = body.z - math.sin(body.heading) * body.hx + math.cos(body.heading) * body.hz
+        local parentX = parent.x + math.cos(parent.heading) * body.px + math.sin(parent.heading) * body.pz
+        local parentZ = parent.z - math.sin(parent.heading) * body.px + math.cos(parent.heading) * body.pz
+        assert(near(childX, parentX) and near(childZ, parentZ) and
+                MathUtil.vector2Length(body.x - beforeX, body.z - beforeZ) < 0.5,
+                'Forward/reverse articulated motion must stay continuous and preserve the common hitch')
+    end
+end
+print('VehicleRouteConflict heading, continuity and Euler-equivalence regressions: OK')
+
 -- Search context -> completed-route validation -> live movement, with production geometry and size accessors.
 -- The GIANTS engine and course container are supplied here; no boundary/footprint/occupancy result is mocked.
 function CpObject(base) return setmetatable({}, {__index = base}) end
@@ -112,7 +226,6 @@ AIDriveStrategyFieldCourse = {}
 VariableWorkWidth = {}
 Utils = {overwrittenFunction = function(_, fn) return fn end}
 dofile('scripts/ai/strategies/AIDriveStrategyFieldWorkCourse.lua')
-dofile('scripts/util/CpMathUtil.lua')
 PathfinderContext = function() return {
     allowReverse = function(self) return self end,
     mustBeAccurate = function(self) return self end,
@@ -124,7 +237,7 @@ combine.cpGetFieldPolygon = function()
     return {{x = -8, z = -10}, {x = 100, z = -10}, {x = 100, z = 100}, {x = -8, z = 100}}
 end
 local nearby = vehicle(8, -3, 3, 4)
-local requests, speedLimit = 0, nil
+local requests, speedLimit, geometryLogs = 0, nil, 0
 nearby.getCpDriveStrategy = function() return {
     getCombineToUnload = function() return nil end,
     isAvailableForStaging = function() return true end,
@@ -140,7 +253,9 @@ StartRowOnly = function(_, _, _, _, route) return {getCourse = function() return
 local strategy = setmetatable({vehicle = combine, turningRadius = 12,
     settings = {avoidFruit = {getValue = function() return true end}},
     states = {DRIVING_TO_WORK_START_WAYPOINT = 'travel', WAITING_FOR_PATHFINDER = 'search'}, state = 'search',
-    connectingPathStartIx = 722, debug = function() end,
+    connectingPathStartIx = 722, debug = function(_, format)
+        if format:find('Live connector hold', 1, true) then geometryLogs = geometryLogs + 1 end
+    end,
     getWorkWidth = function() return 15 end, getAllowReversePathfinding = function() return true end,
     ppc = {setShortLookaheadDistance = function() end, getRelevantWaypointIx = function() return 1 end},
     proximityController = {registerBlockingObjectListener = function() end},
@@ -160,15 +275,44 @@ assert(strategy.state == 'travel' and strategy.course == straight and speedLimit
 nearby.rootNode.x, nearby.rootNode.z = 7, 30
 g_currentMission.time = 2000
 strategy:checkWorkerOnConnectingPath()
-assert(speedLimit == 0 and requests == 1 and strategy.connectingWorkerWaitFor == nearby,
+assert(speedLimit == 0 and requests == 1 and strategy.connectingWorkerWaitFor == nearby and geometryLogs == 1,
         'The same trailer crossing the header must still trigger a clearance request and hold')
-nearby.rootNode.x, nearby.rootNode.z = 8, -3
-g_currentMission.time, speedLimit = 3000, nil
+g_currentMission.time = 2500
 strategy:checkWorkerOnConnectingPath()
-assert(speedLimit == nil and strategy.connectingWorkerWaitFor == nil and requests == 1,
+assert(geometryLogs == 1, 'Between-scan holds must not repeat the body diagnostics')
+g_currentMission.time = 3000
+strategy:checkWorkerOnConnectingPath()
+assert(geometryLogs == 1, 'Repeated scans of the same blocking body pair must not flood diagnostics')
+nearby.rootNode.x, nearby.rootNode.z = 0, 0
+g_currentMission.time = 4000
+strategy:checkWorkerOnConnectingPath()
+assert(geometryLogs == 2 and speedLimit == 0,
+        'Changing from a header obstruction to a chassis obstruction must identify the new body pair')
+nearby.rootNode.x, nearby.rootNode.z = 8, -3
+g_currentMission.time, speedLimit = 5000, nil
+strategy:checkWorkerOnConnectingPath()
+assert(speedLimit == nil and strategy.connectingWorkerWaitFor == nil and requests == 3,
         'Removing a real obstruction must release the accepted route on the next scan')
+nearby.rootNode.x, nearby.rootNode.z = 7, 30
+g_currentMission.time = 6000
+strategy:checkWorkerOnConnectingPath()
+assert(geometryLogs == 3 and speedLimit == 0, 'A renewed hold must report geometry again after a clear scan')
+nearby.rootNode.x, nearby.rootNode.z = 8, -3
+g_currentMission.time, speedLimit = 7000, nil
+strategy:checkWorkerOnConnectingPath()
 combine.spec_combine = nil
 local otherContext = strategy:createConnectingPathContext()
 assert(otherContext._fieldworkBoundary.margin == 9.5,
         'Non-combine fieldwork retains its existing implement corridor')
+-- The reproduced bearing must also pass the real live movement gate, not merely a standalone SAT test.
+clearTrailer.getCpDriveStrategy = nearby.getCpDriveStrategy
+g_currentMission.vehicleSystem.vehicles = {clearTrailer}
+rowRoute.copy = function() return rowRoute end
+rowRoute.getCurrentWaypointIx = function() return 1 end
+rowRoute.getNextWaypointIxWithinDistance = function() return 2 end
+strategy.vehicle, strategy.course = rowCombine, rowRoute
+g_currentMission.time, speedLimit = 8000, nil
+strategy:checkWorkerOnConnectingPath()
+assert(speedLimit == nil and strategy.connectingWorkerWaitFor == nil and requests == 4,
+        'The combine must proceed towards row entry immediately with the distant trailer clear')
 print('VehicleRouteConflictTest: OK')

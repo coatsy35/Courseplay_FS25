@@ -289,3 +289,26 @@ These size expressions predated the maintainer refactor; the refactor preserved 
 
 The original size regression was reproduced before the correction. The tests verify decisions and geometry;
 the same saved-game run is still needed to confirm actual search time, clearance and driving physics.
+
+## Build 2968: false trailer hold at row entry
+
+The 2967 log has CR11/318 approaching its row at 22:14:20 on 27 September, then repeatedly detecting T7.300/325
+at 0.0 m and accepting another short recovery route. This leaves the combine at the row start rather than
+cutting; the other combine's waiting turn is a subsequent obstruction. The screenshot shows the trailer clear.
+
+1. Capture each body's heading from its world forward vector using the existing `CpMathUtil` helper. Euler Y
+   alone is not a heading: a 171-degree bearing can be represented by X/Z = 180 degrees and Y = 9 degrees.
+   Combining that folded heading with the actual hitch offsets displaced the header by 8.44 m in a predicted
+   0.25 m step, inflating the swept box and creating a false zero-distance trailer obstruction.
+2. Reproduce that failure using the logged combine bearing and real CR11/FD250/NC dimensions, with an approximate
+   nearby-clear trailer pose. The old heading fails this regression; the correction clears it, including through
+   the live movement gate. This is a geometry reproduction, not an exact replay of all game vehicle transforms.
+3. Test equivalent Euler representations at 25 bearings, straight and curved forward/reverse travel, rigid header
+   continuity, articulated hitch continuity, real initial header overlap and release after an obstruction clears.
+   Earlier engine fixtures always returned heading as Euler Y, so they could not expose this case.
+4. When a live trailer hold begins or the conflicting body pair changes, log both body indices/nodes, box centres,
+   dimensions, headings, swept-motion padding and route distance. Repeated scans of the same hold do not repeat
+   the geometry detail. Existing collision decisions, clearance priority and pathfinding policy remain in effect.
+
+The full source and packaged-runtime release gate is required. In-game validation must confirm CR11/318 now
+enters the clear row and the following combine can complete its turn; those physics are not simulated by the tests.

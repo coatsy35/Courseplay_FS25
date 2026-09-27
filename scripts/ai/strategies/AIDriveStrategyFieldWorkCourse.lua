@@ -793,7 +793,7 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
     if not course.getNumberOfWaypoints or not course.getWaypointPosition then return false end
     local ownWidth = math.max(AIUtil.getWidth(self.vehicle), self:getWorkWidth())
     local parkedUnloader, parkedVehicle, parkedIx, parkedProgress
-    local parkedDistance, liveSweep
+    local parkedDistance, parkedGeometry, liveSweep
     local blockingWorker, workerIx, workerProgress
     for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
         if other ~= self.vehicle then
@@ -812,10 +812,11 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
                 -- a safely parked rig beside/behind us; check the actual moving bodies and header instead.
                 liveSweep = liveSweep or VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(self.vehicle),
                         course, self.turningRadius)
-                local conflict = VehicleRouteConflict.findConflict(liveSweep, FieldworkBoundary.captureRig(other))
+                local conflict, geometry = VehicleRouteConflict.findConflict(liveSweep, FieldworkBoundary.captureRig(other))
                 if conflict and (not parkedProgress or conflict.progress < parkedProgress) then
                     parkedUnloader, parkedVehicle, parkedIx, parkedProgress, parkedDistance =
                             otherStrategy, other, conflict.ix, conflict.progress, conflict.distance
+                    parkedGeometry = geometry
                 end
             elseif fieldWorker or unloader then
                 local parts = {other}
@@ -870,7 +871,7 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
         end
         self:debug('Connecting path occupied by %s%s; requesting clearance', CpUtil.getName(parkedVehicle),
                 parkedDistance and string.format(' in %.1f m', parkedDistance) or '')
-        return true, 'unloader', parkedVehicle, parkedIx, parkedDistance
+        return true, 'unloader', parkedVehicle, parkedIx, parkedDistance, parkedGeometry
     end
     if blockingWorker then
         self:debug('Connecting path crosses %s; waiting for the worker to clear', CpUtil.getName(blockingWorker))
@@ -904,7 +905,7 @@ function AIDriveStrategyFieldWorkCourse:checkWorkerOnConnectingPath()
     if toIx <= ix then return end
     local upcoming = self.course:copy(self.vehicle, ix, toIx)
     -- Use both full header widths. A negative margin can allow their physical spans to overlap before braking.
-    local blocked, blocker, worker, blockedIx, distanceToBlocker =
+    local blocked, blocker, worker, blockedIx, distanceToBlocker, geometry =
             self:isConnectingPathBlockedByWorker(upcoming, 0, false, true)
     if not distanceToBlocker and blockedIx then
         distanceToBlocker = 0
@@ -924,6 +925,22 @@ function AIDriveStrategyFieldWorkCourse:checkWorkerOnConnectingPath()
             return
         end
         self:setMaxSpeed(0)
+        -- Report the actual swept/parked body pair once on entering a hold or changing bodies.
+        -- Positions are box centres; dimensions include the reported motion padding on each side.
+        if geometry then
+            local own, other = geometry.own, geometry.other
+            local previous = self.connectingConflictGeometry
+            if self.connectingWorkerWaitFor ~= worker or not previous or
+                    previous.own.node ~= own.node or previous.other.node ~= other.node then
+                self:debug('Live connector hold for %s at %.2f m: own body %d node %s centre (%.2f, %.2f), ' ..
+                        '%.2f x %.2f m heading %.1f deg padding %.2f m; other body %d node %s centre (%.2f, %.2f), ' ..
+                        '%.2f x %.2f m heading %.1f deg', CpUtil.getName(worker), distanceToBlocker,
+                        geometry.ownIndex, tostring(own.node), own.x, own.z, 2 * own.width, 2 * own.length,
+                        math.deg(own.heading), own.padding, geometry.otherIndex, tostring(other.node),
+                        other.x, other.z, 2 * other.width, 2 * other.length, math.deg(other.heading))
+            end
+            self.connectingConflictGeometry = geometry
+        end
         if strategy and strategy.isConnectorClearancePending and strategy:isConnectorClearancePending() then
             -- Retain the accepted route while the rig yields. Replanning both machines at once can
             -- replace the corridor the trailer is clearing and send them towards each other again.

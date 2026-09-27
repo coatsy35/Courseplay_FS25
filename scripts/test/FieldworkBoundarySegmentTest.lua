@@ -2,20 +2,7 @@ MathUtil = {
     vector2Length = function(x, z) return math.sqrt(x * x + z * z) end,
 }
 
-CpMathUtil = {}
-function CpMathUtil.isPointInPolygon(polygon, x, z)
-    local inside = false
-    local j = #polygon
-    for i = 1, #polygon do
-        local xi, zi = polygon[i].x, polygon[i].z
-        local xj, zj = polygon[j].x, polygon[j].z
-        if (zi > z) ~= (zj > z) and x < (xj - xi) * (z - zi) / (zj - zi) + xi then
-            inside = not inside
-        end
-        j = i
-    end
-    return inside
-end
+dofile('scripts/util/CpMathUtil.lua')
 
 dofile('scripts/ai/util/FieldworkBoundary.lua')
 
@@ -106,6 +93,10 @@ print('FieldworkBoundary footprint and entry regressions: OK')
 
 function getWorldTranslation(n) return n.x, 0, n.z end
 function getWorldRotation(n) return 0, n.heading or 0, 0 end
+function localDirectionToWorld(n, x, y, z)
+    local h = n.heading or 0
+    return math.cos(h) * x + math.sin(h) * z, y, -math.sin(h) * x + math.cos(h) * z
+end
 function localToLocal(from, to, x, _, z)
     local fh, th = from.heading or 0, to.heading or 0
     local wx = from.x + math.cos(fh) * x + math.sin(fh) * z - to.x

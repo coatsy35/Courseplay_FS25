@@ -9,7 +9,8 @@ local function rectangle(part, padding)
     return {x = part.x + c * (box.xOffset or 0) + s * (box.zOffset or 0),
         z = part.z - s * (box.xOffset or 0) + c * (box.zOffset or 0),
         ux = c, uz = -s, vx = s, vz = c,
-        width = box.width + (padding or 0), length = box.length + (padding or 0)}
+        width = box.width + (padding or 0), length = box.length + (padding or 0),
+        node = part.node, heading = part.heading, padding = padding or 0}
 end
 
 local function overlaps(a, b)
@@ -82,14 +83,17 @@ function VehicleRouteConflict.createSweep(rig, course, turningRadius)
 end
 
 --- Return the earliest occupied segment and distance along the route, examining every attached body.
+--- The optional second result identifies the overlapping bodies for hold diagnostics; the sweep stays immutable.
 --- Build the sweep once per scan; it can then be checked against all unloaders without repeating the rollout.
 function VehicleRouteConflict.findConflict(sweep, otherRig)
     local obstacles = {}
     for i, part in ipairs(otherRig) do obstacles[i] = rectangle(part) end
     for _, sample in ipairs(sweep) do
-        for _, part in ipairs(sample.parts) do
-            for _, obstacle in ipairs(obstacles) do
-                if overlaps(part, obstacle) then return sample end
+        for ownIndex, part in ipairs(sample.parts) do
+            for otherIndex, obstacle in ipairs(obstacles) do
+                if overlaps(part, obstacle) then
+                    return sample, {ownIndex = ownIndex, otherIndex = otherIndex, own = part, other = obstacle}
+                end
             end
         end
     end

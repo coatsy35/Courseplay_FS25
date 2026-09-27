@@ -209,7 +209,10 @@ function FieldworkBoundary.captureRig(vehicle)
         local parentPart = parent and add(parent)
         local node = object == vehicle and vehicle:getAIDirectionNode() or object.rootNode
         local x, _, z = getWorldTranslation(node)
-        local _, heading = getWorldRotation(node)
+        -- Euler Y is not a compass heading: (180, 9, 180) and (0, 171, 0) describe the same
+        -- direction. Mixing that folded angle with real hitch offsets makes attachments jump on
+        -- the first predicted step, inflating swept footprints and falsely blocking clear routes.
+        local heading = CpMathUtil.getNodeDirection(node)
         local part = {x = x, z = z, heading = heading, node = node, parent = parentPart,
             box = captureBodyBox(object, node)}
         if parentPart then

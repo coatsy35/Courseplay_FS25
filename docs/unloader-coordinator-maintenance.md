@@ -172,6 +172,20 @@ including attachments. Never assign those aggregate dimensions to every separate
 all four corners into the relevant node's frame. Aggregate dimensions remain a conservative fallback for missing
 body dimensions. The normal pathfinder collision detector is unchanged.
 
+Build 2968 captures planar heading through `CpMathUtil.getNodeDirection`, projecting the node's forward vector
+onto the ground plane. Never substitute the Y component of `getWorldRotation`: equivalent Euler decompositions
+can fold a 171-degree heading to 9 degrees. Hitch offsets still come from actual node transforms, so that mixture
+makes an attached header jump on the first predicted step and inflates the between-sample motion allowance.
+Regression engine fixtures must include folded Euler representations, not assume Euler Y is always the bearing.
+The route-conflict suite checks every quadrant, curves, reversing and attachment continuity, including a clear
+trailer that the old capture incorrectly reported at 0.0 m. A real header overlap must continue to hold.
+
+`VehicleRouteConflict.findConflict` returns the earliest sample plus optional body-pair geometry for diagnostics.
+Do not mutate the shared sweep while identifying obstacles. A new live hold or a change of conflicting bodies
+logs node identities, predicted/parked box centres, headings, full padded dimensions and per-side sweep padding;
+repeated scans of the same hold do not repeat those details. These measurements distinguish an oversized or
+misoriented prediction from a real obstruction without bypassing collision checks.
+
 Travelling combines now start with the same body-width field corridor used by the existing successful retry.
 Do not reinstate header width plus an extra four metres as a hard centreline margin: a legal headland join can
 be excluded, and a start outside that inflated margin switches the search to a soft boundary across the map.
