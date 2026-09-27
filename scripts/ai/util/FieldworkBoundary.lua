@@ -174,6 +174,33 @@ function FieldworkBoundary.boxOutsideDistance(boundary, x, z, heading, box)
     return 0
 end
 
+-- AIUtil sizes describe the whole AI agent, including its attachments. A rig already represents those
+-- attachments separately, so each box must use the individual object's dimensions and matching offsets.
+-- Include this object's AI markers for implements whose stored size describes their folded position.
+local function captureBodyBox(object, node)
+    local size = object.size or {}
+    local width = size.width and size.width > 0 and size.width or AIUtil.getWidth(object)
+    local length = size.length and size.length > 0 and size.length or AIUtil.getLength(object)
+    local cx, cz = size.widthOffset or 0, size.lengthOffset or 0
+    local left, right, rear, front = cx - width / 2, cx + width / 2, cz - length / 2, cz + length / 2
+    if WorkWidthUtil and object.getAIMarkers then
+        local a, b, c = WorkWidthUtil.getAIMarkers(object, true)
+        for _, marker in pairs({a, b, c}) do
+            local x, _, z = localToLocal(marker, object.rootNode, 0, 0, 0)
+            left, right, rear, front = math.min(left, x), math.max(right, x), math.min(rear, z), math.max(front, z)
+        end
+    end
+    -- Transform the complete rectangle to the AI reference frame, including lateral offsets and reversed
+    -- direction nodes. Simply adding the root's Z offset loses asymmetric implements and shifted AI nodes.
+    local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
+    for _, corner in ipairs({{left, rear}, {left, front}, {right, rear}, {right, front}}) do
+        local x, _, z = localToLocal(object.rootNode, node, corner[1], 0, corner[2])
+        minX, maxX, minZ, maxZ = math.min(minX, x), math.max(maxX, x), math.min(minZ, z), math.max(maxZ, z)
+    end
+    return {width = (maxX - minX) / 2 + 0.25, length = (maxZ - minZ) / 2 + 0.25,
+        xOffset = (minX + maxX) / 2, zOffset = (minZ + maxZ) / 2}
+end
+
 function FieldworkBoundary.captureRig(vehicle)
     local rig, byVehicle = {}, {}
     local function add(object)
@@ -183,14 +210,8 @@ function FieldworkBoundary.captureRig(vehicle)
         local node = object == vehicle and vehicle:getAIDirectionNode() or object.rootNode
         local x, _, z = getWorldTranslation(node)
         local _, heading = getWorldRotation(node)
-        local size = object.size
         local part = {x = x, z = z, heading = heading, node = node, parent = parentPart,
-            box = {width = AIUtil.getWidth(object) / 2 + 0.25, length = AIUtil.getLength(object) / 2 + 0.25,
-                zOffset = size and size.lengthOffset or 0}}
-        if object == vehicle then
-            local _, _, offset = localToLocal(object.rootNode, node, 0, 0, 0)
-            part.box.zOffset = part.box.zOffset + offset
-        end
+            box = captureBodyBox(object, node)}
         if parentPart then
             local joint = object.getActiveInputAttacherJoint and object:getActiveInputAttacherJoint()
             local pivot = joint and joint.node or node

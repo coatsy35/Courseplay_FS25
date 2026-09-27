@@ -166,6 +166,20 @@ Check later segments too: a vehicle behind the combine can still obstruct an upc
 for all unloaders in a scan. The broader initial staging and field-worker priority checks retain their roles;
 do not use their spare parking margin to stop a collision-checked live route.
 
+Build 2967 corrects the size contract at capture: `AIUtil.getWidth/getLength` can describe the entire AI agent,
+including attachments. Never assign those aggregate dimensions to every separate body. Prefer each object's
+`size.width/length` and matching width/length offsets, expanded by that object's deployed AI markers. Transform
+all four corners into the relevant node's frame. Aggregate dimensions remain a conservative fallback for missing
+body dimensions. The normal pathfinder collision detector is unchanged.
+
+Travelling combines now start with the same body-width field corridor used by the existing successful retry.
+Do not reinstate header width plus an extra four metres as a hard centreline margin: a legal headland join can
+be excluded, and a start outside that inflated margin switches the search to a soft boundary across the map.
+Other fieldwork rigs retain their existing corridor. Crop exceptions still require another obstructing combine.
+`VehicleRouteConflictTest` loads the real AI size functions and checks context creation, result acceptance and
+the first live movement check together. It covers actual initial overlaps as well as harmless neighbouring rigs;
+it does not simulate GIANTS physics or measure in-game pathfinder time.
+
 ### Distant headland turns (2964)
 
 A long `CourseTurn` is not a fieldwork connector state: the turn owns waypoint callbacks. Its accepted pathfinder

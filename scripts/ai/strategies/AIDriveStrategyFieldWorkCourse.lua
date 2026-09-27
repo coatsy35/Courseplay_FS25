@@ -1020,8 +1020,12 @@ function AIDriveStrategyFieldWorkCourse:createConnectingPathContext(preferredPat
     local context = PathfinderContext(self.vehicle):allowReverse(self:getAllowReversePathfinding())
             :mustBeAccurate(true):ignoreFruit(not self.settings.avoidFruit:getValue())
     if preferredPath then context:preferredPath(preferredPath) end
-    -- Off-field cost is only a preference; this corridor also constrains detours around other workers.
-    self:setConnectingPathBoundary(context, AIUtil.getWidth(self.vehicle) + 4)
+    -- A travelling combine uses the same body-width corridor as the generated connector and its retry.
+    -- The aggregate AI width includes the header: adding another four metres can make a legal headland
+    -- join unreachable, or turn the boundary into a soft preference and search across the whole map.
+    -- Header/vehicle collision checks remain active; other fieldwork rigs retain their wider corridor.
+    local combine = self.vehicle.spec_combine ~= nil or self.callUnloader ~= nil
+    self:setConnectingPathBoundary(context, combine and 0 or AIUtil.getWidth(self.vehicle) + 4)
     return context
 end
 

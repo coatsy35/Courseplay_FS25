@@ -267,3 +267,25 @@ prevented recovery from that sustained physical blockage.
 
 There is no added departure timer after an accepted clear route. Reverse speed remains the CP setting. Physics,
 header clearance and simultaneous traffic still require the matching in-game test.
+
+## Build 2967: correct search margins and individual vehicle footprints
+
+In the 27 September 2966 log, CR11/319's first search began at 21:36:23.818 and exhausted 40,000 iterations
+at 21:37:24.910. Retrying the same target with vehicle-width clearance succeeded at 21:37:26.715, about 1.8 seconds
+later. The accepted route then immediately reported T7.300/322 as an obstruction at 0.0 m. Code review found that
+the initial field margin and the newly separated body footprints still used attachment-inclusive AI dimensions.
+These size expressions predated the maintainer refactor; the refactor preserved them.
+
+1. Begin combine connector searches with the existing body-width field corridor, avoiding the oversized first
+   attempt. Keep normal vehicle/header collision checks, crop policy, route validation and other implement margins.
+2. Capture each physical body once using its own dimensions and offsets, retaining deployed marker extents.
+   Do not place the entire header/trailer envelope over the tractor or combine chassis.
+3. Preserve lateral offsets and shifted/reversed AI nodes by transforming every box corner. Retain separate
+   attachments, articulated movement, real initial overlaps and obstacles across later bends or reverse sections.
+4. Replace the misleading size-function stub with production AI utilities in the regression fixture. Check the
+   search context, accepted result and first movement scan together, plus real header obstruction and release.
+5. Complete two independent reviews, add their missing initial-overlap and reversed-node attachment cases, and
+   run the full source and packaged-runtime release gate before publishing.
+
+The original size regression was reproduced before the correction. The tests verify decisions and geometry;
+the same saved-game run is still needed to confirm actual search time, clearance and driving physics.
