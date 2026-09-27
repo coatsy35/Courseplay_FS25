@@ -868,8 +868,8 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
     return false
 end
 
---- Another combine can enter a previously planned connector after pathfinding completed. Stop before
---- its header reaches the corridor; adjacent parallel rows are not treated as blocked.
+--- Machines can enter a previously planned connector after pathfinding completed. Give staging rigs
+--- advance notice and stop before reaching occupied space; adjacent parallel rows are not blocked.
 function AIDriveStrategyFieldWorkCourse:checkWorkerOnConnectingPath()
     if self.state ~= self.states.DRIVING_TO_WORK_START_WAYPOINT or not self.connectingPathStartIx or
             self.connectorRecoveryActive then
@@ -884,12 +884,55 @@ function AIDriveStrategyFieldWorkCourse:checkWorkerOnConnectingPath()
     local ix = self.course:getCurrentWaypointIx()
     local lastIx = self.course:getNumberOfWaypoints()
     if not ix or ix >= lastIx then return end
-    local lookAheadIx = self.course:getNextWaypointIxWithinDistance(ix, math.max(45, 3 * self:getWorkWidth()))
+    local stoppingDistance = math.max(45, 3 * self:getWorkWidth())
+    -- Ask staging rigs to leave before the header arrives. Keep the braking horizon separate so a
+    -- trailer well ahead can clear while we approach, without holding the combine at the far scout limit.
+    local lookAheadIx = self.course:getNextWaypointIxWithinDistance(ix, math.max(90, stoppingDistance))
     local toIx = math.min(lastIx, lookAheadIx or ix + 12)
     if toIx <= ix then return end
     local upcoming = self.course:copy(self.vehicle, ix, toIx)
     -- Use both full header widths. A negative margin can allow their physical spans to overlap before braking.
-    local blocked, blocker, worker = self:isConnectingPathBlockedByWorker(upcoming, 0, true)
+    local blocked, blocker, worker, blockedIx = self:isConnectingPathBlockedByWorker(upcoming, 0)
+    local distanceToBlocker = 0
+    if blockedIx then
+        local px, _, pz = upcoming:getWaypointPosition(1)
+        for i = 2, blockedIx - 1 do
+            local x, _, z = upcoming:getWaypointPosition(i)
+            distanceToBlocker = distanceToBlocker + MathUtil.vector2Length(x - px, z - pz)
+            px, pz = x, z
+        end
+    end
+    if blocked and blocker == 'unloader' then
+        local strategy = worker.getCpDriveStrategy and worker:getCpDriveStrategy()
+        if distanceToBlocker > stoppingDistance then
+            self.connectingWorkerWaitFor = nil
+            self.connectingWorkerWaitSince = nil
+            return
+        end
+        self:setMaxSpeed(0)
+        if strategy and strategy.isConnectorClearancePending and strategy:isConnectorClearancePending() then
+            -- Retain the accepted route while the rig yields. Replanning both machines at once can
+            -- replace the corridor the trailer is clearing and send them towards each other again.
+            self.connectingWorkerWaitFor = worker
+            self.connectingWorkerWaitSince = nil
+            return
+        end
+        -- An assigned/unavailable rig cannot accept a staging escape. Give it a short opportunity
+        -- to finish, then find a checked route with normal crop avoidance instead of waiting forever.
+        if self.connectingWorkerWaitFor ~= worker or not self.connectingWorkerWaitSince then
+            self.connectingWorkerWaitFor = worker
+            self.connectingWorkerWaitSince = g_currentMission.time
+        end
+        if g_currentMission.time - self.connectingWorkerWaitSince < 5000 then return end
+        self:debug('Unloader %s cannot yield on the upcoming connector; replanning', CpUtil.getName(worker))
+        self.connectingWorkerWaitFor = nil
+        self.connectingWorkerWaitSince = nil
+        self.connectorRecoveryActive = true
+        self.connectorRecoveryResumeIx = ix
+        self:startBlockedConnectorRecovery()
+        return
+    end
+    if distanceToBlocker > stoppingDistance then blocked = false end
     if blocked and blocker == 'fieldWorker' and worker then
         self:setMaxSpeed(0)
         if self.connectingWorkerWaitFor ~= worker then
@@ -931,13 +974,13 @@ function AIDriveStrategyFieldWorkCourse:getConnectingPathRejoinIx(course, blocke
     return nil
 end
 
---- A generated connector can double back across a combine or parked trailer several times. Choosing a point
---- just beyond its first crossing leaves the suffix obstructed and rejects every successful detour.
+--- A generated connector can double back across a combine several times. Clear every crossing of field workers,
+--- but leave remote trailers for the live clearance scan: they must yield, not enlarge a local detour by 500 m.
 function AIDriveStrategyFieldWorkCourse:getClearConnectingPathRejoinIx(course, blockedIx, otherWorker)
     local rejoinIx = self:getConnectingPathRejoinIx(course, blockedIx, otherWorker)
     while rejoinIx and rejoinIx < course:getNumberOfWaypoints() do
         local remainder = course:copy(self.vehicle, rejoinIx + 1)
-        local blocked, blocker, worker, remainderIx = self:isConnectingPathBlockedByWorker(remainder)
+        local blocked, blocker, worker, remainderIx = self:isConnectingPathBlockedByWorker(remainder, nil, true)
         if not blocked then return rejoinIx end
         if not remainderIx or (blocker ~= 'fieldWorker' and blocker ~= 'unloader') then return nil end
         local nextIx = self:getConnectingPathRejoinIx(course, rejoinIx + remainderIx, worker)
@@ -966,6 +1009,14 @@ function AIDriveStrategyFieldWorkCourse:createConnectingPathContext(preferredPat
     -- Off-field cost is only a preference; this corridor also constrains detours around other workers.
     self:setConnectingPathBoundary(context, AIUtil.getWidth(self.vehicle) + 4)
     return context
+end
+
+--- Only another combine authorises relaxing crop avoidance. Evaluate this when starting a detour as well as
+--- on failure, otherwise a successful but rejected crop-avoiding search can repeat without using the exception.
+function AIDriveStrategyFieldWorkCourse:isConnectingPathCombineDetour(blocker, worker)
+    if blocker ~= 'fieldWorker' or not worker then return false end
+    local strategy = worker.getCpDriveStrategy and worker:getCpDriveStrategy()
+    return worker.spec_combine ~= nil or (strategy ~= nil and strategy.callUnloader ~= nil)
 end
 
 function AIDriveStrategyFieldWorkCourse:waitForConnectingPathRetry(delayMs)
@@ -1090,6 +1141,7 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
             end
             self.connectingPathWorkerDetourAt = g_currentMission.time + 60000
             self.connectingPathWorkerLastSearchAt = g_currentMission.time
+            if self:isConnectingPathCombineDetour(blocker, otherWorker) then context:ignoreFruit(true) end
             self.connectingPathRejoinIx = self:getClearConnectingPathRejoinIx(self.workStarterCourse,
                     blockedIx, otherWorker)
             if not self.connectingPathRejoinIx then
@@ -1117,9 +1169,7 @@ end
 
 function AIDriveStrategyFieldWorkCourse:onPathfindingFailedToConnectingPathEnd(controller, lastContext, wasLastRetry, currentRetryAttempt)
     local blocked, blocker, otherWorker = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
-    local otherStrategy = otherWorker and otherWorker.getCpDriveStrategy and otherWorker:getCpDriveStrategy()
-    local avoidingCombine = blocker == 'fieldWorker' and
-            (otherWorker.spec_combine ~= nil or (otherStrategy and otherStrategy.callUnloader ~= nil))
+    local avoidingCombine = self:isConnectingPathCombineDetour(blocker, otherWorker)
     -- Each retry re-evaluates the exception. A parked trailer must yield; its presence (or an unrelated
     -- pathfinding failure) must not disable crop avoidance and send the harvester across standing crop.
     if blocked and blocker == 'unloader' then
@@ -1160,7 +1210,7 @@ function AIDriveStrategyFieldWorkCourse:prepareConnectingPathResult(course)
     if self.connectingPathRejoinIx and self.connectingPathRejoinIx <
             self.workStarterCourse:getNumberOfWaypoints() then
         remainder = self.workStarterCourse:copy(self.vehicle, self.connectingPathRejoinIx + 1)
-        if self:isConnectingPathBlockedByWorker(remainder) then
+        if self:isConnectingPathBlockedByWorker(remainder, nil, true) then
             self:debug('Local rejoin is still occupied; pathfinding directly to the work start')
             self:replanConnectingPathToWorkStart()
             return false
@@ -1263,7 +1313,8 @@ function AIDriveStrategyFieldWorkCourse:startBlockedConnectorRecovery()
     local context = self:createConnectingPathContext()
     self:prepareConnectingPathSearch()
     local blocked, blocker, otherWorker, blockedIx = self:isConnectingPathBlockedByWorker(self.workStarterCourse)
-    if blocked and blocker == 'fieldWorker' then
+    if blocked and (blocker == 'fieldWorker' or blocker == 'unloader') then
+        if self:isConnectingPathCombineDetour(blocker, otherWorker) then context:ignoreFruit(true) end
         self.connectingPathRejoinIx = self:getClearConnectingPathRejoinIx(self.workStarterCourse,
                 blockedIx, otherWorker)
     end

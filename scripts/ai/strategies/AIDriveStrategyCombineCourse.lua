@@ -2497,6 +2497,11 @@ function AIDriveStrategyCombineCourse:onBlockingVehicle(vehicle, isBack)
         local strategy = vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
         if strategy and strategy.requestToMoveOutOfWay then
             strategy:requestToMoveOutOfWay(self.vehicle, isBack)
+            if strategy.isConnectorClearancePending and strategy:isConnectorClearancePending() then
+                -- Keep our route and let the trailer finish the escape it has just accepted. Replacing
+                -- the combine's PPC course here used to cancel physical clearance while still nose to nose.
+                return
+            end
         end
         if self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT then
             self:onBlockedConnectingPath(false)

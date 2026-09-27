@@ -244,8 +244,8 @@ local extendedConnector = section(1)
 trailer.rootNode.x = 100
 trailer.getChildVehicles = function() return {{rootNode = {x = 88, z = 0}}} end
 local trailerRejoin = strategy:getClearConnectingPathRejoinIx(extendedConnector, 2, follower)
-assert(trailerRejoin and trailerRejoin > 4,
-        'A parked trailer farther along the connector must move the local rejoin beyond it')
+assert(trailerRejoin == 4,
+        'A remote trailer must not turn a short combine detour into a whole-field search')
 trailer.rootNode.x = 60
 trailer.rootNode.z = 40
 trailer.getChildVehicles = function() return {{rootNode = {x = 48, z = 40}}} end
@@ -330,8 +330,8 @@ assert(rejoinIx == nil and strategy.state == strategy.states.WAITING_FOR_PATHFIN
 leadIsStopped = true
 g_currentMission.time = 35000
 strategy:startConnectingPath(1)
-assert(rejoinIx == 4 and rejoinBoundary.width == 8 and rejoinIgnoresFruit == false,
-        'The first local rejoin search must still prefer a crop-free route')
+assert(rejoinIx == 4 and rejoinBoundary.width == 8 and rejoinIgnoresFruit == true,
+        'An authorised detour around another combine should use the crop exception on its first search')
 
 local innerDetour = {contained = false, getNumberOfWaypoints = function() return 2 end,
     append = function() end,
@@ -505,6 +505,30 @@ assert(directRecovery or (recoveryIx and recoveryIx > 4),
         'A worker occupying the recovery suffix must not cause another search to the fixed local waypoint')
 follower.rootNode.z = 40
 
+-- An active unloader is a physical obstacle, but does not authorise a shortcut through crop.
+local assignedRig = {rootNode = {x = 60, z = 0}, getCpDriveStrategy = function()
+    return {getCombineToUnload = function() return follower end,
+        requestToMoveOutOfWay = function() error('Do not cancel an active unload call') end}
+end}
+g_currentMission.vehicleSystem.vehicles = {assignedRig}
+directRecovery, recoveryIx = false, nil
+local function checkUnloaderRecovery(context)
+    assert(context.ignoreFruitValue == false, 'Unloader recovery must retain configured crop avoidance')
+    assert(context._fieldworkBoundary.width == 8, 'Unloader recovery must retain the field corridor')
+end
+strategy.pathfinderController.findPathToWaypoint = function(_, context, _, ix)
+    checkUnloaderRecovery(context)
+    recoveryIx = ix
+end
+strategy.pathfinderController.findPathToNode = function(_, context)
+    checkUnloaderRecovery(context)
+    directRecovery = true
+end
+strategy:startBlockedConnectorRecovery()
+assert(directRecovery or (recoveryIx and recoveryIx > 4),
+        'An unavailable rig must move the recovery target beyond the obstruction')
+g_currentMission.vehicleSystem.vehicles = {follower}
+
 -- A stopped turning combine immediately ahead needs physical room before either
 -- pathfinder can produce a collision-free route. Only the blocked connector
 -- worker may retreat, and the back sensor and field corridor remain authoritative.
@@ -616,4 +640,84 @@ assert(listenerRemoved and strategy.connectingPathStartIx == nil and
         strategy.connectingWorkerWaitSince == nil and strategy.nextConnectingWorkerCheckAt == nil,
         'An accepted early row entry must clear connector reservations, recovery state and travel speed limits')
 
+-- Recorded moving standby rig: the old scan excluded unloaders, so the first warning came at 0.6 m.
+-- Scout farther ahead, request clearance without stopping prematurely, then retain the accepted route
+-- while stopped nearby. The tractor clearing the line alone must not hide a trailer across the header.
+local requestedClearance, unexpectedReplans = 0, 0
+local scoutStrategy = setmetatable({
+    vehicle = {rootNode = {x = 0, z = 0}},
+    getWorkWidth = function() return 15 end,
+    debug = function() end,
+    states = {DRIVING_TO_WORK_START_WAYPOINT = 'connector'}, state = 'connector',
+    connectingPathStartIx = 722,
+    setMaxSpeed = function(_, speed) requestedSpeed = speed end,
+    startBlockedConnectorRecovery = function() unexpectedReplans = unexpectedReplans + 1 end,
+}, {__index = AIDriveStrategyFieldWorkCourse})
+local function scoutCourse(first, last)
+    return {
+        getCurrentWaypointIx = function() return 1 end,
+        getNumberOfWaypoints = function() return last - first + 1 end,
+        getNextWaypointIxWithinDistance = function(_, _, distance)
+            assert(distance >= 90, 'Trailers need advance notice beyond the braking horizon')
+            return math.min(last, first + math.ceil(distance / 10))
+        end,
+        getWaypointPosition = function(_, ix) return 0, 0, (first + ix - 2) * 10 end,
+        copy = function(_, _, fromIx, toIx) return scoutCourse(fromIx, toIx) end,
+    }
+end
+scoutStrategy.course = scoutCourse(1, 20)
+local scoutTrailer = {rootNode = {x = 0, z = 75}}
+local yieldingDriver = {
+    getCombineToUnload = function() return nil end,
+    isAvailableForStaging = function() return true end,
+    isConnectorClearancePending = function() return true end,
+    requestToMoveOutOfWay = function(_, vehicle, _, route)
+        assert(vehicle == scoutStrategy.vehicle and route:getNumberOfWaypoints() > 5)
+        requestedClearance = requestedClearance + 1
+    end,
+}
+local scoutTractor = {rootNode = {x = 0, z = 85},
+    getChildVehicles = function() return {scoutTrailer} end,
+    getCpDriveStrategy = function() return yieldingDriver end}
+g_currentMission.vehicleSystem.vehicles = {scoutTractor}
+requestedSpeed = nil
+g_currentMission.time = 50000
+scoutStrategy:checkWorkerOnConnectingPath()
+assert(requestedClearance == 1 and requestedSpeed == nil,
+        'A distant unloader receives clearance notice while the combine keeps approaching')
+scoutTractor.rootNode = {x = 40, z = 35}
+scoutTrailer.rootNode = {x = 0, z = 25}
+g_currentMission.time = 51000
+scoutStrategy:checkWorkerOnConnectingPath()
+assert(requestedSpeed == 0 and scoutStrategy.connectingWorkerWaitFor == scoutTractor and unexpectedReplans == 0,
+        'The trailer crossing the near route must hold the combine without replacing its accepted path')
+requestedSpeed = nil
+g_currentMission.time = 51100
+scoutStrategy:checkWorkerOnConnectingPath()
+assert(requestedSpeed == 0, 'Keep the trailer hold between occupancy scans')
+scoutTrailer.rootNode.x = 40
+requestedSpeed = nil
+g_currentMission.time = 52000
+scoutStrategy:checkWorkerOnConnectingPath()
+assert(requestedSpeed == nil and scoutStrategy.connectingWorkerWaitFor == nil and unexpectedReplans == 0,
+        'Resume the existing route as soon as the whole rig clears it; no second search or fixed wait')
+
+-- A working rig cannot accept a staging request. It must not leave a combine permanently parked
+-- beyond the proximity controller's reach: only an accepted escape keeps the current route held.
+scoutTrailer.rootNode.x = 0
+yieldingDriver.getCombineToUnload = function() return {} end
+yieldingDriver.isConnectorClearancePending = function() return false end
+local previousRequests = requestedClearance
+g_currentMission.time = 53000
+requestedSpeed = nil
+scoutStrategy:checkWorkerOnConnectingPath()
+assert(requestedSpeed == 0 and unexpectedReplans == 0 and requestedClearance == previousRequests,
+        'Brake for an assigned unloader without issuing a staging request')
+g_currentMission.time = 57000
+scoutStrategy:checkWorkerOnConnectingPath()
+assert(unexpectedReplans == 0, 'Allow an active unloader a short chance to finish')
+g_currentMission.time = 58000
+scoutStrategy:checkWorkerOnConnectingPath()
+assert(unexpectedReplans == 1 and scoutStrategy.connectorRecoveryActive,
+        'An unloader that cannot accept clearance needs bounded recovery, not an indefinite hold')
 print('FieldworkConnectingPathTest: OK')

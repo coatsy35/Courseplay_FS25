@@ -3287,13 +3287,16 @@ function AIDriveStrategyUnloadCombine:getConnectorClearanceRange(clearance)
     local driver = clearance.harvester:getCpDriveStrategy()
     local ppc = driver and driver.ppc
     if not ppc or not ppc.getCourse or ppc:getCourse() ~= clearance.course then
-        return nil
+        -- The combine can replace PPC's course while we are escaping. Its old corridor is still occupied
+        -- until the rig physically leaves it; a pointer change is not proof of clearance.
+        return clearance.fromIx or 1, clearance.toIx or clearance.course:getNumberOfWaypoints()
     end
     local fromIx = ppc.getRelevantWaypointIx and ppc:getRelevantWaypointIx() or 1
     if fromIx >= clearance.course:getNumberOfWaypoints() then return nil end
     local toIx = clearance.course.getNextWaypointIxWithinDistance and
             clearance.course:getNextWaypointIxWithinDistance(fromIx, clearance.lookAheadDistance) or
             clearance.course:getNumberOfWaypoints()
+    clearance.fromIx, clearance.toIx = fromIx, toIx
     return fromIx, toIx
 end
 
@@ -3465,6 +3468,13 @@ function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle, _, connecti
         connectingCourse = driver and driver.ppc and driver.ppc:getCourse()
     end
     if connectingCourse and self:isAvailableForStaging() then
+        if self.connectorClearance and not self:isRigClearOfConnectorClearance(self.connectorClearance) and
+                (self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER or
+                self.state == self.states.DRIVING_TO_STANDBY) then
+            -- Several combines may request clearance. Finish the current checked escape, including its
+            -- reverse setup, before responding to the next caller's repeated occupancy checks.
+            return
+        end
         if self.connectorClearance and self.connectorClearance.harvester == vehicle and
                 self.standbyRetryAt and (g_time or 0) < self.standbyRetryAt then
             return

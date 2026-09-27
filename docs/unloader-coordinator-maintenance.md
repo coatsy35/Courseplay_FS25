@@ -99,6 +99,11 @@ Connector obstruction has two distinct conditions:
 - `standbyYieldingToHarvester` prevents returning across that route while the combine is still in its connector
   search/approach states, even after the rig is physically clear.
 
+An escape already driving or searching retains its original requester when another combine asks it to move.
+The other combine's occupancy scan repeats the request after that escape clears. For a live PPC route,
+`getConnectorClearanceRange` saves the relevant index range; a PPC course replacement freezes that range rather
+than declaring the rig clear. Only measured whole-rig clearance or the requester's job ending releases it.
+
 `startConnectorClearance` tries harvested holding places first, then permits an emergency route through crop
 within the field corridor. Ordinary staging keeps its harvested-target rules. Keep collision and route validation
 on both paths; permitting crop traversal is not permission to ignore another machine.
@@ -132,6 +137,20 @@ Worker turn/entry priority is local and geometry-dependent. A stale trail positi
 the leader clears its remaining route. Conversely, a nearby leader still turning into its row needs clearance.
 Inspect the aggregate minimum speed across all workers; a later non-blocking worker must not cancel an earlier hold.
 Existing tests cover all 120 iteration orders for five combines, not a live physics simulation.
+
+### Connector lookahead and local detours (2965)
+
+`checkWorkerOnConnectingPath` scans at least 90 m of the accepted route once per second, requesting clearance from
+staging rigs before reaching them. The stopping horizon is separate: at least 45 m, or three work widths. A pending
+escape holds the combine on its accepted route, including frames between scans. An assigned/unavailable rig gets
+a five-second grace period, then checked local recovery; it must not produce an indefinite hold outside the
+proximity sensors' reach. Removing the entire rig from the corridor releases the hold on the next scan.
+
+`getClearConnectingPathRejoinIx` clears field-worker crossings in the generated remainder without extending the
+search to remote trailers; those use the live clearance scan. The detour and join keep their collision/field checks.
+`isConnectingPathCombineDetour` permits the crop exception on the first local search as well as retries, only for
+an identified obstructing combine after the nearby turn-priority decision. Other obstructions retain the configured
+crop preference. A distant trailer must not turn a local combine detour into a duplicate whole-field search.
 
 ### Distant headland turns (2964)
 

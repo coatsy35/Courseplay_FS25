@@ -222,3 +222,26 @@ and packaged code. Results from the ongoing 2962 in-game test remain relevant.
 
 The source and packaged-runtime release checks must pass before publication. Steering behaviour, alternative
 headland joins and trailer clearance still require the matching in-game run.
+
+## Build 2965: earlier trailer clearance and shorter connector searches
+
+The 2964 log records 34.3 seconds between CR11/319 starting its connector search and accepting a route
+(19:58:39.934 to 19:59:14.260 on 27 September). A remote trailer extended the first search to a much later
+rejoin; the resulting route was rejected and searched again after a five-second pause. Later, T7.300/325's
+clearance was replaced by a request from the other combine, then incorrectly ended when the requesting
+combine changed its PPC course. Its next 20 m reverse took 24.4 seconds; commanded speed was not logged.
+
+1. Scout 90 m along an accepted connector for the complete tractor/trailer rig. Ask an idle rig to clear early;
+   hold the combine within its braking horizon (at least 45 m) while the rig carries out its accepted escape.
+2. Preserve an unfinished escape when another combine requests clearance. A combine changing its course no
+   longer counts as physical clearance; measure the whole rig against the last relevant corridor.
+3. Keep the combine's accepted route while its trailer yields. If an assigned or unavailable rig cannot accept
+   clearance, allow five seconds before checked local recovery, retaining ordinary crop avoidance.
+4. Keep a local combine detour local: remote trailers in the generated remainder use the advance clearance
+   checks instead of extending the first search across the field. Another obstructing combine permits a crop
+   detour on the first search, subject to the existing nearby turning priority, field and collision checks.
+5. Add regressions for early notice, whole-trailer obstruction, between-scan braking, immediate release,
+   unavailable unloaders, competing clearance requests and course replacement during an escape.
+
+Reverse speed continues to use the CP setting and normal collision/proximity limits. Release checks cover source
+and packaged code; the timing improvement and header clearance still need the same scenario tested in game.

@@ -452,4 +452,19 @@ parked.state = parked.states.IDLE
 parked.getFillLevelPercentage = function() return 0 end
 parked:getDriveData(16)
 assert(deliveries == 2, 'Empty trailers must remain available at field completion')
+-- A late proximity callback must not replace the combine's route while the trailer escapes it.
+local requests, replans = 0, 0
+local blockedCombine = setmetatable({vehicle = {}, states = {DRIVING_TO_WORK_START_WAYPOINT = 'connector'},
+    state = 'connector', debug = function() end,
+    onBlockedConnectingPath = function() replans = replans + 1 end}, {__index = AIDriveStrategyCombineCourse})
+local clearing = true
+local blockingTractor = {getCpDriveStrategy = function() return {
+    requestToMoveOutOfWay = function() requests = requests + 1 end,
+    isConnectorClearancePending = function() return clearing end,
+} end}
+blockedCombine:onBlockingVehicle(blockingTractor, false)
+assert(requests == 1 and replans == 0, 'Retain the harvester route while the blocking trailer is clearing')
+clearing = false
+blockedCombine:onBlockingVehicle(blockingTractor, false)
+assert(replans == 1, 'Retain ordinary obstruction recovery when no trailer escape is pending')
 print('Restarted clearance, stopped combine and final parked load regressions: OK')

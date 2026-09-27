@@ -101,6 +101,20 @@ futureIntersects = true
 assert(not strategy:isRigClearOfCourse(pastCourse, 12, 2, 3) and
         strategy:moveOutOfApproachingHarvesterPath() and strategy.connectorClearance,
     'An imminent route overlap must still trigger collision-aware clearance')
+local activeEscape = strategy.connectorClearance
+activeEscape.reverseAttempts = 1
+strategy.state = strategy.states.DRIVING_TO_STANDBY
+local secondHarvester = {getCpDriveStrategy = function() return driver end}
+target = nil
+strategy:requestToMoveOutOfWay(secondHarvester, nil, course)
+assert(strategy.connectorClearance == activeEscape and activeEscape.harvester == combine and
+        activeEscape.reverseAttempts == 1 and not target,
+    'A second combine must not interrupt and restart an unfinished reverse/clearance manoeuvre')
+driver.ppc.getCourse = function() return {} end
+strategy:updateStandbyCoordinator()
+assert(strategy.connectorClearance == activeEscape and strategy.state == strategy.states.DRIVING_TO_STANDBY,
+    'Replacing the combine PPC course must not declare a physically obstructing trailer clear')
+driver.ppc.getCourse = function() return pastCourse end
 futureIntersects = false
 strategy.state = strategy.states.DRIVING_TO_STANDBY
 strategy:updateStandbyCoordinator()
