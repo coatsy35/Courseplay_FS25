@@ -787,12 +787,13 @@ function AIDriveStrategyFieldWorkCourse:canDriveConnectingPathDirectly(course)
     return not self:isConnectingPathBlockedByWorker(course)
 end
 
-function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, workerSafetyMargin, workerOnly)
+function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, workerSafetyMargin, workerOnly, liveUnloaderScan)
     -- A long generated connector can double back along a headland occupied by a following worker. Its field
     -- polygon is valid, but driving it directly bypasses collision-aware routing and can hit that worker.
     if not course.getNumberOfWaypoints or not course.getWaypointPosition then return false end
     local ownWidth = math.max(AIUtil.getWidth(self.vehicle), self:getWorkWidth())
     local parkedUnloader, parkedVehicle, parkedIx, parkedProgress
+    local parkedDistance, liveSweep
     local blockingWorker, workerIx, workerProgress
     for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
         if other ~= self.vehicle then
@@ -806,7 +807,17 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
             -- to a staging rig; an active call must not be cancelled merely to clear this connector.
             local unloader = not workerOnly and otherStrategy and otherStrategy.requestToMoveOutOfWay and
                     otherStrategy.getCombineToUnload
-            if fieldWorker or unloader then
+            if unloader and not fieldWorker and liveUnloaderScan then
+                -- The pathfinder has already checked this route. Staging margins must not stop it for
+                -- a safely parked rig beside/behind us; check the actual moving bodies and header instead.
+                liveSweep = liveSweep or VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(self.vehicle),
+                        course, self.turningRadius)
+                local conflict = VehicleRouteConflict.findConflict(liveSweep, FieldworkBoundary.captureRig(other))
+                if conflict and (not parkedProgress or conflict.progress < parkedProgress) then
+                    parkedUnloader, parkedVehicle, parkedIx, parkedProgress, parkedDistance =
+                            otherStrategy, other, conflict.ix, conflict.progress, conflict.distance
+                end
+            elseif fieldWorker or unloader then
                 local parts = {other}
                 if other.getChildVehicles then
                     for _, child in ipairs(other:getChildVehicles()) do
@@ -818,8 +829,7 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
                         local otherWidth = math.max(AIUtil.getWidth(part),
                                 part == other and otherStrategy and otherStrategy.getWorkWidth and
                                 otherStrategy:getWorkWidth() or 0)
-                        local clearance = (ownWidth + otherWidth) / 2 +
-                                (fieldWorker and (workerSafetyMargin or 5) or 5)
+                        local clearance = (ownWidth + otherWidth) / 2 + (workerSafetyMargin or 5)
                         local halfLength = AIUtil.getLength(part) / 2
                         for _, offset in ipairs({-halfLength, 0, halfLength}) do
                             local ox, _, oz = localToWorld(part.rootNode, 0, 0, offset)
@@ -858,8 +868,9 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
                 parkedUnloader:isAvailableForStaging() then
             parkedUnloader:requestToMoveOutOfWay(self.vehicle, nil, course)
         end
-        self:debug('Connecting path occupied by a trailer; waiting for clearance')
-        return true, 'unloader', parkedVehicle, parkedIx
+        self:debug('Connecting path occupied by %s%s; requesting clearance', CpUtil.getName(parkedVehicle),
+                parkedDistance and string.format(' in %.1f m', parkedDistance) or '')
+        return true, 'unloader', parkedVehicle, parkedIx, parkedDistance
     end
     if blockingWorker then
         self:debug('Connecting path crosses %s; waiting for the worker to clear', CpUtil.getName(blockingWorker))
@@ -881,7 +892,8 @@ function AIDriveStrategyFieldWorkCourse:checkWorkerOnConnectingPath()
         return
     end
     self.nextConnectingWorkerCheckAt = g_currentMission.time + 1000
-    local ix = self.course:getCurrentWaypointIx()
+    local ix = self.ppc and self.ppc.getRelevantWaypointIx and self.ppc:getRelevantWaypointIx() or
+            self.course:getCurrentWaypointIx()
     local lastIx = self.course:getNumberOfWaypoints()
     if not ix or ix >= lastIx then return end
     local stoppingDistance = math.max(45, 3 * self:getWorkWidth())
@@ -892,9 +904,10 @@ function AIDriveStrategyFieldWorkCourse:checkWorkerOnConnectingPath()
     if toIx <= ix then return end
     local upcoming = self.course:copy(self.vehicle, ix, toIx)
     -- Use both full header widths. A negative margin can allow their physical spans to overlap before braking.
-    local blocked, blocker, worker, blockedIx = self:isConnectingPathBlockedByWorker(upcoming, 0)
-    local distanceToBlocker = 0
-    if blockedIx then
+    local blocked, blocker, worker, blockedIx, distanceToBlocker =
+            self:isConnectingPathBlockedByWorker(upcoming, 0, false, true)
+    if not distanceToBlocker and blockedIx then
+        distanceToBlocker = 0
         local px, _, pz = upcoming:getWaypointPosition(1)
         for i = 2, blockedIx - 1 do
             local x, _, z = upcoming:getWaypointPosition(i)
@@ -902,6 +915,7 @@ function AIDriveStrategyFieldWorkCourse:checkWorkerOnConnectingPath()
             px, pz = x, z
         end
     end
+    distanceToBlocker = distanceToBlocker or 0
     if blocked and blocker == 'unloader' then
         local strategy = worker.getCpDriveStrategy and worker:getCpDriveStrategy()
         if distanceToBlocker > stoppingDistance then

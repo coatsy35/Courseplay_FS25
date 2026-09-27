@@ -643,9 +643,26 @@ assert(listenerRemoved and strategy.connectingPathStartIx == nil and
 -- Recorded moving standby rig: the old scan excluded unloaders, so the first warning came at 0.6 m.
 -- Scout farther ahead, request clearance without stopping prematurely, then retain the accepted route
 -- while stopped nearby. The tractor clearing the line alone must not hide a trailer across the header.
+-- Use the production rollout/SAT; this harness supplies only the sampled vehicle bodies.
+dofile('scripts/ai/util/VehicleRouteConflict.lua')
+local boundaryGeometry = FieldworkBoundary
+dofile('scripts/ai/util/FieldworkBoundary.lua')
+boundaryGeometry.advanceRig = FieldworkBoundary.advanceRig
+FieldworkBoundary = boundaryGeometry
+FieldworkBoundary.captureRig = function(vehicle)
+    local rig = {}
+    local function part(v)
+        table.insert(rig, {x = v.rootNode.x, z = v.rootNode.z, heading = 0,
+            box = {width = 2, length = 3}})
+    end
+    part(vehicle)
+    for _, v in ipairs(vehicle.getChildVehicles and vehicle:getChildVehicles() or {}) do part(v) end
+    return rig
+end
 local requestedClearance, unexpectedReplans = 0, 0
 local scoutStrategy = setmetatable({
     vehicle = {rootNode = {x = 0, z = 0}},
+    turningRadius = 12,
     getWorkWidth = function() return 15 end,
     debug = function() end,
     states = {DRIVING_TO_WORK_START_WAYPOINT = 'connector'}, state = 'connector',
@@ -702,6 +719,16 @@ scoutStrategy:checkWorkerOnConnectingPath()
 assert(requestedSpeed == nil and scoutStrategy.connectingWorkerWaitFor == nil and unexpectedReplans == 0,
         'Resume the existing route as soon as the whole rig clears it; no second search or fixed wait')
 
+scoutTrailer.rootNode = {x = 12, z = 5}
+requestedSpeed = nil
+local beforeClearance = requestedClearance
+g_currentMission.time = 52100
+scoutStrategy.nextConnectingWorkerCheckAt = nil
+scoutStrategy:checkWorkerOnConnectingPath()
+assert(requestedSpeed == nil and requestedClearance == beforeClearance,
+        'A clear accepted route must start immediately without requesting movement from a neighbouring trailer')
+scoutTrailer.rootNode = {x = 0, z = 25}
+
 -- A working rig cannot accept a staging request. It must not leave a combine permanently parked
 -- beyond the proximity controller's reach: only an accepted escape keeps the current route held.
 scoutTrailer.rootNode.x = 0
@@ -709,6 +736,7 @@ yieldingDriver.getCombineToUnload = function() return {} end
 yieldingDriver.isConnectorClearancePending = function() return false end
 local previousRequests = requestedClearance
 g_currentMission.time = 53000
+scoutStrategy.nextConnectingWorkerCheckAt = nil
 requestedSpeed = nil
 scoutStrategy:checkWorkerOnConnectingPath()
 assert(requestedSpeed == 0 and unexpectedReplans == 0 and requestedClearance == previousRequests,

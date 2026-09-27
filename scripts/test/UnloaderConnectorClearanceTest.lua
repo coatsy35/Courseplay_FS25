@@ -269,4 +269,41 @@ g_currentMission.vehicleSystem.vehicles = {tractor, combine, rearVehicle}
 strategy.connectorClearance = {reverseAttempts = 0}
 assert(not strategy:startConnectorReverseEscape(),
     'The emergency reverse must not drive the trailer into another vehicle')
+
+-- A real proximity stop on an accepted escape is different from another caller's repeated request.
+-- Exercise the live callback and real reverse-corridor check, retaining the original clearance owner.
+g_time = 100000
+tractor.getIsCpActive = function() return true end
+strategy.connectorClearance = {harvester = combine, course = course, reverseAttempts = 0}
+strategy.state = strategy.states.DRIVING_TO_STANDBY
+strategy.standbyTargetX, strategy.standbyTargetZ = 40, 60
+local blockedEscape = strategy.connectorClearance
+g_currentMission.vehicleSystem.vehicles = {tractor, combine}
+strategy:onBlockingVehicle(combine, false)
+assert(strategy.connectorClearance == blockedEscape and blockedEscape.reverseAttempts == 1 and
+        strategy.course.reverseDistance == 20 and blockedEscape.harvester == combine,
+    'A physically blocked escape must reverse through verified free space without giving priority to the trailer')
+strategy:onBlockingVehicle(combine, false)
+assert(blockedEscape.reverseAttempts == 1, 'Repeated callbacks must not restart the recovery every frame')
+g_time = 111000
+g_currentMission.vehicleSystem.vehicles = {tractor, combine, rearVehicle}
+strategy:onBlockingVehicle(combine, false)
+assert(strategy.state == strategy.states.WAITING_IN_STANDBY and strategy.standbyRetryAt == 111500 and
+        blockedEscape.reverseAttempts == 1 and blockedEscape.failedTargets[1].x == 40,
+    'If the rear is occupied, hold and retry another checked route instead of reversing blindly or deadlocking')
+g_time = 112000
+local previousAttempt = blockedEscape.attempt
+strategy:startConnectorClearance(combine, course)
+blockedEscape = strategy.connectorClearance
+assert(blockedEscape.blockedRecoveryAt == 121000, 'A new target must preserve the same owner\'s recovery throttle')
+strategy.state = strategy.states.DRIVING_TO_STANDBY
+strategy:onBlockingVehicle(combine, false)
+assert(blockedEscape.attempt == previousAttempt and strategy.state == strategy.states.DRIVING_TO_STANDBY,
+    'A completed target search must not bypass throttling against the same persistent blocker')
+strategy.state = strategy.states.DRIVING_TO_STANDBY
+g_time = 122000
+g_currentMission.vehicleSystem.vehicles = {tractor, combine}
+strategy:onBlockingVehicle(combine, true)
+assert(strategy.state == strategy.states.WAITING_IN_STANDBY and blockedEscape.reverseAttempts == 1,
+    'A rear proximity blocker must never trigger a further reverse')
 print('UnloaderConnectorClearanceTest: OK')

@@ -3139,6 +3139,14 @@ end
 --- trailer and pulled ahead a bit, waiting for a combine to call, when a second unloader arrives to the trailer
 --- to overload, but can't get close enough because it is blocked by the first, idle one.
 function AIDriveStrategyUnloadCombine:onBlockingVehicle(blockingVehicle, isBack)
+    if self.vehicle:getIsCpActive() and self.connectorClearance and
+            self.state == self.states.DRIVING_TO_STANDBY and
+            AIDriveStrategyCombineCourse.isActiveCpCombine(blockingVehicle) then
+        -- This callback follows seven seconds of a real proximity stop. A repeated planning request
+        -- must not replace an escape, but an escape which is itself physically blocked needs recovery.
+        self:recoverBlockedConnectorClearance(blockingVehicle, isBack)
+        return
+    end
     if not self.vehicle:getIsCpActive() or isBack then
         self:debug('%s has been blocking us for a while, ignoring as either not active or in the back', CpUtil.getName(blockingVehicle))
         return
@@ -3276,6 +3284,26 @@ function AIDriveStrategyUnloadCombine:isRigClearOfCourse(course, clearance, from
         end
     end
     return true
+end
+
+--- Preserve clearance ownership while escaping a persistent physical blockage on the escape route itself.
+--- The proximity callback can repeat every frame; throttle recovery and never reverse into a rear blocker.
+function AIDriveStrategyUnloadCombine:recoverBlockedConnectorClearance(blockingVehicle, isBack)
+    local clearance = self.connectorClearance
+    local now = g_time or g_currentMission.time or 0
+    if now < (clearance.blockedRecoveryAt or 0) then return end
+    clearance.blockedRecoveryAt = now + 10000
+    self:debug('Clearance route physically blocked by %s; recovering while retaining harvester priority',
+            CpUtil.getName(blockingVehicle))
+    clearance.attempt = (clearance.attempt or 0) + 1
+    clearance.failedTargets = clearance.failedTargets or {}
+    if self.standbyTargetX and self.standbyTargetZ then
+        table.insert(clearance.failedTargets, {x = self.standbyTargetX, z = self.standbyTargetZ})
+    end
+    if not isBack and self:startConnectorReverseEscape() then return end
+    -- No verified rear space: retain the stop and search another collision-checked route on the next update.
+    self.standbyRetryAt = now + 500
+    self:holdAtStandbyPosition()
 end
 
 --- A moving combine only needs clearance along the part of its active connector still ahead.
@@ -3417,6 +3445,7 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
     local followActiveCourse = driver and driver.ppc and driver.ppc.getCourse and driver.ppc:getCourse() == course or false
     self.connectorClearance = {harvester = harvester, course = course, distance = clearance, attempt = attempt,
         followActiveCourse = followActiveCourse,
+        blockedRecoveryAt = current and current.harvester == harvester and current.blockedRecoveryAt or nil,
         lookAheadDistance = self:getHarvesterTurnClearanceDistance(harvester) + 20,
         failedTargets = current and current.harvester == harvester and current.failedTargets or {},
         reverseAttempts = current and current.harvester == harvester and current.reverseAttempts or 0}

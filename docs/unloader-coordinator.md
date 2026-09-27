@@ -245,3 +245,25 @@ combine changed its PPC course. Its next 20 m reverse took 24.4 seconds; command
 
 Reverse speed continues to use the CP setting and normal collision/proximity limits. Release checks cover source
 and packaged code; the timing improvement and header clearance still need the same scenario tested in game.
+
+## Build 2966: clear-route departure and blocked escape recovery
+
+The 2965 log accepted CR11/319's route at 21:03:36.646 on 27 September, then immediately held it for T7.300/322.
+At the 21:04:20 screenshot it had waited 43 seconds with no proximity obstruction reported. The added live check
+still used a five-metre trailer margin and a circular header-width envelope behind the departure point. Later,
+T7.300/323 stopped halfway through its clearance route facing the combine; the request-retention guard also
+prevented recovery from that sustained physical blockage.
+
+1. Check live trailer obstructions using the separate oriented footprints of the combine, header, tractor and
+   attached trailers. Include offsets and the space swept on bends; remove the unrelated staging margin.
+2. Start the scan at the combine's current pose on PPC's relevant segment. A trailer safely beside or behind a
+   clear route causes neither a stop nor a clearance request; genuine obstacles on later bends still count.
+3. Retain early clearance requests and braking for an actual obstruction. Log its identity and distance along
+   the route to distinguish a request made in advance from a near obstruction requiring a stop.
+4. Recover a clearance manoeuvre that proximity sensors confirm is physically blocked. Preserve harvester
+   priority, use the existing checked reverse when possible, otherwise hold and search another target. Retain
+   the recovery throttle across replacement target searches and never reverse towards a rear blocker.
+5. Add footprint, attachment, offset, curve, sparse-waypoint and recovery lifecycle regressions to release checks.
+
+There is no added departure timer after an accepted clear route. Reverse speed remains the CP setting. Physics,
+header clearance and simultaneous traffic still require the matching in-game test.

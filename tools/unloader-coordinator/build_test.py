@@ -22,6 +22,7 @@ LUA_REGRESSIONS = (
     "UnloaderLifecycleTest", "UnloaderGridRoutingTest", "UnloaderCoordinatorTest",
     "UnloaderConnectorClearanceTest",
     "PathfinderTurnTravelTest",
+    "VehicleRouteConflictTest",
 )
 
 

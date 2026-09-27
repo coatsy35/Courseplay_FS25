@@ -16,6 +16,7 @@ Paths below are relative to the repository root. Search for the named functions 
 | `scripts/ai/strategies/AIDriveStrategyUnloadCombine.lua` | One tractor/trailer rig: eligibility, call promotion, departure queues, standby travel, unloading, reversing, obstruction clearance and final delivery. Start at `getDriveData`, `beginCombineCall`, `setStandbyAssignment` and `startConnectorClearance`. |
 | `scripts/ai/strategies/AIDriveStrategyCombineCourse.lua` | Harvesting demand, unloader registration, pockets and the return to cutting. The `WAITING_FOR_UNLOADER_TO_LEAVE` branch requires both its minimum pause and physical trailer clearance. |
 | `scripts/ai/strategies/AIDriveStrategyFieldWorkCourse.lua` | Shared fieldwork connector search, blocked-route recovery and aligned row entry. Follow `startConnectingPath`, `prepareConnectingPathResult`, `startCourseToWorkStart` and `resumeFieldworkAfterTurn`. |
+| `scripts/ai/util/VehicleRouteConflict.lua` | Oriented whole-rig occupancy along a live connector. Reuses captured rig poses/articulation from `FieldworkBoundary`; separate bodies avoid circular header-width exclusion zones behind the combine. |
 | `scripts/ai/turns/AITurn.lua` | `CourseTurn` owns turn-course PPC callbacks, including long journeys on a headland. `updatePathfinderTurnTravel` pairs speed with lookahead; distant combine transfers use `WAITING_FOR_TURN_PATH` after a failed search. |
 | `scripts/ai/FieldWorkerProximityController.lua` | Nearby worker order, turn/row-entry priority and speed limits. `getPhysicalTurnDecision` gives one consistent priority/yield decision per worker; `isWorkerClearOfRemainingCourse` checks the route still ahead. |
 | `scripts/ai/PathfinderController.lua` | Shared search lifecycle, retries, cancellation and completion callbacks. It does not own trailer reservations. |
@@ -104,6 +105,11 @@ The other combine's occupancy scan repeats the request after that escape clears.
 `getConnectorClearanceRange` saves the relevant index range; a PPC course replacement freezes that range rather
 than declaring the rig clear. Only measured whole-rig clearance or the requester's job ending releases it.
 
+Request retention does not suppress a sustained physical stop on the escape itself. The proximity controller's
+seven-second blocking callback enters `recoverBlockedConnectorClearance`: retain ownership, try the checked
+reverse or schedule another target when reversing is unsafe. The ten-second recovery throttle survives target
+replacement for the same owner; otherwise a rapid search result can restart recovery on every blocked update.
+
 `startConnectorClearance` tries harvested holding places first, then permits an emergency route through crop
 within the field corridor. Ordinary staging keeps its harvested-target rules. Keep collision and route validation
 on both paths; permitting crop traversal is not permission to ignore another machine.
@@ -152,6 +158,14 @@ search to remote trailers; those use the live clearance scan. The detour and joi
 an identified obstructing combine after the nearby turn-priority decision. Other obstructions retain the configured
 crop preference. A distant trailer must not turn a local combine detour into a duplicate whole-field search.
 
+Build 2966 scopes physical geometry to the live unloader check. `VehicleRouteConflict` rolls captured bodies
+along the remaining course in quarter-metre steps and checks oriented rectangle overlap, allowing for motion
+between samples. The capture includes attached bodies, their actual heading and length offsets. Begin at the
+current pose towards the end of PPC's relevant segment, not by rolling backwards to its already-passed start.
+Check later segments too: a vehicle behind the combine can still obstruct an upcoming hairpin. Reuse the sweep
+for all unloaders in a scan. The broader initial staging and field-worker priority checks retain their roles;
+do not use their spare parking margin to stop a collision-checked live route.
+
 ### Distant headland turns (2964)
 
 A long `CourseTurn` is not a fieldwork connector state: the turn owns waypoint callbacks. Its accepted pathfinder
@@ -189,6 +203,7 @@ are 0–100; compatible capacity and grain tank contents are litres.
 | Calls, generation guards, restart, release and final partial delivery | `UnloaderLifecycleTest.lua` |
 | Standby obstruction, whole-rig clearance and crop fallback | `UnloaderConnectorClearanceTest.lua` |
 | Connector retry, alignment recovery, callback handover and travel | `FieldworkConnectingPathTest.lua` |
+| Live route footprints, header offsets, sparse curves and trailers behind/beside the departure | `VehicleRouteConflictTest.lua` |
 | Long-turn steering, distant-transfer retries, forward-only acceptance and hand-off ranges | `PathfinderTurnTravelTest.lua` |
 | Nearby turn order, row entry and five-worker aggregation | `FieldWorkerTurnClearanceTest.lua` |
 | Reverse/recovery and route constraints | `UnloaderRecoveryTest.lua`, `UnloaderGridRoutingTest.lua`, `FieldworkBoundarySegmentTest.lua` |
