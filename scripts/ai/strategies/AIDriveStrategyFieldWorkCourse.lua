@@ -1107,9 +1107,33 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToConnectingPathEnd(con
                 self.pathfinderController:findPathToNode(context, targetNode, 0, zOffset, 1)
                 return
             end
+            -- Validate the calculated detour before attaching the original generated connector. The generated
+            -- headland suffix may legitimately use the full vehicle-width corridor; testing it against the wider
+            -- pathfinder staging margin rejects the same valid detour on every retry.
+            if not FieldworkBoundary.containsCourse(self.connectingPathBoundary, course, nil, nil, true) then
+                self:debug('Pathfound connecting route leaves the combine field corridor; replanning')
+                self.connectingPathRetryAt = g_currentMission.time + 5000
+                self.state = self.states.WAITING_FOR_PATHFINDER
+                return
+            end
+            if not FieldworkBoundary.containsCourse(FieldworkBoundary.forVehicle(self.vehicle, 0),
+                    remainder, nil, nil, true) then
+                self:debug('Generated connector suffix leaves the vehicle field corridor; replanning')
+                self.connectingPathRetryAt = g_currentMission.time + 5000
+                self.state = self.states.WAITING_FOR_PATHFINDER
+                return
+            end
+            local fromX, _, fromZ = course:getWaypointPosition(course:getNumberOfWaypoints())
+            local toX, _, toZ = remainder:getWaypointPosition(1)
+            if not FieldworkBoundary.containsSegment(FieldworkBoundary.forVehicle(self.vehicle, 0),
+                    fromX, fromZ, toX, toZ, true) then
+                self:debug('Calculated detour cannot safely join the generated connector; replanning')
+                self.connectingPathRetryAt = g_currentMission.time + 5000
+                self.state = self.states.WAITING_FOR_PATHFINDER
+                return
+            end
             course:append(remainder)
-        end
-        if not FieldworkBoundary.containsCourse(self.connectingPathBoundary, course, nil, nil, true) then
+        elseif not FieldworkBoundary.containsCourse(self.connectingPathBoundary, course, nil, nil, true) then
             self:debug('Pathfound connecting route leaves the combine field corridor; replanning')
             self.connectingPathRetryAt = g_currentMission.time + 5000
             self.state = self.states.WAITING_FOR_PATHFINDER

@@ -19,6 +19,7 @@ FieldworkBoundary = {
     containsCourse = function(_, course)
         return connectorIsContained and course.contained
     end,
+    containsSegment = function() return true end,
     contains = function() return true end,
 }
 
@@ -331,6 +332,30 @@ local innerDetour = {contained = false, getNumberOfWaypoints = function() return
 strategy:onPathfindingDoneToConnectingPathEnd(nil, true, innerDetour, false)
 assert(strategy.state == strategy.states.WAITING_FOR_PATHFINDER and strategy.connectingPathRetryAt == 40000,
         'A pathfinder result that cuts the field edge must be rejected')
+
+-- The calculated route can use the wider pathfinder margin while the original generated headland
+-- connector needs only the vehicle envelope. Do not reject the safe join by checking both at 8 m.
+local savedStarter, savedBlocked, savedStart = strategy.workStarterCourse,
+        strategy.isConnectingPathBlockedByWorker, strategy.startCourseToWorkStart
+strategy.workStarterCourse = {
+    getNumberOfWaypoints = function() return 3 end,
+    copy = function() return {contained = true,
+        getNumberOfWaypoints = function() return 2 end,
+        getWaypointPosition = function(_, ix) return 20 + ix * 10, 0, 0 end} end,
+}
+strategy.connectingPathRejoinIx = 1
+strategy.isConnectingPathBlockedByWorker = function() return false end
+local acceptedRoute
+strategy.startCourseToWorkStart = function(_, route) acceptedRoute = route end
+local safeDetour = {contained = true,
+    getNumberOfWaypoints = function() return 2 end,
+    getWaypointPosition = function(_, ix) return ix * 10, 0, 0 end,
+    append = function(self) self.contained = false end}
+strategy:onPathfindingDoneToConnectingPathEnd(nil, true, safeDetour, false)
+assert(acceptedRoute == safeDetour,
+        'A safe calculated detour must join a vehicle-width generated suffix without an endless retry')
+strategy.workStarterCourse, strategy.isConnectingPathBlockedByWorker, strategy.startCourseToWorkStart =
+        savedStarter, savedBlocked, savedStart
 
 -- A blocked centre-work approach must replan rather than remain stopped at a tree indefinitely.
 local restartedAt

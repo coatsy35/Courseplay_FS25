@@ -23,6 +23,7 @@ function FieldWorkerProximityController:init(vehicle, workingWidth)
     -- Preserve the last unambiguous convoy order while either machine is turning. Trail matching is temporarily
     -- unreliable as their headings diverge around a corner.
     self.otherVehicleAheadOnTrail = {}
+    self.connectingWorkerReservations = {}
     -- we use a moving average for slowing down to avoid that sudden, temporary lows in distance immediately
     -- stop a the vehicle. Such a temporary low can happen for instance when a vehicle is turning and during
     -- the turn it has momentarily the same direction as a waypoint in the following vehicle's trail, and
@@ -136,6 +137,23 @@ local function isDrivingToWorkStart(strategy)
     return strategy and strategy.states and strategy.state == strategy.states.DRIVING_TO_WORK_START_WAYPOINT
 end
 
+local function isWaitingForConnectingPath(strategy)
+    return strategy and strategy.states and strategy.state == strategy.states.WAITING_FOR_PATHFINDER and
+            strategy.connectingPathStartIx ~= nil
+end
+
+function FieldWorkerProximityController:hasConnectingWorkerReservation(otherVehicle, otherStrategy)
+    self.connectingWorkerReservations = self.connectingWorkerReservations or {}
+    if isWaitingForConnectingPath(otherStrategy) then
+        if AIUtil.isStopped(otherVehicle) then
+            self.connectingWorkerReservations[otherVehicle] = true
+        end
+    elseif not isDrivingToWorkStart(otherStrategy) then
+        self.connectingWorkerReservations[otherVehicle] = nil
+    end
+    return self.connectingWorkerReservations[otherVehicle] == true
+end
+
 local function isTurningOrManeuvering(strategy)
     return strategy and ((strategy.isTurning and strategy:isTurning()) or
             (strategy.isManeuvering and strategy:isManeuvering()) or
@@ -176,6 +194,11 @@ function FieldWorkerProximityController:mustYieldPhysicalTurnClearance(otherVehi
     local otherStarting = isDrivingToWorkStart(otherStrategy)
     local myManeuvering = isTurningOrManeuvering(myStrategy)
     local otherManeuvering = isTurningOrManeuvering(otherStrategy)
+    -- A worker held while its connecting route is calculated cannot yield any farther. In particular, a
+    -- headland turn must not reverse into it merely because an earlier trail sample gave the turn priority.
+    if myManeuvering and self:hasConnectingWorkerReservation(otherVehicle, otherStrategy) then
+        return true
+    end
     -- Course progress establishes the convoy order before a corner. Approaching a turn must not let the rear
     -- vehicle claim priority from the machine whose trail it is following.
     if otherIsAheadOnTrail ~= selfIsAheadOnTrail and
@@ -206,6 +229,9 @@ function FieldWorkerProximityController:hasPhysicalTurnPriority(otherVehicle, ot
     local otherStarting = isDrivingToWorkStart(otherStrategy)
     local myManeuvering = isTurningOrManeuvering(myStrategy)
     local otherManeuvering = isTurningOrManeuvering(otherStrategy)
+    if myManeuvering and self:hasConnectingWorkerReservation(otherVehicle, otherStrategy) then
+        return false
+    end
     if otherIsAheadOnTrail ~= selfIsAheadOnTrail and
             (myStarting or otherStarting or myManeuvering or otherManeuvering) then
         return selfIsAheadOnTrail == true
@@ -303,8 +329,10 @@ function FieldWorkerProximityController:getMaxSpeed(distanceLimit, currentMaxSpe
                 local selfIsAheadOnTrail = distanceFromMe > 0 and distanceFromMe < math.huge
                 otherIsAheadOnTrail, selfIsAheadOnTrail = self:resolveTurnConvoyOrder(otherVehicle, otherStrategy,
                         otherIsAheadOnTrail, selfIsAheadOnTrail)
+                local connectingWorkerReserved = self:hasConnectingWorkerReservation(otherVehicle, otherStrategy)
                 local clearOfRemainingCourse = (isDrivingToWorkStart(self.vehicle:getCpDriveStrategy()) or
                         isTurningOrManeuvering(self.vehicle:getCpDriveStrategy())) and
+                        not connectingWorkerReserved and
                         self:isWorkerClearOfRemainingCourse(otherVehicle, otherStrategy)
                 self:debugSparse('have same course as %s (done %s, convoy distance %.1f), distance %.1f',
                         CpUtil.getName(otherVehicle), otherIsDone, otherConvoyDistance, distanceFromOther)

@@ -19,6 +19,7 @@ local states = {
     WORKING = {},
     TURNING = {},
     DRIVING_TO_WORK_START_WAYPOINT = {},
+    WAITING_FOR_PATHFINDER = {},
 }
 
 local function makeStrategy(state, workWidth, aboutToTurn)
@@ -46,6 +47,9 @@ end
 local workingVehicle, working = makeVehicle('Working combine', states.WORKING, 14, 10)
 local startingVehicle, starting = makeVehicle('Starting combine', states.DRIVING_TO_WORK_START_WAYPOINT, 14, 10)
 local turningVehicle, turning = makeVehicle('Turning combine', states.TURNING, 14, 10)
+local waitingVehicle, waiting = makeVehicle('Waiting combine', states.WAITING_FOR_PATHFINDER, 14, 10)
+waiting.connectingPathStartIx = 1202
+AIUtil.isStopped = function(vehicle) return vehicle == waitingVehicle end
 local approachingTurnVehicle, approachingTurn = makeVehicle('Combine approaching turn', states.WORKING, 14, 10)
 approachingTurn.isAboutToTurn = function() return true end
 
@@ -111,6 +115,10 @@ assert(not workingController:mustYieldPhysicalTurnClearance(approachingTurnVehic
         'The established lead combine must retain priority until it has cleared the corner')
 assert(workingController:hasPhysicalTurnPriority(approachingTurnVehicle, approachingTurn, false, true),
         'The lead combine must not stop for a follower that is approaching the same corner')
+assert(turningController:mustYieldPhysicalTurnClearance(waitingVehicle, waiting, false, true),
+        'A turning combine must not reverse into a stopped worker calculating its connecting route')
+assert(not turningController:hasPhysicalTurnPriority(waitingVehicle, waiting, false, true),
+        'Cached trail order must not grant turn priority over a stationary connecting worker')
 
 local otherAhead, selfAhead = rearApproachingController:resolveTurnConvoyOrder(
         workingVehicle, working, true, false)
@@ -170,3 +178,28 @@ assert(workingController:getMaxSpeed(30, 10) == 0,
 turningVehicle.rootNode.x = 30
 assert(workingController:getMaxSpeed(30, 10) == 10,
         'The following combine must resume when the leader turns clear of its remaining route')
+
+-- A worker held for connecting-path calculation has no room to yield. The turning combine must brake even
+-- if an old trail sample says it has priority and the worker is away from the turner's current route.
+turningVehicle.rootNode = {x = 0, z = 0}
+waitingVehicle.rootNode = {x = 0, z = 35}
+turningVehicle.getAIDirectionNode = function() return turningVehicle.rootNode end
+waitingVehicle.getAIDirectionNode = function() return waitingVehicle.rootNode end
+waitingVehicle.getIsCpFieldWorkActive = function() return true end
+waitingVehicle.getCpSettings = function() return {convoyDistance = {getValue = function() return 30 end}} end
+waiting.getFieldWorkProximity = function() return math.huge end
+turningController.hasSameCourse = function() return true end
+turningController.getFieldWorkProximity = function() return math.huge end
+turningController.isWorkerClearOfRemainingCourse = function() return true end
+turningController.updateTrail = function() end
+turningController.debugSparse = function() end
+turningController.slowDownFactor = {update = function() end, get = function() return 1 end}
+g_currentMission.vehicleSystem.vehicles = {turningVehicle, waitingVehicle}
+assert(turningController:getMaxSpeed(30, 10) == 0,
+        'A turning combine must stop outside the stationary connecting worker even when its old trail had priority')
+waiting.state = states.DRIVING_TO_WORK_START_WAYPOINT
+assert(turningController:getMaxSpeed(30, 10) == 0,
+        'The follower must remain held while the first combine turns into its work-start row')
+waiting.state = states.WORKING
+assert(turningController:getMaxSpeed(30, 10) == 10,
+        'The follower may resume once the first combine has started working and cleared its route')
