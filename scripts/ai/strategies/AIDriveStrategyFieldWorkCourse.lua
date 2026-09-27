@@ -463,6 +463,14 @@ function AIDriveStrategyFieldWorkCourse:resumeFieldworkAfterTurn(ix)
         return
     end
     if not found then
+        -- The implements can finish lowering before the appended approach has brought the vehicle onto
+        -- the work line. Keep following that checked route while it still has waypoints to align us.
+        if self.state == self.states.DRIVING_TO_WORK_START_WAYPOINT and self.course ~= course and
+                self.course:getCurrentWaypointIx() < self.course:getNumberOfWaypoints() then
+            self:debugSparse('Work-start alignment not reached yet; continuing approach waypoint %d of %d',
+                    self.course:getCurrentWaypointIx(), self.course:getNumberOfWaypoints())
+            return
+        end
         self:debug('No forward continuation after waypoint %d; refusing an unaligned fieldwork handover', ix)
         self:raiseImplements()
         self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())

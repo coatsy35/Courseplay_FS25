@@ -41,6 +41,14 @@ class EntryTests(unittest.TestCase):
                 self.assertEqual(run(30, 0), 'raise,stop:noPath')
                 self.assertEqual(run(5, 0), 'lookahead,wait,lower,work:5')
 
+    def test_lowered_header_waits_for_remaining_checked_approach_to_align(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/handover-fixture.lua').read_text())
+        points = self.lua.table_from([self.lua.table_from(dict(x=0, z=z)) for z in range(0, 60, 5)])
+        handover = self.lua.globals().handoverFixture
+        self.assertEqual(handover(points, 0, 8.6, -1, 0, 259, 266, 15.2), '')
+        self.assertEqual(handover(points, 0, 7, -1, 0, 264, 266, 15.2), 'lookahead,wait,lower,work:1')
+        self.assertEqual(handover(points, 0, 8.6, -1, 0, 266, 266, 15.2), 'raise,stop:noPath')
+
     def test_saved_jd_headland_leg_is_shorter_than_rear_marker(self):
         self.lua.execute((SOURCE / 'tools/straight-entry/handover-fixture.lua').read_text())
         # savegame18/CpAssignedCourses.xml, 8RT 410, first headland points.
