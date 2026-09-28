@@ -345,3 +345,30 @@ constraints were not replaced by the refactor. The later live physical checks di
 The geometry fixture reconstructs drawbars and uses the static map outline because CP's detected live polygon is
 not persisted. Timing is from the local Lua harness, not the game. Full source and packaged-runtime release checks
 are required; actual trailer movement, collision shapes and row-entry physics still need the matching in-game run.
+
+## Build 2970: apply the accepted turn corridor while searching
+
+The 28 September 2969 log records CR11/319 reaching row end 1019 at 09:55:57.884. Its next row is 45.6 m away.
+The searched final turn section repeatedly exhausts 10,000 iterations, beginning at 09:56:12.814, and cycles through
+the five distant-turn retries. CR11/318 subsequently waits under its 75 m convoy spacing. This is a failed turn
+search, separate from the initial connector/trailer hold repaired in 2969.
+
+`CourseTurn` already accepts raised-header centre turns within the vehicle-width field corridor, but its search
+still required the full cutting-width corridor. For the CR11 those margins are 1.975 m and 7.6 m respectively.
+The constrained approach target leaves insufficient room under the latter rule. Changing headland joins retains
+the same target and corridor, so it does not resolve the mismatch.
+
+1. Share the existing raised-header corridor selection between turn search and acceptance. Keep full working-width
+   clearance for headland corners and tractors. This does not narrow the pathfinder's physical obstacle envelope,
+   which still includes attached implements, or alter the row target, forward-only travel or crop policy.
+2. Exercise the actual Hybrid A* and pathfinder constraints at the logged final hand-off, including eight rotated
+   and mirrored variants, blocked goals and the unchanged corner/tractor restrictions.
+3. Reconstruct the exact 17-point, 53.4 m saved headland section and run the complete staged solver: departure,
+   joining, smoothing, the real ending-course callback and the appended lowering approach. The corrected turn
+   returns 117 searched points after 1,558 iterations, then appends the lowering approach and activates PPC;
+   the complete replay takes approximately 1.8 seconds in the local harness.
+   Replaying the previous dispatch method fails the same fixture.
+
+These fixtures use the map's static field outline; CP's detected polygon is not saved. The old replay therefore
+fails earlier than the live log, and the timing is not an in-game guarantee. Source and packaged-runtime checks
+must pass before release. Actual terrain, collision shapes and following-worker movement still need in-game validation.

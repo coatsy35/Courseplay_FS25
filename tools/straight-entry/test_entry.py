@@ -17,6 +17,37 @@ class EntryTests(unittest.TestCase):
         self.lua.globals().SOURCE = SOURCE.as_posix()
         self.lua.execute((SOURCE / 'tools/straight-entry/engine-boundary.lua').read_text())
 
+    def test_recorded_combine_turn_search_uses_accepted_raised_header_corridor(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/turn-pathfinder-fixture.lua').read_text())
+        for mirror in (-1, 1):
+            for degrees in (0, 37, 90, 192):
+                with self.subTest(mirror=mirror, degrees=degrees):
+                    points, iterations, margin, checks = self.lua.globals().recordedTurnSearch(
+                        degrees, mirror, 'combine', False)
+                    self.assertGreater(points, 2)
+                    self.assertLess(iterations, 5000)
+                    self.assertAlmostEqual(margin, 1.975)
+                    self.assertGreater(checks, 0)
+
+    def test_recorded_turn_keeps_corner_implement_and_collision_protection(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/turn-pathfinder-fixture.lua').read_text())
+        for kind in ('corner', 'tractor'):
+            points, _, margin, _ = self.lua.globals().recordedTurnSearch(0, 1, kind, False)
+            self.assertEqual(points, 0)
+            self.assertEqual(margin, 7.6)
+        points, _, margin, checks = self.lua.globals().recordedTurnSearch(0, 1, 'combine', True)
+        self.assertEqual(points, 0)
+        self.assertAlmostEqual(margin, 1.975)
+        self.assertGreater(checks, 0)
+
+    def test_recorded_turn_joins_smooths_and_starts_with_its_lowering_approach(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/turn-pathfinder-fixture.lua').read_text())
+        points, iterations, margin, checks = self.lua.globals().recordedTurnSearch(0, 1, 'combine', False, True)
+        self.assertGreater(points, 2)
+        self.assertLess(iterations, 5000)
+        self.assertAlmostEqual(margin, 1.975)
+        self.assertGreater(checks, 0)
+
     def test_short_headland_handover_respects_corner_and_missing_continuation(self):
         self.lua.execute((SOURCE / 'tools/straight-entry/handover-fixture.lua').read_text())
         # A short incoming leg followed by a lateral corner/return, like the JD

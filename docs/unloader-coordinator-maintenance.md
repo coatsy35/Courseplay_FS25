@@ -237,6 +237,14 @@ Acceptance checks the assembled course's forward gear, field corridor and other 
 A parked rig receives the normal clearance request; both classes of vehicle obstruction prevent acceptance.
 Once clear, that rig continues yielding while the combine's distant turn searches or travels.
 
+`CourseTurn:getRaisedHeaderTurnBoundary()` selects the existing body-width field corridor for raised-header centre
+turns only. Both search and final acceptance use it: applying the cutting-width corridor only during search can
+reject every approach to an otherwise acceptable row target. Headland corners and non-harvesters retain the full
+working width. Obstacle collision geometry is independent of this field margin and must continue to include the
+header/implements. Keep the normal straight-entry target and forward-only distant-turn rule.
+`tools/straight-entry/turn-pathfinder-fixture.lua` covers the recorded failed hand-off and complete joined turn,
+including smoothing, the appended lowering approach and PPC activation through the actual completion callback.
+
 Connector retries disable crop avoidance only when the obstructing field worker is another combine. A trailer
 obstruction waits for clearance instead. CP's ordinary crop avoidance remains a pathfinding cost preference,
 not a guarantee that every raised-header footprint stays outside crop; field and collision checks remain active.

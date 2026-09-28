@@ -858,6 +858,15 @@ function CourseTurn:fitCalculatedTurnToBoundary()
     return false
 end
 
+--- Use the same raised-header corridor during search and acceptance. Searching with the cutting width
+--- but accepting with the body width can exhaust every retry at a goal that the combine can reach.
+--- This only changes field clearance; the pathfinder still checks the complete rig against obstacles.
+function CourseTurn:getRaisedHeaderTurnBoundary()
+    if not self.turnContext:isHeadlandCorner() and self.driveStrategy and self.driveStrategy.callUnloader then
+        return FieldworkBoundary.forVehicle(self.vehicle, 0)
+    end
+end
+
 -- A centre-row turn begins with the header raised. Its working-width corridor can reject a valid
 -- collision-free turn near the crop edge, leaving a stopped combine in the following worker's path.
 -- Keep the full-width rule for headland corners; elsewhere permit the vehicle envelope to enter the
@@ -866,10 +875,8 @@ function CourseTurn:turnCourseFitsField(boundary)
     if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then return true end
     -- Only harvesters can raise the header clear of the boundary. A tractor
     -- and its towed implement must still fit the full working-width corridor.
-    if self.turnContext:isHeadlandCorner() or not (self.driveStrategy and self.driveStrategy.callUnloader) then
-        return false
-    end
-    local vehicleBoundary = FieldworkBoundary.forVehicle(self.vehicle, 0)
+    local vehicleBoundary = self:getRaisedHeaderTurnBoundary()
+    if not vehicleBoundary then return false end
     if FieldworkBoundary.containsCourse(vehicleBoundary, self.turnCourse, nil, nil, true) then
         self:debug('Raised-header centre turn fits the vehicle corridor')
         return true
@@ -993,7 +1000,7 @@ function CourseTurn:generatePathfinderTurn(useHeadland)
             useHeadland and self.fieldWorkCourse or nil,
             self.driveStrategy:getWorkWidth(), backMarkerDistance,
             self.driveStrategy:isTurnOnFieldActive(), self.turnContext:getBoundaryId(),
-            FieldworkBoundary.forVehicle(self.vehicle, self.workWidth), joinDistance)
+            self:getRaisedHeaderTurnBoundary() or FieldworkBoundary.forVehicle(self.vehicle, self.workWidth), joinDistance)
     if result.done then
         return self:onPathfindingDone(result.path)
     else
