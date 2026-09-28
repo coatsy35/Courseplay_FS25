@@ -756,4 +756,53 @@ g_currentMission.time = 58000
 scoutStrategy:checkWorkerOnConnectingPath()
 assert(unexpectedReplans == 1 and scoutStrategy.connectorRecoveryActive,
         'An unloader that cannot accept clearance needs bounded recovery, not an indefinite hold')
+-- A one-point hold course has no direction. Never divide zero/nil vectors while another
+-- route is being calculated; keep GIANTS' collision prediction facing the actual vehicle.
+local directionWaypoint
+local targetVehicle = {getAIDirectionNode = function() return {x = 4, z = 8} end}
+local targetStrategy = setmetatable({vehicle = targetVehicle,
+    ppc = {getCurrentWaypoint = function() return directionWaypoint end}}, {__index = AIDriveStrategyFieldWorkCourse})
+localDirectionToWorld = function() return 0.6, 0, -0.8 end
+for _, point in ipairs({{}, {dx = 0, dz = 0}, {dx = 0}, {dz = 0}, {dx = 3, dz = -4}}) do
+    directionWaypoint = point
+    targetStrategy:setAITarget()
+    assert(math.abs(targetVehicle.aiDriveDirection[1] - 0.6) < 0.00001 and
+            math.abs(targetVehicle.aiDriveDirection[2] + 0.8) < 0.00001,
+        'A missing or zero waypoint direction must produce a finite normalised AI heading')
+end
+directionWaypoint = nil
+targetStrategy:setAITarget()
+assert(targetVehicle.aiDriveDirection[1] == 0.6)
+
+-- A global detour must not keep searching after the generated connector becomes usable.
+-- Exercise the real acceptance and handover, including the fresh live obstacle scan.
+local crossing, contained, active, cancellations, starts, scans = true, true, true, 0, 0, 0
+local resuming = setmetatable({connectingPathStartIx = 7, turningRadius = 9,
+    vehicle = {}, workStarterCourse = {getLength = function() return 709 end},
+    debug = function() end, getWorkWidth = function() return 15 end,
+    isConnectingPathBlockedByWorker = function() return crossing end,
+    pathfinderController = {isActive = function() return active end,
+        cancel = function() active = false; cancellations = cancellations + 1 end},
+    startCourseToWorkStart = function() assert(not active); starts = starts + 1 end,
+    checkWorkerOnConnectingPath = function()
+        scans = scans + 1
+        active = true -- simulate a new recovery search started by this immediate scan
+    end}, {__index = AIDriveStrategyFieldWorkCourse})
+FieldworkBoundary.containsCourse = function() return contained end
+g_currentMission.time = 100000
+assert(not resuming:tryResumeGeneratedConnectingPath() and cancellations == 0)
+crossing = false
+g_currentMission.time = 100100
+assert(not resuming:tryResumeGeneratedConnectingPath(), 'Do not rescan the entire connector every update')
+g_currentMission.time = 102000
+assert(resuming:tryResumeGeneratedConnectingPath() and cancellations == 1 and starts == 1 and scans == 1 and active,
+    'Cancel the old search before handover; preserve any new recovery requested by its immediate live scan')
+contained = false
+assert(not resuming:tryResumeGeneratedConnectingPath() and cancellations == 1,
+    'A failed field check must keep the checked search running')
+contained = true
+resuming.connectorRecoveryActive = true
+g_currentMission.time = 105000
+assert(not resuming:tryResumeGeneratedConnectingPath() and cancellations == 1,
+    'Do not replace a local recovery with the original full connector')
 print('FieldworkConnectingPathTest: OK')

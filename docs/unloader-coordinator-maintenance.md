@@ -249,6 +249,31 @@ Connector retries disable crop avoidance only when the obstructing field worker 
 obstruction waits for clearance instead. CP's ordinary crop avoidance remains a pathfinding cost preference,
 not a guarantee that every raised-header footprint stays outside crop; field and collision checks remain active.
 
+## Clearance goal selection and pending searches (2971)
+
+The 28 September log records T7.300/325 waiting from 11:21:47.812 to 11:22:34.940 for a
+165-waypoint clearance route. The old selector took the first valid holding point, up to 97.6 m
+sideways, and used unary Lua 5.1 `math.atan` as though it accepted two coordinates. Its incorrect
+arrival direction could force unnecessary turns. `getConnectorClearanceGoal` now ranks the available
+positions and useful arrival headings by a Dubins length estimate, including a straight departure.
+An aligned train's front and rear must fit outside the combine corridor at the target. This is a
+ranking filter, not collision approval: the usual pathfinder and live whole-rig checks still own
+obstacle avoidance and permission to move. Harvested targets remain preferred; existing checked
+reverse recovery and emergency crop fallback remain available. Do not replace the live articulated
+clearance check with the aligned endpoint estimate, or require an arbitrary parking heading again.
+
+CR11/318 also remained in a long connector search after its staging wait expired. While that search
+is active, `tryResumeGeneratedConnectingPath` rechecks the existing generated route every two seconds.
+It retains the field and other-worker checks, cancels the old search before installing an accepted
+route, and immediately performs the normal live trailer scan. Cancellation must precede that scan:
+the scan can start a new recovery request. Local recovery and short/invalid connectors are excluded.
+
+The same log contains two divide-by-zero errors at 11:23:58 when `setAITarget` normalised a missing
+direction on a one-point hold course. Such courses now use the vehicle's forward direction. The
+regressions exercise real Dubins costs at twelve rotated/mirrored departures, short versus distant
+parking choices, trailer rear clearance, search cancellation/handover and missing/zero AI directions.
+Build 2970 fails the new straight-departure and zero-direction tests; current source passes them.
+
 ## Units and verification
 
 Geometry and route distances use metres. CP speed values use the game's internal km/h convention; mph is a display

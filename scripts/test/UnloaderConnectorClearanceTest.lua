@@ -1,11 +1,20 @@
-function CpObject() return {} end
+dofile('scripts/CpObject.lua')
+dofile('scripts/geometry/Vector.lua')
+dofile('scripts/pathfinder/AnalyticSolution.lua')
+dofile('scripts/pathfinder/State3D.lua')
+dofile('scripts/pathfinder/Dubins.lua')
+dofile('scripts/util/CpMathUtil.lua')
 AIUtil = {
     getWidth = function(vehicle) return vehicle.width end,
     getLength = function(vehicle) return vehicle.length end,
 }
 MathUtil = {vector2Length = function(x, z) return math.sqrt(x * x + z * z) end}
 CpUtil = {getName = function() return 'combine' end}
-PathfinderUtil = {hasFruit = function() return false end}
+PathfinderUtil = {hasFruit = function() return false end, dubinsSolver = DubinsSolver(),
+    getVehiclePositionAsState3D = function(vehicle)
+        local node = vehicle.rootNode
+        return State3D(node.x, -node.z, CpMathUtil.angleFromGame(node.heading or 0))
+    end}
 FieldworkBoundary = {contains = function(_, _, z) return z >= 0 and z < 80 end,
     containsCourse = function() return true end}
 Waypoint = function(point) return point end
@@ -23,7 +32,7 @@ g_currentMission = {vehicleSystem = {vehicles = {tractor, parkedTractor}}}
 local driver = {getWorkWidth = function() return 15 end}
 local combine = {getCpDriveStrategy = function() return driver end}
 AIDriveStrategyCombineCourse = {isActiveCpCombine = function(vehicle) return vehicle == combine end}
-local strategy = setmetatable({vehicle = tractor, standbyAssignment = {},
+local strategy = setmetatable({vehicle = tractor, standbyAssignment = {}, turningRadius = 9,
     states = {WAITING_IN_STANDBY = {}, WAITING_FOR_STANDBY_PATHFINDER = {}, DRIVING_TO_STANDBY = {}},
     state = {}, debug = function() end, setMaxSpeed = function() end}, {__index = AIDriveStrategyUnloadCombine})
 strategy.getFieldworkBoundaryForRig = function() return {} end
@@ -306,4 +315,64 @@ g_currentMission.vehicleSystem.vehicles = {tractor, combine}
 strategy:onBlockingVehicle(combine, true)
 assert(strategy.state == strategy.states.WAITING_IN_STANDBY and blockedEscape.reverseAttempts == 1,
     'A rear proximity blocker must never trigger a further reverse')
+-- Use the real Dubins solver to verify travel, rather than only checking that some goal was selected.
+-- Rotate/mirror the same clear departure: a tractor already facing away needs no loops or final turn.
+local simpleCourse = {getNumberOfWaypoints = function() return 2 end}
+local selected
+local simple = setmetatable({vehicle = tractor, turningRadius = 9, debug = function() end,
+    getFieldworkBoundaryForRig = function() return {} end,
+    getHarvesterTurnClearanceDistance = function() return 30 end,
+    isRigClearOfConnectorClearance = function() return false end,
+    startPathfindingToStandby = function(_, _, waypoint, avoidHarvester)
+        assert(avoidHarvester, 'Shorter goals must still include the combine in collision checking')
+        selected = waypoint
+    end}, {__index = AIDriveStrategyUnloadCombine})
+g_currentMission.vehicleSystem.vehicles = {tractor}
+PathfinderUtil.hasFruit = function() return false end
+FieldworkBoundary.contains = function() return true end
+for _, degrees in ipairs({0, 37, 90, 180, 217, 270}) do
+    for _, mirror in ipairs({-1, 1}) do
+        local a = math.rad(degrees)
+        local function rotate(x, z)
+            return x * math.cos(a) + z * math.sin(a), -x * math.sin(a) + z * math.cos(a)
+        end
+        simpleCourse.getWaypointPosition = function(_, ix)
+            local x, z = rotate(mirror * (ix == 1 and -100 or 100), 0)
+            return x, 0, z
+        end
+        tractor.rootNode = {x = 0, z = 0, heading = a}
+        simple.connectorClearance = nil
+        simple:startConnectorClearance(combine, simpleCourse)
+        local start = PathfinderUtil.getVehiclePositionAsState3D(tractor)
+        local goal = State3D(selected.x, -selected.z, CpMathUtil.angleFromGameDeg(selected.angle))
+        local pathLength = PathfinderUtil.dubinsSolver:solve(start, goal, 9):getLength(9)
+        local direct = MathUtil.vector2Length(selected.x, selected.z)
+        assert(pathLength < direct + 0.001 and pathLength < 40,
+            'A clear straight departure must not acquire a loop to match the connector heading')
+        assert(math.abs(math.sin(math.rad(selected.angle) - a)) < 0.001,
+            'Arrival heading must retain its quadrant at every compass bearing')
+    end
+end
+
+-- At a corner the old first-valid search chose the far along-course point (60,27.5)
+-- before trying a slightly wider but much shorter move straight ahead (0,39.5).
+tractor.rootNode = {x = 0, z = 0, heading = 0}
+simpleCourse.getWaypointPosition = function(_, ix) return ix == 1 and -100 or 100, 0, 0 end
+FieldworkBoundary.contains = function(_, x, z) return x >= 50 or z >= 32 end
+simple.connectorClearance = nil
+simple:startConnectorClearance(combine, simpleCourse)
+assert(math.abs(selected.x) < 0.001 and selected.z < 55,
+    'Compare all available goals before sending the trailer far along the headland')
+
+-- Facing away at a marginal target would leave the rear in the combine's path. A different
+-- arrival heading is acceptable; a tractor-only clearance check is not.
+FieldworkBoundary.contains = function() return true end
+local goal = simple:getConnectorClearanceGoal(State3D(0, 0, CpMathUtil.angleFromGame(0)),
+        0, 23, math.pi / 2, {}, math.huge)
+assert(goal, 'A parallel holding orientation should still fit')
+local rear = 3 - 15
+local rearX, rearZ = goal.x + math.sin(math.rad(goal.angle)) * rear,
+        goal.z + math.cos(math.rad(goal.angle)) * rear
+assert(simple.getDistanceFromConnectingCourse(simpleCourse, rearX, rearZ) >= simple.connectorClearance.distance,
+    'An accepted parking pose must leave room for the trailer rear, not only the tractor')
 print('UnloaderConnectorClearanceTest: OK')

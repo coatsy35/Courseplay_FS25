@@ -3429,6 +3429,42 @@ function AIDriveStrategyUnloadCombine:isNewConnectorClearanceTarget(x, z)
     return true
 end
 
+--- Parking has no required working direction. Rank useful arrival headings by the shortest forward
+--- manoeuvre, instead of making the rig loop merely to face along the combine's route. This is only
+--- a cost estimate: the normal pathfinder still checks obstacles, crop and the articulated trailer.
+function AIDriveStrategyUnloadCombine:getConnectorClearanceGoal(start, x, z, routeAngle, boundary, bestLength)
+    local clearance = self.connectorClearance
+    local fromIx, toIx = self:getConnectorClearanceRange(clearance)
+    local front = AIUtil.getLength(self.vehicle) / 2
+    local length = self.getTrainLength(self.vehicle)
+    local samples = math.max(1, math.ceil(length / 2))
+    local best
+    for _, heading in ipairs({CpMathUtil.angleToGame(start.t), math.atan2(x - start.x, z + start.y),
+            routeAngle, routeAngle + math.pi}) do
+        local goal = State3D(x, -z, CpMathUtil.angleFromGame(heading))
+        local solution = PathfinderUtil.dubinsSolver:solve(start, goal, self.turningRadius)
+        local distance = solution and solution:getLength(self.turningRadius) or math.huge
+        if distance < bestLength then
+            -- The target is the tractor, not the centre of the train. Ensure an aligned rear end
+            -- will also be clear; the live whole-rig check remains authoritative during the move.
+            local fits = true
+            for i = 0, samples do
+                local offset = front - length * i / samples
+                local px, pz = x + math.sin(heading) * offset, z + math.cos(heading) * offset
+                if not FieldworkBoundary.contains(boundary, px, pz) or
+                        self.getDistanceFromConnectingCourse(clearance.course, px, pz, fromIx, toIx) < clearance.distance then
+                    fits = false
+                    break
+                end
+            end
+            if fits then
+                best, bestLength = Waypoint({x = x, z = z, angle = math.deg(heading)}), distance
+            end
+        end
+    end
+    return best, bestLength
+end
+
 --- Select an actual holding place outside the relevant connector, including the trailer's swept width.
 --- Prefer the harvested side. If the combine's connector is already blocked and no harvested
 --- holding point exists, allow a field-contained emergency route through crop rather than deadlock.
@@ -3460,27 +3496,42 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
     local boundary = self:getFieldworkBoundaryForRig()
     local trainLength = self.getTrainLength(self.vehicle)
     local offset = clearance + trainLength / 2 + 5
+    local start = PathfinderUtil.getVehiclePositionAsState3D(self.vehicle)
+    -- Lua 5.1's atan is unary: atan(dx, dz) silently loses dz and gives the wrong quadrant.
+    local routeAngle = math.atan2(dx, dz)
     for pass = 1, 2 do
+        local best, bestLength = nil, math.huge
+        local function consider(targetX, targetZ)
+            if boundary and FieldworkBoundary.contains(boundary, targetX, targetZ) and
+                    MathUtil.vector2Length(targetX - start.x, targetZ + start.y) < bestLength and
+                    (pass == 2 or not PathfinderUtil.hasFruit(targetX, targetZ, width + 2, trainLength + 2)) and
+                    self:isConnectorClearanceTargetFree(targetX, targetZ, width, trainLength) and
+                    self:isNewConnectorClearanceTarget(targetX, targetZ) and
+                    self.getDistanceFromConnectingCourse(course, targetX, targetZ, fromIx, toIx) >= clearance + trainLength / 2 then
+                local goal, length = self:getConnectorClearanceGoal(start, targetX, targetZ, routeAngle, boundary, bestLength)
+                if goal then best, bestLength = goal, length end
+            end
+        end
         for step = 0, 7 do
-            local distance = offset + ((step + math.floor(attempt / 2)) % 8) * 12
+            local distance = offset + step * 12
+            -- If already pointing away, simply continue forwards. Sideways-only candidates used to
+            -- force a turn even where a straight departure cleared the entire trailer.
+            consider(x + math.cos(start.t) * distance, z - math.sin(start.t) * distance)
             for _, along in ipairs({0, -30, 30, -60, 60}) do
                 for sideIx = 1, 2 do
                     local side = ((sideIx + attempt) % 2 == 0) and 1 or -1
                     local targetX = x + dx * along - dz * distance * side
                     local targetZ = z + dz * along + dx * distance * side
-                    if boundary and FieldworkBoundary.contains(boundary, targetX, targetZ) and
-                            (pass == 2 or not PathfinderUtil.hasFruit(targetX, targetZ, width + 2, trainLength + 2)) and
-                            self:isConnectorClearanceTargetFree(targetX, targetZ, width, trainLength) and
-                            self:isNewConnectorClearanceTarget(targetX, targetZ) and
-                            self.getDistanceFromConnectingCourse(course, targetX, targetZ, fromIx, toIx) >= clearance + trainLength / 2 then
-                        self:debug('Clearing %s connecting route by %.1f m%s', CpUtil.getName(harvester),
-                                distance, pass == 2 and ' (emergency route through crop)' or '')
-                        self:startPathfindingToStandby(harvester,
-                                Waypoint({x = targetX, z = targetZ, angle = math.deg(math.atan(dx, dz))}), true, pass == 2)
-                        return true
-                    end
+                    consider(targetX, targetZ)
                 end
             end
+        end
+        if best then
+            self:debug('Clearing %s connecting route: target %.1f m away, estimated drive %.1f m, heading %.1f%s',
+                    CpUtil.getName(harvester), MathUtil.vector2Length(best.x - x, best.z - z), bestLength, best.angle,
+                    pass == 2 and ' (emergency route through crop)' or '')
+            self:startPathfindingToStandby(harvester, best, true, pass == 2)
+            return true
         end
     end
     self:debug('No field-contained harvested holding point clears %s connecting route', CpUtil.getName(harvester))

@@ -188,6 +188,7 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
         self:setMaxSpeed(0)
     elseif self.state == self.states.WAITING_FOR_PATHFINDER then
         self:setMaxSpeed(0)
+        self:tryResumeGeneratedConnectingPath()
         if self.nextWaypointRetryAt and g_currentMission.time >= self.nextWaypointRetryAt then
             self.nextWaypointRetryAt = nil
             self:startPathfindingToNextWaypoint(self.waypointToContinueOnFailedPathfinding - 1)
@@ -251,14 +252,17 @@ end
 -- Seems like the Giants AIDriveStrategyCollision needs these variables on the vehicle to be set
 -- to calculate an accurate path prediction
 function AIDriveStrategyFieldWorkCourse:setAITarget()
-    --local dx, _, dz = localDirectionToWorld(self.vehicle:getAIDirectionNode(), 0, 0, 1)
     local wp = self.ppc:getCurrentWaypoint()
-    --- TODO: For some reason wp.dx and wp.dz are nil sometimes
-    local dx, dz = wp.dx or 0, wp.dz or 0
-    if wp.dx ~= 0 or wp.dz ~= 0 then
-        local length = MathUtil.vector2Length(dx, dz)
+    local dx, dz = wp and wp.dx or 0, wp and wp.dz or 0
+    local length = MathUtil.vector2Length(dx, dz)
+    if length > 0.0001 then
         dx = dx / length
         dz = dz / length
+    else
+        -- A one-point hold course has no segment direction. Keep a valid prediction heading
+        -- while its replacement route is being calculated; nil ~= 0 is not a length check.
+        local forwardX, _, forwardZ = localDirectionToWorld(self.vehicle:getAIDirectionNode(), 0, 0, 1)
+        dx, dz = forwardX, forwardZ
     end
     self.vehicle.aiDriveDirection = { dx, dz }
     local x, _, z = getWorldTranslation(self.vehicle:getAIDirectionNode())
@@ -794,11 +798,14 @@ end
 --- A long generated connector already exists before the row ends. Parked trailers are handled by
 --- the physical scout/braking checks, not by replacing hundreds of metres with a fresh global search.
 --- Worker crossings still require a checked detour; short joins and field containment retain their checks.
-function AIDriveStrategyFieldWorkCourse:tryStartGeneratedConnectingPath()
+function AIDriveStrategyFieldWorkCourse:tryStartGeneratedConnectingPath(cancelSearch)
     if self.connectorRecoveryActive or not self:canDriveConnectingPathDirectly(self.workStarterCourse, true) then
         return false
     end
     self:debug('Using the %.1f m generated connector with live trailer clearance', self.workStarterCourse:getLength())
+    -- Cancel before handover: its live clearance scan may itself start a new recovery search.
+    if cancelSearch then self.pathfinderController:cancel() end
+    self.nextGeneratedConnectorCheckAt = nil
     self.connectingPathRetryAt = nil
     self.connectingPathUnloaderBlocker = nil
     self.connectingPathUnloaderWaitSince = nil
@@ -811,6 +818,16 @@ function AIDriveStrategyFieldWorkCourse:tryStartGeneratedConnectingPath()
     self.nextConnectingWorkerCheckAt = nil
     self:checkWorkerOnConnectingPath()
     return true
+end
+
+--- A moving worker can clear the generated route while a costly detour is still being searched.
+--- Reuse it only after the normal boundary/worker checks pass; never interrupt local recovery.
+function AIDriveStrategyFieldWorkCourse:tryResumeGeneratedConnectingPath()
+    if not self.connectingPathStartIx or self.connectorRecoveryActive or not self.workStarterCourse or
+            not self.pathfinderController or not self.pathfinderController:isActive() or
+            g_currentMission.time < (self.nextGeneratedConnectorCheckAt or 0) then return false end
+    self.nextGeneratedConnectorCheckAt = g_currentMission.time + 2000
+    return self:tryStartGeneratedConnectingPath(true)
 end
 
 --- Warn parked rigs before finishing the row. Keep harvesting and leave PPC/turn ownership untouched;
