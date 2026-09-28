@@ -236,6 +236,7 @@ function AIDriveStrategyUnloadCombine:init(task, job)
 end
 
 function AIDriveStrategyUnloadCombine:delete()
+    self:releaseStandbyTraffic()
     if self.fieldUnloadPositionNode then
         CpUtil.destroyNode(self.fieldUnloadPositionNode)
         CpUtil.destroyNode(self.fieldUnloadTurnStartNode)
@@ -460,6 +461,7 @@ function AIDriveStrategyUnloadCombine:getDriveData(dt, vX, vY, vZ)
 
     elseif self.state == self.states.DRIVING_TO_STANDBY then
         self:setMaxSpeed(self.ppc:isReversing() and self.settings.reverseSpeed:getValue() or self:getFieldSpeed())
+        self:checkStandbyTraffic()
         self:updateStandbyCoordinator()
 
     elseif self.state == self.states.WAITING_IN_STANDBY then
@@ -2079,6 +2081,7 @@ end
 --- Invalidate the old assignment before cancelling its search, then install the new owner before departure queuing.
 function AIDriveStrategyUnloadCombine:beginCombineCall(combine)
     self.postUnloadClearanceHarvester = nil
+    self:releaseStandbyTraffic()
     UnloaderCoordinator:release(self)
     self.combineRequestGeneration = (self.combineRequestGeneration or 0) + 1
     if self.pathfinderController then self.pathfinderController:cancel() end
@@ -2211,7 +2214,172 @@ end
 -- Standby coordination
 ------------------------------------------------------------------------------------------------------------------------
 
+--- Reserve one local passage between two unassigned rigs. Both independently retrying a forward-only
+--- route cannot resolve a nose-to-nose stop. A parked rig keeps its position; otherwise use a stable
+--- tie-break so update order cannot make both tractors back away. Harvesters retain clearance priority.
+function AIDriveStrategyUnloadCombine:startStandbyTrafficYield(other)
+    if not other or other == self or not self:isStandbyTrafficParticipant() or
+            not other.isStandbyTrafficParticipant or not other:isStandbyTrafficParticipant() then return false end
+    if self.standbyTrafficQueue then self:setMaxSpeed(0); return true end
+    if self.standbyTrafficEncounter or other.standbyTrafficEncounter or other.standbyTrafficQueue then
+        if not self.standbyTrafficEncounter then
+            self.standbyTrafficQueue = other.standbyTrafficEncounter or other.standbyTrafficQueue
+        end
+        self:setMaxSpeed(0)
+        return true
+    end
+    local yielding, waiting = self, other
+    local ownClearing, otherClearing = self:isConnectorClearancePending(), other:isConnectorClearancePending()
+    if ownClearing ~= otherClearing then
+        if ownClearing then yielding, waiting = other, self end
+    elseif self.state == self.states.WAITING_IN_STANDBY and other.state ~= other.states.WAITING_IN_STANDBY then
+        yielding, waiting = other, self
+    elseif (self.state == self.states.WAITING_IN_STANDBY) == (other.state == other.states.WAITING_IN_STANDBY) and
+            tostring(self.vehicle.rootNode) < tostring(other.vehicle.rootNode) then
+        yielding, waiting = other, self
+    end
+    local assignment = yielding.standbyAssignment or waiting.standbyAssignment
+    local clearance = yielding.connectorClearance or waiting.connectorClearance
+    local harvester = clearance and clearance.harvester or assignment and assignment.harvester
+    if not harvester then return false end
+    -- Retain the waiting rig's approach while the other manoeuvres around its stationary footprint.
+    local passage = waiting:getStandbyTrafficCourse(60) or Course.createStraightForwardCourse(waiting.vehicle, 60)
+    local encounter = {yielding = yielding, waiting = waiting, passage = passage, harvester = harvester,
+        course = passage, distance = (AIUtil.getWidth(yielding.vehicle) + AIUtil.getWidth(waiting.vehicle)) / 2 + 5}
+    yielding.standbyTrafficEncounter, waiting.standbyTrafficEncounter = encounter, encounter
+    yielding:holdAtStandbyPosition()
+    waiting:holdAtStandbyPosition()
+    yielding.standbyRetryAt = g_time or 0
+    self:debug('Standby traffic: %s yields to %s; checking a local escape with straight reverse recovery',
+            CpUtil.getName(yielding.vehicle), CpUtil.getName(waiting.vehicle))
+    return true
+end
+
+function AIDriveStrategyUnloadCombine:isStandbyTrafficParticipant()
+    return self.vehicle:getIsCpActive() and self:isInStandbyState() and not self:getCombineToUnload()
+end
+
+function AIDriveStrategyUnloadCombine:getStandbyTrafficCourse(distance)
+    local course = self.ppc and self.ppc:getCourse()
+    local ix = self.ppc and self.ppc:getRelevantWaypointIx()
+    if not course or not ix or ix >= course:getNumberOfWaypoints() then return nil end
+    local last = course:getNextWaypointIxWithinDistance(ix, distance) or course:getNumberOfWaypoints()
+    return course:copy(self.vehicle, ix, last)
+end
+
+--- Check changing vehicle positions while driving, not just the snapshot used by pathfinding.
+--- Stop with manoeuvring space left; the existing proximity controller remains the final safeguard.
+function AIDriveStrategyUnloadCombine:checkStandbyTraffic()
+    if self.standbyTrafficEncounter or self.standbyTrafficQueue or self.state ~= self.states.DRIVING_TO_STANDBY then return end
+    local now = g_time or 0
+    if now < (self.nextStandbyTrafficCheckAt or 0) then return end
+    self.nextStandbyTrafficCheckAt = now + 1000
+    local course = self:getStandbyTrafficCourse(math.max(45, 3 * self.turningRadius))
+    if not course then return end
+    local sweep = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(self.vehicle), course, self.turningRadius)
+    local nearest, nearestDistance
+    for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        local other = vehicle ~= self.vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+        if other and other.isStandbyTrafficParticipant and other:isStandbyTrafficParticipant() then
+            local conflict = VehicleRouteConflict.findConflict(sweep, FieldworkBoundary.captureRig(vehicle))
+            if conflict and (not nearestDistance or conflict.distance < nearestDistance) then
+                nearest, nearestDistance = other, conflict.distance
+            end
+        end
+    end
+    if nearest then self:startStandbyTrafficYield(nearest) end
+end
+
+--- Keep the passage holder stationary while its partner reverses/turns clear. Release on physical
+--- clearance or a real job/lifecycle change, not a timer which could let them drive into each other.
+function AIDriveStrategyUnloadCombine:updateStandbyTrafficYield()
+    local queue = self.standbyTrafficQueue
+    if queue then
+        self:setMaxSpeed(0)
+        if queue.yielding.standbyTrafficEncounter ~= queue then
+            self.standbyTrafficQueue = nil
+            self.nextStandbyTrafficCheckAt = nil
+        end
+        return true
+    end
+    local encounter = self.standbyTrafficEncounter
+    if not encounter then return false end
+    local yielding, waiting = encounter.yielding, encounter.waiting
+    local clear = not yielding:isStandbyTrafficParticipant() or not waiting:isStandbyTrafficParticipant()
+    local now = g_time or 0
+    if not clear and now >= (encounter.nextCheckAt or 0) then
+        encounter.nextCheckAt = now + 1000
+        local x, _, z = getWorldTranslation(yielding.vehicle.rootNode)
+        local wx, _, wz = getWorldTranslation(waiting.vehicle.rootNode)
+        if MathUtil.vector2Length(x - wx, z - wz) > math.max(12, 2 * waiting.turningRadius) then
+            local sweep = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(waiting.vehicle),
+                    encounter.passage, waiting.turningRadius)
+            clear = not VehicleRouteConflict.findConflict(sweep, FieldworkBoundary.captureRig(yielding.vehicle))
+        end
+    end
+    if clear then
+        self:releaseStandbyTraffic()
+        return false
+    end
+    if self == waiting then
+        self:setMaxSpeed(0)
+    elseif self.state == self.states.WAITING_IN_STANDBY and now >= (self.standbyRetryAt or 0) then
+        self:startStandbyTrafficClearance(encounter)
+    end
+    return true
+end
+
+--- Reservations belong to the current standby job, not the vehicle's next assignment.
+function AIDriveStrategyUnloadCombine:releaseStandbyTraffic()
+    local encounter = self.standbyTrafficEncounter
+    self.standbyTrafficQueue = nil
+    if not encounter then return end
+    for _, driver in ipairs({encounter.yielding, encounter.waiting}) do
+        if driver.standbyTrafficEncounter == encounter then
+            driver.standbyTrafficEncounter = nil
+            driver.standbyRetryAt, driver.nextStandbyTrafficCheckAt = nil, nil
+            -- Replan from the actual pose rather than resume the pre-encounter approach.
+            if driver:isInStandbyState() then driver:holdAtStandbyPosition() end
+            if driver.checkStandbyPosition then driver.checkStandbyPosition:set(true) end
+        end
+    end
+end
+
+--- Move to a holding place outside the reserved passage, not back to a staging goal which may lie on it.
+--- Use the same obstacle-aware planner as harvester clearance; a wheeled trailer reverses only on a
+--- separately verified straight leg, since free reverse pathfinding cannot control its articulation.
+function AIDriveStrategyUnloadCombine:startStandbyTrafficClearance(encounter)
+    local target, emergency = self:findStandbyClearanceGoal(encounter,
+            self:isConnectorClearancePending() or encounter.waiting:isConnectorClearancePending())
+    if target then
+        self:startPathfindingToStandby(encounter.harvester, target, true, emergency)
+    elseif not self:startVerifiedStandbyReverse(encounter, {6, 12, 20}) and
+            not self:tryAlternateStandbyYield(encounter) then
+        self.standbyRetryAt = (g_time or 0) + 5000
+        self:holdAtStandbyPosition()
+    end
+end
+
+--- A queued third rig may occupy the elected yielder's rear. Swap once only if the other
+--- participant can actually start a checked reverse; never oscillate priority on failed searches.
+function AIDriveStrategyUnloadCombine:tryAlternateStandbyYield(encounter)
+    if encounter.swapped or encounter.yielding ~= self then return false end
+    local alternative = encounter.waiting
+    local recovery = {}
+    if not alternative:isStandbyTrafficParticipant() or
+            not alternative:startVerifiedStandbyReverse(recovery, {6, 12, 20}) then return false end
+    encounter.waiting, encounter.yielding, encounter.swapped = self, alternative, true
+    encounter.reverseAttempts, encounter.failedTargets = recovery.reverseAttempts, {}
+    encounter.passage = Course.createStraightForwardCourse(self.vehicle, 60)
+    encounter.course, encounter.nextCheckAt = encounter.passage, nil
+    self:holdAtStandbyPosition()
+    self:debug('Standby traffic: rear corridor occupied; %s now yields through its verified free rear corridor',
+            CpUtil.getName(alternative.vehicle))
+    return true
+end
+
 function AIDriveStrategyUnloadCombine:updateStandbyCoordinator()
+    if self:updateStandbyTrafficYield() then return end
     if self.connectorClearance then
         local clearance = self.connectorClearance
         if self:isRigClearOfConnectorClearance(clearance) then
@@ -2335,7 +2503,14 @@ function AIDriveStrategyUnloadCombine:clearStandbyAssignment(assignment)
     if assignment and self.standbyAssignment and assignment.harvester ~= self.standbyAssignment.harvester then
         return
     end
+    if self.standbyTrafficEncounter then
+        -- Allocation changes do not remove a physical obstruction. Finish the local escape even
+        -- without a reservation; promotion to an active job is detected by its new state.
+        self.standbyAssignment = nil
+        return
+    end
     self:cancelStandbyPathfinding()
+    self:releaseStandbyTraffic()
     self.standbyAssignment = nil
     self.standbyTargetX, self.standbyTargetZ = nil, nil
     self.standbyRetryAt = nil
@@ -2359,6 +2534,7 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
 
     local oldAssignment = self.standbyAssignment
     self.standbyAssignment = assignment
+    if self.standbyTrafficEncounter or self.standbyTrafficQueue then return end
     if self.connectorClearance then
         local clearance = self.connectorClearance
         if not self:isRigClearOfConnectorClearance(clearance) then
@@ -2470,13 +2646,17 @@ function AIDriveStrategyUnloadCombine:startPathfindingToStandby(harvester, waypo
         self:holdAtStandbyPosition()
         return
     end
-    local harvesterStrategy = harvester:getCpDriveStrategy()
+    -- A local traffic escape can outlive the combine's job. Use our own field and ordinary
+    -- penalties if its strategy has gone; stopped/deleted harvesters remain physical obstacles.
+    local harvesterStrategy = harvester and
+            (not harvester.getIsCpActive or harvester:getIsCpActive()) and harvester:getCpDriveStrategy()
+    local planningHarvester = harvesterStrategy and harvester or nil
     local context = PathfinderContext(self.vehicle)
     context:maxFruitPercent(emergencyClearance and 100 or self:getMaxFruitPercent())
-    context:offFieldPenalty(self:getOffFieldPenalty(harvester))
-    context:useFieldNum(CpFieldUtil.getFieldNumUnderVehicle(harvester))
-    context:areaToAvoid(harvesterStrategy:getAreaToAvoid())
-    context:vehiclesToIgnore(avoidHarvester and {} or { harvester })
+    context:offFieldPenalty(self:getOffFieldPenalty(planningHarvester))
+    context:useFieldNum(CpFieldUtil.getFieldNumUnderVehicle(planningHarvester or self.vehicle))
+    context:areaToAvoid(harvesterStrategy and harvesterStrategy:getAreaToAvoid() or nil)
+    context:vehiclesToIgnore((avoidHarvester or not planningHarvester) and {} or { harvester })
     context:maxIterations(PathfinderUtil.getMaxIterationsForFieldPolygon(self.vehicle:cpGetFieldPolygon()))
     context._fieldworkBoundary = self.standbyBoundary
     context._preferFieldworkBoundary = true
@@ -2538,20 +2718,21 @@ end
 function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, success, course, goalNodeInvalid)
     self.standbyPathfindingStartedAt = nil
     if success and self.state == self.states.WAITING_FOR_STANDBY_PATHFINDER and
-            (self.standbyAssignment or self.connectorClearance) then
+            (self.standbyAssignment or self.connectorClearance or self.standbyTrafficEncounter) then
         course:adjustForReversing(math.max(1, -AIUtil.getDirectionNodeToReverserNodeOffset(self.vehicle)))
-        if self.connectorClearance and self.standbyBoundary and
+        if (self.connectorClearance or self.standbyTrafficEncounter) and self.standbyBoundary and
                 not FieldworkBoundary.containsCourse(self.standbyBoundary, course, nil, nil, true) then
             self:debug('Rejecting connector clearance route that leaves the field corridor')
         else
             self:debug('Pathfinding to standby position successful')
             self:startCourse(course, 1)
             self:setNewState(self.states.DRIVING_TO_STANDBY)
+            self.nextStandbyTrafficCheckAt = nil
             return true
         end
     end
     self:debug('Pathfinding to standby position failed; retaining current position')
-    if self.connectorClearance then
+    if self.connectorClearance and not self.standbyTrafficEncounter then
         self.connectorClearance.attempt = (self.connectorClearance.attempt or 0) + 1
         self.connectorClearance.failedTargets = self.connectorClearance.failedTargets or {}
         if self.standbyTargetX and self.standbyTargetZ then
@@ -2560,8 +2741,17 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToStandby(controller, suc
         end
         if self:startConnectorReverseEscape() then return true end
     end
+    local encounter = self.standbyTrafficEncounter
+    if encounter and encounter.yielding == self then
+        if self.standbyTargetX and self.standbyTargetZ then
+            encounter.failedTargets = encounter.failedTargets or {}
+            table.insert(encounter.failedTargets, {x = self.standbyTargetX, z = self.standbyTargetZ})
+        end
+        if self:startVerifiedStandbyReverse(encounter, {6, 12, 20}) then return true end
+        if self:tryAlternateStandbyYield(encounter) then return true end
+    end
     self.standbyRetryAt = (g_time or 0) + 5000
-    if self.standbyAssignment or self.connectorClearance then
+    if self.standbyAssignment or self.connectorClearance or self.standbyTrafficEncounter then
         self:holdAtStandbyPosition()
     else
         self:setNewState(self.states.IDLE)
@@ -3139,6 +3329,27 @@ end
 --- trailer and pulled ahead a bit, waiting for a combine to call, when a second unloader arrives to the trailer
 --- to overload, but can't get close enough because it is blocked by the first, idle one.
 function AIDriveStrategyUnloadCombine:onBlockingVehicle(blockingVehicle, isBack)
+    local encounter = self.standbyTrafficEncounter
+    if encounter then
+        if encounter.yielding == self and self.state == self.states.DRIVING_TO_STANDBY and
+                (g_time or 0) >= (encounter.recoverAt or 0) then
+            encounter.recoverAt = (g_time or 0) + 5000
+            encounter.failedTargets = encounter.failedTargets or {}
+            if self.standbyTargetX and self.standbyTargetZ then
+                table.insert(encounter.failedTargets, {x = self.standbyTargetX, z = self.standbyTargetZ})
+            end
+            if not isBack and self:startVerifiedStandbyReverse(encounter, {6, 12, 20}) then return end
+            if self:tryAlternateStandbyYield(encounter) then return end
+            self.standbyRetryAt = (g_time or 0) + 500
+            self:holdAtStandbyPosition()
+        end
+        self:setMaxSpeed(0)
+        return
+    end
+    if not isBack and self:isStandbyTrafficParticipant() then
+        local other = blockingVehicle.getCpDriveStrategy and blockingVehicle:getCpDriveStrategy()
+        if self:startStandbyTrafficYield(other) then return end
+    end
     if self.vehicle:getIsCpActive() and self.connectorClearance and
             self.state == self.states.DRIVING_TO_STANDBY and
             AIDriveStrategyCombineCourse.isActiveCpCombine(blockingVehicle) then
@@ -3339,7 +3550,11 @@ end
 --- the field and there is no vehicle in the swept rear corridor.
 function AIDriveStrategyUnloadCombine:startConnectorReverseEscape()
     local clearance = self.connectorClearance
-    if not clearance or (clearance.reverseAttempts or 0) >= 3 then return false end
+    return clearance and self:startVerifiedStandbyReverse(clearance, {20, 12, 6}) or false
+end
+
+function AIDriveStrategyUnloadCombine:startVerifiedStandbyReverse(recovery, distances)
+    if (recovery.reverseAttempts or 0) >= 3 then return false end
     local boundary = self:getFieldworkBoundaryForRig()
     if not boundary or not FieldworkBoundary.captureRig then return false end
     local ownVehicles = {[self.vehicle] = true}
@@ -3348,13 +3563,25 @@ function AIDriveStrategyUnloadCombine:startConnectorReverseEscape()
         ownVehicles[child] = true
         table.insert(ownParts, child)
     end
-    for _, distance in ipairs({20, 12, 6}) do
+    for _, distance in ipairs(distances) do
         local rig = FieldworkBoundary.captureRig(self.vehicle)
         local lead = rig[1]
         local outside = FieldworkBoundary.rigOutsideDistance(boundary, rig)
         local clear = true
+        local reverseCourse = Course.createStraightReverseCourse(self.vehicle, distance)
+        -- The driving course is referenced to the last trailer. The footprint rollout is referenced
+        -- to the tractor; using trailer waypoints there would add the drawbar/train length twice.
+        local tractorCourse = Course.createStraightReverseCourse(self.vehicle, distance, 0, self.vehicle:getAIDirectionNode())
+        local sweep = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(self.vehicle),
+                tractorCourse, self.turningRadius)
         for _, other in pairs(g_currentMission.vehicleSystem.vehicles) do
             if not ownVehicles[other] and other.rootNode then
+                -- An angled trailer can cross the rear corridor while its centre is beside it.
+                -- Check every articulated body throughout the reverse, not just centre distances.
+                if VehicleRouteConflict.findConflict(sweep, FieldworkBoundary.captureRig(other)) then
+                    clear = false
+                    break
+                end
                 local others = {other}
                 if other.getChildVehicles then
                     for _, child in ipairs(other:getChildVehicles()) do table.insert(others, child) end
@@ -3387,10 +3614,10 @@ function AIDriveStrategyUnloadCombine:startConnectorReverseEscape()
             end
         end
         if clear and outside == 0 then
-            clearance.reverseAttempts = (clearance.reverseAttempts or 0) + 1
+            recovery.reverseAttempts = (recovery.reverseAttempts or 0) + 1
             self.standbyRetryAt = nil
-            self:debug('Standby path blocked by the combine; reversing %.1f m to make room to turn', distance)
-            self:startCourse(Course.createStraightReverseCourse(self.vehicle, distance), 1)
+            self:debug('Standby approach blocked; reversing %.1f m along a checked rear corridor', distance)
+            self:startCourse(reverseCourse, 1)
             self:setNewState(self.states.DRIVING_TO_STANDBY)
             return true
         end
@@ -3422,8 +3649,8 @@ function AIDriveStrategyUnloadCombine:isConnectorClearanceTargetFree(x, z, width
     return true
 end
 
-function AIDriveStrategyUnloadCombine:isNewConnectorClearanceTarget(x, z)
-    for _, failed in ipairs(self.connectorClearance.failedTargets or {}) do
+function AIDriveStrategyUnloadCombine:isNewConnectorClearanceTarget(x, z, clearance)
+    for _, failed in ipairs((clearance or self.connectorClearance).failedTargets or {}) do
         if MathUtil.vector2Length(x - failed.x, z - failed.z) < 8 then return false end
     end
     return true
@@ -3432,8 +3659,8 @@ end
 --- Parking has no required working direction. Rank useful arrival headings by the shortest forward
 --- manoeuvre, instead of making the rig loop merely to face along the combine's route. This is only
 --- a cost estimate: the normal pathfinder still checks obstacles, crop and the articulated trailer.
-function AIDriveStrategyUnloadCombine:getConnectorClearanceGoal(start, x, z, routeAngle, boundary, bestLength)
-    local clearance = self.connectorClearance
+function AIDriveStrategyUnloadCombine:getConnectorClearanceGoal(start, x, z, routeAngle, boundary, bestLength, clearance)
+    clearance = clearance or self.connectorClearance
     local fromIx, toIx = self:getConnectorClearanceRange(clearance)
     local front = AIUtil.getLength(self.vehicle) / 2
     local length = self.getTrainLength(self.vehicle)
@@ -3490,25 +3717,44 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
         self:holdAtStandbyPosition()
         return true
     end
+    local best, emergency, bestLength = self:findStandbyClearanceGoal(self.connectorClearance, true)
+    if best then
+        self:debug('Clearing %s connecting route: estimated drive %.1f m, heading %.1f%s',
+                CpUtil.getName(harvester), bestLength, best.angle, emergency and ' (emergency route through crop)' or '')
+        self:startPathfindingToStandby(harvester, best, true, emergency)
+        return true
+    end
+    self:debug('No field-contained holding point clears %s connecting route', CpUtil.getName(harvester))
+    self.standbyRetryAt = (g_time or 0) + 5000
+    self:holdAtStandbyPosition()
+    return false
+end
+
+--- Shared goal geometry for clearing a harvester or giving another standby rig a local passage.
+--- This ranks endpoints only; pathfinding still validates every manoeuvre against physical obstacles.
+function AIDriveStrategyUnloadCombine:findStandbyClearanceGoal(clearance, allowCrop)
+    local course, distance = clearance.course, clearance.distance
+    local width = AIUtil.getWidth(self.vehicle)
+    for _, child in ipairs(self.vehicle:getChildVehicles()) do width = math.max(width, AIUtil.getWidth(child)) end
     local x, _, z = getWorldTranslation(self.vehicle.rootNode)
-    local fromIx, toIx = self:getConnectorClearanceRange(self.connectorClearance)
+    local fromIx, toIx = self:getConnectorClearanceRange(clearance)
     local _, dx, dz = self.getDistanceFromConnectingCourse(course, x, z, fromIx, toIx)
     local boundary = self:getFieldworkBoundaryForRig()
     local trainLength = self.getTrainLength(self.vehicle)
-    local offset = clearance + trainLength / 2 + 5
+    local offset = distance + trainLength / 2 + 5
     local start = PathfinderUtil.getVehiclePositionAsState3D(self.vehicle)
     -- Lua 5.1's atan is unary: atan(dx, dz) silently loses dz and gives the wrong quadrant.
     local routeAngle = math.atan2(dx, dz)
-    for pass = 1, 2 do
+    for pass = 1, allowCrop and 2 or 1 do
         local best, bestLength = nil, math.huge
         local function consider(targetX, targetZ)
             if boundary and FieldworkBoundary.contains(boundary, targetX, targetZ) and
                     MathUtil.vector2Length(targetX - start.x, targetZ + start.y) < bestLength and
                     (pass == 2 or not PathfinderUtil.hasFruit(targetX, targetZ, width + 2, trainLength + 2)) and
                     self:isConnectorClearanceTargetFree(targetX, targetZ, width, trainLength) and
-                    self:isNewConnectorClearanceTarget(targetX, targetZ) and
-                    self.getDistanceFromConnectingCourse(course, targetX, targetZ, fromIx, toIx) >= clearance + trainLength / 2 then
-                local goal, length = self:getConnectorClearanceGoal(start, targetX, targetZ, routeAngle, boundary, bestLength)
+                    self:isNewConnectorClearanceTarget(targetX, targetZ, clearance) and
+                    self.getDistanceFromConnectingCourse(course, targetX, targetZ, fromIx, toIx) >= distance + trainLength / 2 then
+                local goal, length = self:getConnectorClearanceGoal(start, targetX, targetZ, routeAngle, boundary, bestLength, clearance)
                 if goal then best, bestLength = goal, length end
             end
         end
@@ -3519,7 +3765,7 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
             consider(x + math.cos(start.t) * distance, z - math.sin(start.t) * distance)
             for _, along in ipairs({0, -30, 30, -60, 60}) do
                 for sideIx = 1, 2 do
-                    local side = ((sideIx + attempt) % 2 == 0) and 1 or -1
+                    local side = ((sideIx + (clearance.attempt or 0)) % 2 == 0) and 1 or -1
                     local targetX = x + dx * along - dz * distance * side
                     local targetZ = z + dz * along + dx * distance * side
                     consider(targetX, targetZ)
@@ -3527,17 +3773,10 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
             end
         end
         if best then
-            self:debug('Clearing %s connecting route: target %.1f m away, estimated drive %.1f m, heading %.1f%s',
-                    CpUtil.getName(harvester), MathUtil.vector2Length(best.x - x, best.z - z), bestLength, best.angle,
-                    pass == 2 and ' (emergency route through crop)' or '')
-            self:startPathfindingToStandby(harvester, best, true, pass == 2)
-            return true
+            return best, pass == 2, bestLength
         end
     end
-    self:debug('No field-contained harvested holding point clears %s connecting route', CpUtil.getName(harvester))
-    self.standbyRetryAt = (g_time or 0) + 5000
-    self:holdAtStandbyPosition()
-    return false
+    return nil
 end
 
 function AIDriveStrategyUnloadCombine:requestToMoveOutOfWay(vehicle, _, connectingCourse)

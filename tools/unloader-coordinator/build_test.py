@@ -21,6 +21,7 @@ LUA_REGRESSIONS = (
     "FieldworkBoundarySegmentTest", "PocketCoursePlanningTest", "UnloaderRecoveryTest",
     "UnloaderLifecycleTest", "UnloaderGridRoutingTest", "UnloaderCoordinatorTest",
     "UnloaderConnectorClearanceTest",
+    "UnloaderStandbyTrafficTest",
     "PathfinderTurnTravelTest",
     "VehicleRouteConflictTest",
 )

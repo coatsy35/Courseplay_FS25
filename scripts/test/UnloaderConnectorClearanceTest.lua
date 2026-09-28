@@ -4,6 +4,7 @@ dofile('scripts/pathfinder/AnalyticSolution.lua')
 dofile('scripts/pathfinder/State3D.lua')
 dofile('scripts/pathfinder/Dubins.lua')
 dofile('scripts/util/CpMathUtil.lua')
+dofile('scripts/ai/util/VehicleRouteConflict.lua')
 AIUtil = {
     getWidth = function(vehicle) return vehicle.width end,
     getLength = function(vehicle) return vehicle.length end,
@@ -24,7 +25,8 @@ dofile('scripts/ai/strategies/AIDriveStrategyUnloadCombine.lua')
 
 local trailer = {width = 5, length = 9, rootNode = {x = 10, z = 0}}
 local tractor = {width = 4, length = 6, rootNode = {x = 20, z = 0},
-    getChildVehicles = function() return {trailer} end}
+    getChildVehicles = function() return {trailer} end,
+    getAIDirectionNode = function(self) return self.rootNode end}
 local parkedTrailer = {width = 5, rootNode = {x = 20, z = 27.5}}
 local parkedTractor = {width = 4, rootNode = {x = 20, z = 28},
     getChildVehicles = function() return {parkedTrailer} end}
@@ -257,12 +259,15 @@ combine.rootNode, combine.width, combine.length = {x = 20, z = 55}, 15, 8
 g_currentMission.vehicleSystem.vehicles = {tractor, combine}
 function localToLocal(node, reference) return node.x - reference.x, 0, node.z - reference.z end
 FieldworkBoundary.captureRig = function(vehicle)
-    return {{x = vehicle.rootNode.x, z = vehicle.rootNode.z, heading = 0}}
+    return {{x = vehicle.rootNode.x, z = vehicle.rootNode.z, heading = 0,
+        box = {width = vehicle.width / 2, length = vehicle.length / 2}}}
 end
 FieldworkBoundary.rigOutsideDistance = function(_, rig) return rig[1].z < 0 and 1 or 0 end
 FieldworkBoundary.advanceRig = function(rig, x, z) rig[1].x, rig[1].z = x, z end
-Course = {createStraightReverseCourse = function(_, distance)
-    return {reverseDistance = distance}
+Course = {createStraightReverseCourse = function(vehicle, distance)
+    return {reverseDistance = distance, getNumberOfWaypoints = function() return 2 end,
+        getWaypointPosition = function(_, ix) return vehicle.rootNode.x, 0, vehicle.rootNode.z - (ix - 1) * distance end,
+        isReverseAt = function() return true end}
 end}
 strategy.connectorClearance = {reverseAttempts = 0}
 assert(strategy:startConnectorReverseEscape() and strategy.course.reverseDistance == 20 and

@@ -25,7 +25,7 @@ Paths below are relative to the repository root. Search for the named functions 
 Keep fleet allocation in the coordinator and manoeuvre execution in the relevant strategy. Generic steering,
 collision handling and search code serve other CP jobs too; scope changes there to the intended caller.
 
-## Three ownership lifetimes
+## Ownership lifetimes
 
 These are deliberately separate. Clearing one must not silently clear the others.
 
@@ -34,6 +34,7 @@ These are deliberately separate. Clearing one must not silently clear the others
 | Provisional reservation | `UnloaderCoordinator.assignments[unloader]`; mirrored by `standbyAssignment` | Rebalancing removes it, `release` promotes/releases it, or `unregister` removes the driver. |
 | Accepted unload call | `combineToUnload` and the combine's active-unloader registration | `releaseCombine` invalidates callbacks and deregisters the active call. A queued departure still owns its accepted call. |
 | Physical reverse clearance | `clearingUnloaders[vehicle]`, holding the harvester and required distance | The rig is measured clear, or either vehicle no longer exists. Reservation release, driver stop and AutoDrive takeover alone do not prove clearance. |
+| Local standby traffic passage | One shared `standbyTrafficEncounter` on its yielding and waiting drivers; third rigs reference it through `standbyTrafficQueue` | The whole yielding rig clears the passage, or a participant ends/transfers its job. Allocation changes alone retain the escape. Release stops old standby courses before replanning. |
 
 The physical record is keyed by vehicle rather than strategy so a restarted driver cannot bypass it.
 Departure checks exclude that vehicle's own old record to avoid waiting on itself; other trailers and the combine
@@ -42,6 +43,15 @@ still see it. Do not replace the physical check with a timer or a reverse-course
 `reserved` identifies the next trailer; `role` controls provisional staging. A reserved trailer may still have
 role `POOL`. `POOL` holds in place, while `STANDBY` permits a staging approach subject to the strategy's checks.
 Neither is an active unload call. `isFirm` protects forage relief against calls from a different harvester.
+
+`checkStandbyTraffic` scans the actual upcoming route once per second. `startStandbyTrafficYield` elects one
+participant to move; `updateStandbyTrafficYield` enforces the wait on every update and checks full-rig clearance.
+`findStandbyClearanceGoal` shares endpoint ranking with harvester clearance, but each keeps separate failed goals
+and recovery counters. `startVerifiedStandbyReverse` checks a straight reverse only; its footprint rollout uses
+the tractor reference while the driving course uses the last trailer's steering reference. If the selected rear
+corridor is occupied, `tryAlternateStandbyYield` permits one role change only after a verified alternative reverse.
+The normal collision-aware pathfinder and proximity controller remain active throughout. Missing safe space means
+holding and retrying; an elapsed timer never authorises movement through another vehicle.
 
 ## Assignment planning and publication
 
@@ -286,6 +296,7 @@ are 0–100; compatible capacity and grain tank contents are litres.
 | Fleet allocation, sharing, capacity and plan publication | `UnloaderCoordinatorTest.lua` |
 | Calls, generation guards, restart, release and final partial delivery | `UnloaderLifecycleTest.lua` |
 | Standby obstruction, whole-rig clearance and crop fallback | `UnloaderConnectorClearanceTest.lua` |
+| Opposing standby rigs, persistent traffic/queue holds, short reverse, assignment/job changes | `UnloaderStandbyTrafficTest.lua` |
 | Connector retry, alignment recovery, callback handover and travel | `FieldworkConnectingPathTest.lua` |
 | Live route footprints, header offsets, sparse curves and trailers behind/beside the departure | `VehicleRouteConflictTest.lua` |
 | Long-turn steering, distant-transfer retries, forward-only acceptance and hand-off ranges | `PathfinderTurnTravelTest.lua` |

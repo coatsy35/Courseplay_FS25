@@ -414,6 +414,7 @@ do
             'A trailer inside the scout horizon must receive notice while the combine approaches')
     local worker = cr11(0, 100, 0)
     worker.spec_combine = {}
+    worker.lastSpeedReal = 0.003
     worker.getIsCpFieldWorkActive = function() return true end
     local crossing = departure(points, {worker})
     crossing.fieldWorkerProximityController = {hasSameCourse = function() return true end,
@@ -421,6 +422,28 @@ do
     crossing:startConnectingPath(1)
     assert(crossing.state == 'search' and crossing.searches == 1,
             'A genuine combine crossing must still use checked local detour planning')
+    worker.rootNode.z = 300
+    for _, child in ipairs(worker.children) do child.rootNode.z = child.rootNode.z + 200 end
+    local remoteWorker = departure(points, {worker})
+    remoteWorker.fieldWorkerProximityController = crossing.fieldWorkerProximityController
+    remoteWorker:startConnectingPath(1)
+    assert(remoteWorker.state == 'travel' and remoteWorker.searches == 0 and remoteWorker.speed == nil,
+            'A worker 300 m along the connector must not hold a clear departure for a global detour search')
+    worker.rootNode.z = 30
+    for _, child in ipairs(worker.children) do child.rootNode.z = child.rootNode.z - 270 end
+    g_currentMission.time = 3000
+    remoteWorker.nextConnectingWorkerCheckAt = nil
+    local recoveries = 0
+    remoteWorker.startBlockedConnectorRecovery = function(self)
+        assert(self.connectorRecoveryActive and self.connectorRecoveryResumeIx,
+                'The existing checked local recovery must own the detour')
+        recoveries = recoveries + 1
+    end
+    remoteWorker:checkWorkerOnConnectingPath()
+    assert(remoteWorker.speed == 0, 'The same remote worker must brake the header when it enters the local horizon')
+    g_currentMission.time = 9000
+    remoteWorker:checkWorkerOnConnectingPath()
+    assert(recoveries == 1, 'A persistent nearby combine must receive a checked local detour, not indefinite waiting')
     for _, blocker in ipairs({vehicle(0, 25, 3, 9), vehicle(6, 4.4, 3, 3)}) do
         local held = departure(points, {blocker})
         held.nextConnectingWorkerCheckAt = 99999

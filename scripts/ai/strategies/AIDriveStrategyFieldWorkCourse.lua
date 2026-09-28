@@ -792,7 +792,16 @@ function AIDriveStrategyFieldWorkCourse:canDriveConnectingPathDirectly(course, u
     -- envelope and prevents a direct connector from crossing the field polygon or an island.
     local boundary = FieldworkBoundary.forVehicle(self.vehicle, 0)
     if not FieldworkBoundary.containsCourse(boundary, course) then return false end
-    return not self:isConnectingPathBlockedByWorker(course, nil, useLiveUnloaderClearance)
+    local blocked, kind = self:isConnectingPathBlockedByWorker(course, nil, useLiveUnloaderClearance)
+    if not blocked then return true end
+    if kind ~= 'fieldWorker' or not useLiveUnloaderClearance or not course.getNextWaypointIxWithinDistance then
+        return false
+    end
+    -- A worker on a remote part of a whole-field connector need not prevent departure. Preserve
+    -- the checked first 90 m; the installed route's live scan brakes/replans before a nearby worker.
+    local last = course:getNextWaypointIxWithinDistance(1, math.max(90, 3 * self:getWorkWidth()))
+    if not last or last >= course:getNumberOfWaypoints() then return false end
+    return not self:isConnectingPathBlockedByWorker(course:copy(self.vehicle, 1, last), nil, true)
 end
 
 --- A long generated connector already exists before the row ends. Parked trailers are handled by

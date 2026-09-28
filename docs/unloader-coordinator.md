@@ -372,3 +372,35 @@ the same target and corridor, so it does not resolve the mismatch.
 These fixtures use the map's static field outline; CP's detected polygon is not saved. The old replay therefore
 fails earlier than the live log, and the timing is not an in-game guarantee. Source and packaged-runtime checks
 must pass before release. Actual terrain, collision shapes and following-worker movement still need in-game validation.
+
+## Build 2972: resolve opposing standby traffic before it blocks a combine
+
+The 28 September 2971 log shows T7.300/323 and /325 stopping nose-to-nose at 12:04:03, then both
+holding and retrying forward-only standby searches. Later /323 barely advances on a clearance route;
+by 12:14:34 it is waiting beside /325. CR11/318 reaches it at 12:15:20 (1.5 m proximity stop), and its
+row-1003 turn repeatedly fails against the tractor/trailer occupying the starting space. This is a
+physical traffic deadlock, not a reason to ignore that trailer in collision checking.
+
+- Scan the next local standby approach against complete vehicle footprints while travelling. Elect
+  one yielder; prioritise a rig clearing a harvester, then a parked rig, then a stable vehicle tie-break.
+- Hold its partner while the yielder searches for a holding place outside the reserved passage.
+  Reuse clearance goal ranking so an arbitrary final heading does not add unnecessary loops.
+- If forward search fails, try a checked straight reverse, shortest first (6, 12, 20 m). Check the
+  complete articulated sweep against vehicles and the field. A third rig queues; if it obstructs
+  the elected reverse, swap once only when the other participant can start a verified reverse.
+- Retain physical escape ownership through standby allocation changes. Release after the whole
+  trailer clears, or on a real job change; stop obsolete courses before replanning. Traffic escape
+  can finish using its own field context after its original harvester's job has ended.
+- A worker on a distant part of a long generated combine connector no longer prevents a clear
+  departure. Keep whole-route field containment and check the first 90 m against workers; the
+  existing live scout, braking and local detour checks continue during travel.
+
+The same log shows CR11/319's riverside turn finding a recovery path at 12:19:21 and returning to
+fieldwork at 12:19:45. That transient recovery is separate from /318's persistent obstruction.
+
+`UnloaderStandbyTrafficTest` exercises the real strategy callbacks, goal ranking and articulated
+footprints with engine adapters. Its head-on fixture reproduces the mutual wait in build 2971.
+Coverage includes third-rig recovery, assignment changes, ended jobs, complete-trailer release,
+parked/harvester priority, rear obstacles and field edges. The connector regression checks both
+prompt departure with a worker 300 m away and subsequent braking/local recovery when it approaches.
+These tests do not simulate GIANTS terrain or vehicle physics; the same in-game routes still need validation.
