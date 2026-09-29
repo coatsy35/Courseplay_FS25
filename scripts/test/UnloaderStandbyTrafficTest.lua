@@ -223,6 +223,7 @@ assert(a.standbyTrafficEncounter.yielding==a, 'An arrival must yield to a parked
 a:releaseStandbyTraffic()
 a.state='drive'
 a.connectorClearance={harvester=harvester,course=a.course,distance=10}
+a.isRigClearOfConnectorClearance=function() return false end -- isolate encounter priority from harvester geometry
 harvester.getIsCpActive=function() return true end
 a:startStandbyTrafficYield(b)
 assert(a.standbyTrafficEncounter.yielding==b, 'A rig clearing a harvester must have passage priority')
@@ -233,6 +234,7 @@ local behind=driver(0,-20,0)
 table.insert(g_currentMission.vehicleSystem.vehicles,behind.vehicle)
 assert(not a:startVerifiedStandbyReverse({}, {6,12,20}), 'Never reverse into the rig parked behind')
 local angled=body(10,-16,math.pi/2,3,22)
+angled.getAIDirectionNode=nil -- non-AI trailer in the mission vehicle list: the reported runtime failure
 g_currentMission.vehicleSystem.vehicles={a.vehicle,b.vehicle,angled}
 assert(not a:startVerifiedStandbyReverse({}, {6,12,20}),
     'A long angled obstacle whose centre is beside the corridor can still obstruct the trailer rear')

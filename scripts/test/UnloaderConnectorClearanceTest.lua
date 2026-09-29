@@ -40,6 +40,13 @@ local strategy = setmetatable({vehicle = tractor, standbyAssignment = {}, turnin
 strategy.getFieldworkBoundaryForRig = function() return {} end
 strategy.getHarvesterTurnClearanceDistance = function() return 30 end
 strategy.isAvailableForStaging = function() return true end
+-- Goal-ranking fixtures use a centreline adapter; physical clearance is exercised with the
+-- actual articulated bodies in VehicleRouteConflictTest.
+strategy.isRigClearOfConnectorClearance = function(self, clearance)
+    if clearance.harvester.getIsCpActive and not clearance.harvester:getIsCpActive() then return true end
+    local first, last = self:getConnectorClearanceRange(clearance)
+    return not first or self:isRigClearOfCourse(clearance.course, clearance.distance, first, last)
+end
 local target, emergency
 strategy.startPathfindingToStandby = function(_, harvester, waypoint, avoidHarvester, emergencyClearance)
     assert(harvester == combine and avoidHarvester)
@@ -270,7 +277,7 @@ Course = {createStraightReverseCourse = function(vehicle, distance)
         isReverseAt = function() return true end}
 end}
 strategy.connectorClearance = {reverseAttempts = 0}
-assert(strategy:startConnectorReverseEscape() and strategy.course.reverseDistance == 20 and
+assert(strategy:startConnectorReverseEscape() and strategy.course.reverseDistance == 6 and
         strategy.connectorClearance.reverseAttempts == 1 and strategy.state == strategy.states.DRIVING_TO_STANDBY,
     'A field-contained clear reverse must break the failed forward-pathfinding loop')
 strategy.state = strategy.states.WAITING_FOR_STANDBY_PATHFINDER
@@ -295,7 +302,7 @@ local blockedEscape = strategy.connectorClearance
 g_currentMission.vehicleSystem.vehicles = {tractor, combine}
 strategy:onBlockingVehicle(combine, false)
 assert(strategy.connectorClearance == blockedEscape and blockedEscape.reverseAttempts == 1 and
-        strategy.course.reverseDistance == 20 and blockedEscape.harvester == combine,
+        strategy.course.reverseDistance == 6 and blockedEscape.harvester == combine,
     'A physically blocked escape must reverse through verified free space without giving priority to the trailer')
 strategy:onBlockingVehicle(combine, false)
 assert(blockedEscape.reverseAttempts == 1, 'Repeated callbacks must not restart the recovery every frame')
@@ -325,6 +332,7 @@ assert(strategy.state == strategy.states.WAITING_IN_STANDBY and blockedEscape.re
 local simpleCourse = {getNumberOfWaypoints = function() return 2 end}
 local selected
 local simple = setmetatable({vehicle = tractor, turningRadius = 9, debug = function() end,
+    startConnectorReverseEscape = function() return false end, -- exercise forward fallback goal ranking
     getFieldworkBoundaryForRig = function() return {} end,
     getHarvesterTurnClearanceDistance = function() return 30 end,
     isRigClearOfConnectorClearance = function() return false end,

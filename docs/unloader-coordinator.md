@@ -404,3 +404,50 @@ Coverage includes third-rig recovery, assignment changes, ended jobs, complete-t
 parked/harvester priority, rear obstacles and field edges. The connector regression checks both
 prompt departure with a worker 300 m away and subsequent braking/local recovery when it approaches.
 These tests do not simulate GIANTS terrain or vehicle physics; the same in-game routes still need validation.
+
+## Build 2973: parked trailers, immediate reverse clearance and moving-obstacle refresh
+
+The 28 September log shows CR11/319 searching from 14:43:24.454 until 14:44:52.995 without a route.
+Its retry to the same rejoin succeeds in 1,625 ms. Both attempts already use the same body-width field
+corridor and crop policy; the retry label did not describe a newly relaxed margin. The first coarse search
+retains explored cells while the blocking combine moves. Refresh only that active coarse connector search
+when the blocker moves at least 0.5 m, checked every two seconds. Keep the search algorithm, detailed
+steering phase, goal, collision checks and accepted-route validation unchanged. This addresses stale
+moving-obstacle searches; under-five-second timing still requires the actual in-game replay.
+
+T7.300/322 starts a clearance search at 14:45:28.442, drives towards the combine and later fails reverse
+recovery because an obstacle lacks `getAIDirectionNode`. Use an obstacle's root node when it has no AI
+direction-node API, retaining its footprint. Clearance now uses the same physical body/header sweep as
+the combine, so broad staging margins cannot move a safely parked trailer. Try checked straight reverses
+of 6, 12 and 20 m before seeking a forward holding route; rear vehicles and field containment remain checked.
+
+Predictive advance staging remains: the lead approaches as the combine fills, and successive pool trailers
+can leave the AD entry for their existing progressively nearer waiting points. Only one staging departure
+uses a shared entry at a time, with the reserved lead ahead of its pool; separate clusters can stage independently.
+New staging departures wait near any combine turning, searching or travelling on a connector, including a previous
+combine after reassignment. An existing checked staging move retains its progress. Physical obstruction clearance
+and actual unloading calls remain independent.
+Regression coverage includes staged departures, held/reassigned trailers, real-call acceptance, non-AI
+obstacles, physical clearance and moving-blocker search refresh.
+
+## Build 2974: no-headland clearance and checked pocket joins
+
+The saved 28 September log shows a parked T7.300/322 blocking CR11/318's departure at 15:50:23.
+No headland path was generated, so the old failed-turn callback had no course on which to request clearance.
+Distant turns now check the actual body/header footprint over the first 0.5 m before starting a search.
+An eligible parked rig receives the existing checked reverse-clearance request immediately. The combine
+rechecks after 500 ms without consuming a headland alternative; safely adjacent rigs and active calls retain
+their existing behaviour. The search algorithm and its collision constraints remain unchanged.
+
+At 15:55:36 the same tractor switched from a searched approach onto CR11/319's pocket-follow course at
+waypoint 1851. It subsequently reported 14.2 m cross-track error and stopped off course at 15:56:09.
+Pocket handovers now locate a normal travelled segment at the tractor's actual position. A misaligned tractor
+pathfinds to a normal harvested waypoint behind the configured standby gap before following. These joins check
+the served combine as an obstacle and retain the searched endpoint without the ordinary pipe-approach extension.
+An exact waypoint arrival selects the aligned following segment instead of repeatedly searching the same endpoint.
+No safe segment releases the call while retaining the running job; a pocket becoming ready uses the pipe approach.
+
+`UnloaderPocketJoinTest`, `PathfinderTurnTravelTest` and `VehicleRouteConflictTest` cover both recorded failure
+paths, endpoint handovers, opposite-facing approaches and preserved ordinary pipe behaviour. Build 2974 includes
+the advance-staging and clearance fixes from 2973. Game physics and under-five-second timing still require replay;
+already stopped tractors need their CP jobs restarted after loading the new build.

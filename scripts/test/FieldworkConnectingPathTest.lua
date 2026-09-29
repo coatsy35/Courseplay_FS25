@@ -4,6 +4,7 @@ function CpObject(base)
     return object
 end
 
+function entityExists(node) return node ~= nil end
 AIDriveStrategyCourse = {}
 VariableWorkWidth = {onAIFieldWorkerStart = function() end, onAIImplementStart = function() end}
 AIDriveStrategyFieldCourse = {onFieldCourseLoadedCallback = function() end, delete = function() end}
@@ -806,3 +807,46 @@ g_currentMission.time = 105000
 assert(not resuming:tryResumeGeneratedConnectingPath() and cancellations == 1,
     'Do not replace a local recovery with the original full connector')
 print('FieldworkConnectingPathTest: OK')
+
+-- A worker can move enough to invalidate the coarse search while still crossing the connector.
+-- Keep the same collision-aware target/context, and do not disrupt detailed steering searches.
+local movingWorker = {rootNode = {x = 10, z = 20}}
+local context = {_connectingPathWorker = movingWorker, collisionMask = 123}
+local refreshes, cancelled = 0, 0
+entityExists = function(node) return node ~= nil end
+local refresh = setmetatable({connectingPathStartIx = 7, workStarterCourse = {},
+    connectingPathRejoinIx = 61, debug = function() end,
+    tryStartGeneratedConnectingPath = function() return false end,
+    pathfinderController = {pathfinder = {FAST = 2, phase = 2},
+        isActive = function() return true end,
+        getCurrentContext = function() return context end,
+        cancel = function() cancelled = cancelled + 1 end,
+        findPathToWaypoint = function(_, newContext, _, ix)
+            assert(newContext == context and ix == 61)
+            refreshes = refreshes + 1
+        end}}, {__index = AIDriveStrategyFieldWorkCourse})
+refresh:findConnectingPath(context)
+assert(refreshes == 1)
+for _, time in ipairs({200000, 202000}) do
+    g_currentMission.time = time
+    refresh:tryResumeGeneratedConnectingPath()
+end
+assert(cancelled == 0, 'An unchanged obstacle must not repeatedly reset the search')
+movingWorker.rootNode.z = 20.6
+g_currentMission.time = 204000
+refresh:tryResumeGeneratedConnectingPath()
+assert(cancelled == 1 and refreshes == 2 and refresh.connectingPathSearchBlocker.z == 20.6,
+        'A changed blocking footprint must refresh the stale coarse search at the next two-second check')
+g_currentMission.time = 206000
+refresh:tryResumeGeneratedConnectingPath()
+assert(cancelled == 1, 'The refreshed snapshot must prevent repeated resets for the same movement')
+movingWorker.rootNode.z = 22
+refresh.pathfinderController.pathfinder.phase = 1
+g_currentMission.time = 208000
+refresh:tryResumeGeneratedConnectingPath()
+assert(cancelled == 1, 'Detailed start/end manoeuvres must retain their progress')
+movingWorker.rootNode = nil
+refresh:findConnectingPath(context)
+assert(refresh.connectingPathSearchBlocker == nil and refreshes == 3,
+        'Removing the worker must not make a later connector search dereference a deleted node')
+print('Connector moving-obstacle refresh regressions: OK')

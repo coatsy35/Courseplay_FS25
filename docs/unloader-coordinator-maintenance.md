@@ -41,8 +41,11 @@ Departure checks exclude that vehicle's own old record to avoid waiting on itsel
 still see it. Do not replace the physical check with a timer or a reverse-course completion event.
 
 `reserved` identifies the next trailer; `role` controls provisional staging. A reserved trailer may still have
-role `POOL`. `POOL` holds in place, while `STANDBY` permits a staging approach subject to the strategy's checks.
-Neither is an active unload call. `isFirm` protects forage relief against calls from a different harvester.
+role `POOL`. Both `POOL` and `STANDBY` can stage predictively to the coordinator's stable waiting points.
+Departures from the same entry are sequential, reserved lead first. A nearby combine manoeuvre holds staging
+even after reassignment. Physical obstruction clearance is independent: verify the actual body/header sweep,
+try a checked short reverse first, and retain escape ownership until clear. `isFirm` protects forage relief
+against calls from a different harvester.
 
 `checkStandbyTraffic` scans the actual upcoming route once per second. `startStandbyTrafficYield` elects one
 participant to move; `updateStandbyTrafficYield` enforces the wait on every update and checks full-rig clearance.
@@ -143,6 +146,11 @@ A connector is the temporary journey from fieldwork to the next work start. Its 
 `WAITING_FOR_PATHFINDER` also represents timed obstacle waits; it does not guarantee a running search coroutine.
 Retry decisions must inspect the relevant timer and controller state. A temporary wait must retain its stop across
 frames between obstacle scans.
+
+`connectingPathSearchBlocker` records the worker position used when starting a detour. While the coarse search
+is active, the existing two-second route check refreshes it after at least 0.5 m of blocker movement. It preserves
+the same context and target; static obstacles, detailed steering searches and local recovery are not restarted.
+This avoids retaining obsolete explored cells without changing the pathfinder algorithm or its validity checks.
 
 A pathfinder result is not yet a successful handover to cutting. The connector result, entry section and join must
 remain valid; the work-start handler then verifies alignment or requests recovery. `clearConnectingPath` belongs
@@ -300,6 +308,7 @@ are 0–100; compatible capacity and grain tank contents are litres.
 | Connector retry, alignment recovery, callback handover and travel | `FieldworkConnectingPathTest.lua` |
 | Live route footprints, header offsets, sparse curves and trailers behind/beside the departure | `VehicleRouteConflictTest.lua` |
 | Long-turn steering, distant-transfer retries, forward-only acceptance and hand-off ranges | `PathfinderTurnTravelTest.lua` |
+| Pocket-call handovers, actual-position alignment, checked joins and searched endpoints | `UnloaderPocketJoinTest.lua` |
 | Nearby turn order, row entry and five-worker aggregation | `FieldWorkerTurnClearanceTest.lua` |
 | Reverse/recovery and route constraints | `UnloaderRecoveryTest.lua`, `UnloaderGridRoutingTest.lua`, `FieldworkBoundarySegmentTest.lua` |
 | Pocket planning and independent state properties | `PocketCoursePlanningTest.lua`, `CpUtilStateIsolationTest.lua` |

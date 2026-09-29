@@ -121,13 +121,23 @@ turn.turnContext.getBoundaryId = function() return 'field' end
 FieldworkBoundary = {forVehicle = function() return {} end}
 local calls, clearRequests = {}, 0
 local intendedHeadland = {}
+local departure, departureKind, departureVehicle = {}, nil, nil
+Course = setmetatable({createStraightForwardCourse = function(_, length, offset)
+    assert(length == 0.5 and offset == 0, 'Only the immediate physical departure may be scouted')
+    return departure
+end}, {__call = function() return course end})
+turn.vehicle.getAIDirectionNode = function() return 'combine-direction' end
 turn.driveStrategy = {
     getAllowReversePathfinding = function() return true end,
     getFrontAndBackMarkers = function() return 4, 4 end,
     getWorkWidth = function() return 15.2 end,
     isTurnOnFieldActive = function() return true end,
     setPathfindingDoneCallback = function() end,
-    isConnectingPathBlockedByWorker = function(_, route)
+    isConnectingPathBlockedByWorker = function(_, route, margin, workerOnly, liveScan)
+        if route == departure then
+            assert(margin == 0 and workerOnly == false and liveScan == true)
+            return departureKind ~= nil, departureKind, departureVehicle
+        end
         assert(route == intendedHeadland)
         clearRequests = clearRequests + 1
         return true, 'unloader'
@@ -160,6 +170,32 @@ for i = 1, 4 do
 end
 assert(calls[5].headland == nil, 'After four blocked hand-offs, search a fresh route to the same row')
 assert(turn.distantTurnPathRetryAt == g_currentMission.time + 5000, 'An exhausted batch must back off')
+
+-- The recorded no-headland failure never produced turnHeadlandCourse. A parked rig occupying the
+-- departure must receive clearance before that search starts; active calls and adjacent clear rigs proceed.
+departureKind = 'unloader'
+local activeCall, available = nil, true
+departureVehicle = {getCpDriveStrategy = function() return {
+    getCombineToUnload = function() return activeCall end,
+    isAvailableForStaging = function() return available end,
+} end}
+local searches, attempt = #calls, turn.distantTurnPathAttempt
+turn:generatePathfinderTurn(true)
+assert(#calls == searches and turn.state == turn.states.WAITING_FOR_TURN_PATH and
+        turn.distantTurnPathRetryAt == g_currentMission.time + 500 and turn.distantTurnPathAttempt == attempt,
+        'An occupied departure must request clearance immediately without exhausting headland alternatives')
+departureKind = nil
+turn:updateDistantTurnPathRetry()
+assert(#calls == searches, 'Departure clearance retries must respect their deadline')
+g_currentMission.time = turn.distantTurnPathRetryAt
+turn:updateDistantTurnPathRetry()
+assert(#calls == searches + 1, 'Once the rig has reversed clear, the normal search must resume')
+activeCall, departureKind = {}, 'unloader'
+turn:generatePathfinderTurn(true)
+assert(#calls == searches + 2, 'An active unloading call must not be interrupted by departure scouting')
+activeCall, available = nil, false
+turn:generatePathfinderTurn(true)
+assert(#calls == searches + 3, 'An unavailable rig must not cause an unsupported clearance hold')
 
 -- A later valid candidate must retain the approach/lowering sequence, but neither a reverse path nor
 -- a fixed headland middle occupied by another vehicle may activate PPC.

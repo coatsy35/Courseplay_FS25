@@ -986,6 +986,20 @@ function CourseTurn:updateDistantTurnPathRetry()
 end
 
 function CourseTurn:generatePathfinderTurn(useHeadland)
+    if self.isDistantPathfinderTurn and self.driveStrategy.isConnectingPathBlockedByWorker then
+        -- A solver may have no headland course at all. Check only our physical departure footprint,
+        -- not a speculative straight line to the next row, before asking it to search from an occupied start.
+        local departure = Course.createStraightForwardCourse(self.vehicle, 0.5, 0, self.vehicle:getAIDirectionNode())
+        local blocked, kind, vehicle = self.driveStrategy:isConnectingPathBlockedByWorker(departure, 0, false, true)
+        local unloader = vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+        if blocked and kind == 'unloader' and unloader and not unloader:getCombineToUnload() and
+                unloader.isAvailableForStaging and unloader:isAvailableForStaging() then
+            self.state = self.states.WAITING_FOR_TURN_PATH
+            self.distantTurnPathRetryAt = g_currentMission.time + 500
+            self:debug('Waiting for parked unloader to clear the physical turn departure')
+            return
+        end
+    end
     self.pathfindingStartedAt = g_currentMission.time
     local result
     local turnEndNode, goalOffset = self.turnContext:getTurnEndNodeAndOffsets(self.steeringLength)

@@ -836,7 +836,27 @@ function AIDriveStrategyFieldWorkCourse:tryResumeGeneratedConnectingPath()
             not self.pathfinderController or not self.pathfinderController:isActive() or
             g_currentMission.time < (self.nextGeneratedConnectorCheckAt or 0) then return false end
     self.nextGeneratedConnectorCheckAt = g_currentMission.time + 2000
-    return self:tryStartGeneratedConnectingPath(true)
+    if self:tryStartGeneratedConnectingPath(true) then return true end
+    -- The coarse search closes grid cells against the vehicles' previous positions. A moving
+    -- combine can open a passage without clearing the entire generated connector. Refresh that
+    -- search after half a metre of blocker movement; keep completed coarse routes and static
+    -- obstructions alone. The search algorithm and its collision/boundary settings are unchanged.
+    local snapshot = self.connectingPathSearchBlocker
+    local finder = self.pathfinderController.pathfinder
+    if snapshot and finder and finder.FAST and finder.phase == finder.FAST then
+        local worker = snapshot.vehicle
+        if worker.rootNode and entityExists(worker.rootNode) then
+            local x, _, z = getWorldTranslation(worker.rootNode)
+            if MathUtil.vector2Length(x - snapshot.x, z - snapshot.z) >= 0.5 then
+                local context = self.pathfinderController:getCurrentContext()
+                self:debug('Refreshing connector search after blocking worker moved %.1f m',
+                        MathUtil.vector2Length(x - snapshot.x, z - snapshot.z))
+                self.pathfinderController:cancel()
+                self:findConnectingPath(context)
+            end
+        end
+    end
+    return false
 end
 
 --- Warn parked rigs before finishing the row. Keep harvesting and leave PPC/turn ownership untouched;
@@ -1139,6 +1159,12 @@ function AIDriveStrategyFieldWorkCourse:prepareConnectingPathSearch()
 end
 
 function AIDriveStrategyFieldWorkCourse:findConnectingPath(context)
+    self.connectingPathSearchBlocker = nil
+    local worker = context._connectingPathWorker
+    if worker and worker.rootNode and entityExists(worker.rootNode) then
+        local x, _, z = getWorldTranslation(worker.rootNode)
+        self.connectingPathSearchBlocker = {vehicle = worker, x = x, z = z}
+    end
     if self.connectingPathRejoinIx then
         self.pathfinderController:findPathToWaypoint(context, self.workStarterCourse,
                 self.connectingPathRejoinIx, 0, 0, 1)
@@ -1250,6 +1276,7 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
             self.connectingPathWorkerDetourAt = g_currentMission.time + 60000
             self.connectingPathWorkerLastSearchAt = g_currentMission.time
             if self:isConnectingPathCombineDetour(blocker, otherWorker) then context:ignoreFruit(true) end
+            context._connectingPathWorker = otherWorker
             self.connectingPathRejoinIx = self:getClearConnectingPathRejoinIx(self.workStarterCourse,
                     blockedIx, otherWorker)
             if not self.connectingPathRejoinIx then

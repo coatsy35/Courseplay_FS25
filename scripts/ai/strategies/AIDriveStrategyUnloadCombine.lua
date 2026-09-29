@@ -1697,19 +1697,83 @@ function AIDriveStrategyUnloadCombine:canStartDirectStoppedCombineApproach(targe
     return true
 end
 
+--- Locate a normal, already travelled segment near the tractor, rather than selecting a waypoint solely
+--- from the moving combine's position. A staging approach can end beside a different part of the course.
+function AIDriveStrategyUnloadCombine:getPocketFollowJoin(course, combineIx)
+    local distance = UnloaderCoordinator:getStandbyDistance(self.combineToUnload)
+    local firstIx = course:getPreviousWaypointIxWithinDistance(combineIx, 2 * distance + 30) or 1
+    local lastGoalIx = course:getPreviousWaypointIxWithinDistance(combineIx, distance)
+    local node = self.vehicle:getAIDirectionNode()
+    local x, _, z = getWorldTranslation(node)
+    local fx, _, fz = localDirectionToWorld(node, 0, 0, 1)
+    local bestIx, bestDistance, aligned, goalIx, goalDistance
+    local function normal(ix)
+        return not course:isTurnStartAtIx(ix) and not course:isTurnEndAtIx(ix) and
+                not course:isReverseAt(ix) and not course:isOnConnectingPath(ix)
+    end
+    for ix = firstIx, math.min(combineIx - 1, course:getNumberOfWaypoints() - 1) do
+        if normal(ix) and normal(ix + 1) then
+            local ax, _, az = course:getWaypointPosition(ix)
+            local bx, _, bz = course:getWaypointPosition(ix + 1)
+            local dx, dz = bx - ax, bz - az
+            local lengthSquared = dx * dx + dz * dz
+            if lengthSquared > 0.01 then
+                local fraction = ((x - ax) * dx + (z - az) * dz) / lengthSquared
+                local clamped = math.max(0, math.min(1, fraction))
+                local lateral = MathUtil.vector2Length(x - ax - clamped * dx, z - az - clamped * dz)
+                local candidateAligned = fraction >= 0 and fraction < 1 and lateral <= 2 and
+                        (fx * dx + fz * dz) / math.sqrt(lengthSquared) >= math.cos(math.rad(30))
+                if not bestDistance or lateral < bestDistance or
+                        (math.abs(lateral - bestDistance) < 0.0001 and candidateAligned and not aligned) then
+                    bestIx, bestDistance = ix, lateral
+                    aligned = candidateAligned
+                end
+                if lastGoalIx and ix + 1 <= lastGoalIx then
+                    local targetDistance = MathUtil.vector2Length(x - bx, z - bz)
+                    -- Prefer the later travelled waypoint when two goals are equally close.
+                    if not goalDistance or targetDistance <= goalDistance then
+                        goalIx, goalDistance = ix + 1, targetDistance
+                    end
+                end
+            end
+        end
+    end
+    return bestIx, aligned, goalIx
+end
+
 --- Follow the combine on its own course while remaining behind it. This is used after a first-headland pre-call:
 --- the vehicle setting still forbids unloading alongside, but the lead trailer is already present when the combine
 --- reaches its pocket.
 function AIDriveStrategyUnloadCombine:startFollowingCombineToPocket()
+    if self.combineToUnload:getCpDriveStrategy():isWaitingForUnload() then
+        self:startUnloadingCombine()
+        return
+    end
     local startIx
     self.followCourse, startIx = self:setupFollowCourse()
     if not self.followCourse or not startIx then
         self:startWaitingForSomethingToDo()
         return
     end
-    local standbyDistance = UnloaderCoordinator:getStandbyDistance(self.combineToUnload)
-    startIx = self.followCourse:getPreviousWaypointIxWithinDistance(startIx, standbyDistance) or startIx
     self.followCourse:setOffset(0, 0)
+    local joinIx, aligned, goalIx = self:getPocketFollowJoin(self.followCourse, startIx)
+    if not joinIx or (not aligned and not goalIx) then
+        self:debug('No normal harvested segment is available for the pocket approach; releasing the call')
+        self:startWaitingForSomethingToDo()
+        return
+    end
+    if not aligned then
+        -- Do not make PPC steer across the gap to an arbitrary earlier waypoint. Join a travelled
+        -- segment with the existing collision/field-checked pathfinder, retaining active-call ownership.
+        self.rendezvousWaypoint = self.followCourse:getWaypoint(goalIx)
+        self.approachingPocketStandby = true
+        self:setNewState(self.states.WAITING_FOR_PATHFINDER)
+        self:debug('Pathfinding a checked pocket-course join at waypoint %d', goalIx)
+        self:startPathfindingToMovingCombine(self.rendezvousWaypoint, 0, 0)
+        return
+    end
+    startIx = joinIx
+    self.approachingPocketStandby = nil
     self:debug('Following %s from behind at waypoint %d until its pocket is ready',
             CpUtil.getName(self.combineToUnload), startIx)
     self:startCourse(self.followCourse, startIx)
@@ -1805,7 +1869,7 @@ function AIDriveStrategyUnloadCombine:startPathfindingToMovingCombine(waypoint, 
     context:maxFruitPercent(self:getMaxFruitPercent())
     context:offFieldPenalty(self:getOffFieldPenalty(self.combineToUnload))
     context:useFieldNum(CpFieldUtil.getFieldNumUnderVehicle(self.combineToUnload))
-    context:areaToAvoid(nil):vehiclesToIgnore({ self.combineToUnload })
+    context:areaToAvoid(nil):vehiclesToIgnore(self.approachingPocketStandby and {} or { self.combineToUnload })
     context:maxIterations(PathfinderUtil.getMaxIterationsForFieldPolygon(self.vehicle:cpGetFieldPolygon()))
     self:registerCombinePathfinderListeners(self.onPathfindingDoneToMovingCombine,
             self.onPathfindingFailedToMovingTarget, self.onPathfindingObstacleAtStart)
@@ -1825,8 +1889,10 @@ function AIDriveStrategyUnloadCombine:onPathfindingDoneToMovingCombine(controlle
         -- last waypoint. Therefore, use the rendezvousWaypoint's direction instead
         local dx = self.rendezvousWaypoint and self.rendezvousWaypoint.dx
         local dz = self.rendezvousWaypoint and self.rendezvousWaypoint.dz
-        self:extendCombineApproachWithinField(course,
-                AIDriveStrategyUnloadCombine.driveToCombineCourseExtensionLength, dx, dz)
+        if not self.approachingPocketStandby then
+            self:extendCombineApproachWithinField(course,
+                    AIDriveStrategyUnloadCombine.driveToCombineCourseExtensionLength, dx, dz)
+        end
         self:startCourse(course, 1)
         self:setNewState(self.states.DRIVING_TO_MOVING_COMBINE)
         return true
@@ -2565,9 +2631,7 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
         end
     end
     self.standbyYieldingToHarvester = nil
-    if assignment.role == 'POOL' then
-        -- Extra trailers remain parked until the coordinator promotes one to the lead. Repositioning every
-        -- pooled rig on startup sends several tractors into the same harvested strip for no current call.
+    if assignment.waitUntilHarvesterPasses then
         self:holdAtStandbyPosition()
         return
     end
@@ -2620,9 +2684,55 @@ function AIDriveStrategyUnloadCombine:setStandbyAssignment(assignment)
     if sameHarvester and not targetMoved and self:hasReachedStandbyPosition() then
         return
     end
+    -- Hold new staging departures beside a manoeuvre. An existing checked move must finish
+    -- instead of being abandoned in the passage merely because a nearby combine starts turning.
+    if self:getNearbyManoeuvringHarvester() then
+        self:holdAtStandbyPosition()
+        return
+    end
     if self.standbyRetryAt and (g_time or 0) < self.standbyRetryAt then return end
-
+    if self:getNearbyStagingDeparture() then
+        self:holdAtStandbyPosition()
+        return
+    end
     self:startPathfindingToStandby(assignment.harvester, waypoint)
+end
+
+--- Staging must also yield to the preceding combine after a reservation changes.
+function AIDriveStrategyUnloadCombine:getNearbyManoeuvringHarvester()
+    local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+    for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if vehicle ~= self.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+            local driver = vehicle:getCpDriveStrategy()
+            local states = driver and driver.states
+            if states and (driver.state == states.TURNING or driver.state == states.WAITING_FOR_PATHFINDER or
+                    driver.state == states.DRIVING_TO_WORK_START_WAYPOINT) then
+                local ox, _, oz = getWorldTranslation(vehicle.rootNode)
+                if MathUtil.vector2Length(ox - x, oz - z) < self:getHarvesterTurnClearanceDistance(vehicle) +
+                        self.getTrainLength(self.vehicle) then return vehicle end
+            end
+        end
+    end
+end
+
+--- Bring the pool forward one departure at a time from a shared entry. Separate clusters can
+--- stage independently; a reserved lead goes before its local pool.
+function AIDriveStrategyUnloadCombine:getNearbyStagingDeparture()
+    local x, _, z = getWorldTranslation(self.vehicle.rootNode)
+    for other, assignment in pairs(UnloaderCoordinator.assignments or {}) do
+        if other ~= self then
+            local ox, _, oz = getWorldTranslation(other.vehicle.rootNode)
+            if MathUtil.vector2Length(ox - x, oz - z) < self:getUnloaderDepartureClearance(other) then
+                if other.state == other.states.WAITING_FOR_STANDBY_PATHFINDER or
+                        other.state == other.states.DRIVING_TO_STANDBY then return other end
+                if not self.standbyAssignment.reserved and assignment.reserved and assignment.waypoint and
+                        not assignment.waitUntilHarvesterPasses and
+                        MathUtil.vector2Length(assignment.waypoint.x - ox, assignment.waypoint.z - oz) >= 8 then
+                    return other
+                end
+            end
+        end
+    end
 end
 
 ---@param harvester table
@@ -3542,7 +3652,21 @@ end
 function AIDriveStrategyUnloadCombine:isRigClearOfConnectorClearance(clearance)
     if clearance.harvester.getIsCpActive and not clearance.harvester:getIsCpActive() then return true end
     local fromIx, toIx = self:getConnectorClearanceRange(clearance)
-    return not fromIx or self:isRigClearOfCourse(clearance.course, clearance.distance, fromIx, toIx)
+    if not fromIx then return true end
+    local now = g_currentMission.time or g_time or 0
+    -- This is queried several times per update. Cache only a blocked result briefly: stale
+    -- clearance must never authorise movement, while a cleared rig is released within 250 ms.
+    if now < (clearance.nextPhysicalCheckAt or 0) then return false end
+    local harvester = clearance.harvester
+    local driver = harvester:getCpDriveStrategy()
+    local route = clearance.course:copy(harvester, fromIx, toIx)
+    -- Agree with the combine's live occupancy check. The wider margin used to choose a
+    -- holding point is not evidence that a safely parked trailer actually blocks the header.
+    local sweep = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(harvester), route,
+            driver and driver.turningRadius or AIUtil.getTurningRadius(harvester))
+    local blocked = VehicleRouteConflict.findConflict(sweep, FieldworkBoundary.captureRig(self.vehicle))
+    clearance.nextPhysicalCheckAt = blocked and now + 250 or nil
+    return not blocked
 end
 
 --- A forward-only pathfinder cannot turn a tractor and articulated trailer when a combine's header is
@@ -3550,7 +3674,7 @@ end
 --- the field and there is no vehicle in the swept rear corridor.
 function AIDriveStrategyUnloadCombine:startConnectorReverseEscape()
     local clearance = self.connectorClearance
-    return clearance and self:startVerifiedStandbyReverse(clearance, {20, 12, 6}) or false
+    return clearance and self:startVerifiedStandbyReverse(clearance, {6, 12, 20}) or false
 end
 
 function AIDriveStrategyUnloadCombine:startVerifiedStandbyReverse(recovery, distances)
@@ -3717,6 +3841,7 @@ function AIDriveStrategyUnloadCombine:startConnectorClearance(harvester, course)
         self:holdAtStandbyPosition()
         return true
     end
+    if self:startConnectorReverseEscape() then return true end
     local best, emergency, bestLength = self:findStandbyClearanceGoal(self.connectorClearance, true)
     if best then
         self:debug('Clearing %s connecting route: estimated drive %.1f m, heading %.1f%s',

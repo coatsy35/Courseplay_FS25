@@ -1,5 +1,6 @@
 -- Exercise production geometry, including attachment offsets, rather than mocking an occupancy answer.
 MathUtil = {vector2Length = function(x, z) return math.sqrt(x * x + z * z) end}
+function entityExists(node) return node ~= nil end
 function getWorldTranslation(n) return n.x, 0, n.z end
 function getWorldRotation(n) return 0, n.heading or 0, 0 end
 function localDirectionToWorld(n, x, y, z)
@@ -41,6 +42,11 @@ local captured = FieldworkBoundary.captureRig(combine)
 assert(captured[1].box.width == 2.25 and captured[1].box.length == 4.25 and
         captured[2].box.width == 7.75,
         'Represent the chassis and header once each, using per-body dimensions')
+local detached = vehicle(7, 30, 3, 9)
+detached.getAIDirectionNode, detached.getChildVehicles = nil, nil
+local detachedRig = FieldworkBoundary.captureRig(detached)
+assert(#detachedRig == 1 and detachedRig[1].node == detached.rootNode and detachedRig[1].box.width == 1.75,
+        'Detached implements without AI or attachment APIs must remain checked obstacles, without a Lua error')
 local function course(points, reverse)
     return {getNumberOfWaypoints = function() return #points end,
         getWaypointPosition = function(_, ix) return points[ix][1], 0, points[ix][2] end,
@@ -637,3 +643,92 @@ do
             'The recorded row must request nearby-trailer clearance before finishing, without interrupting cutting')
 end
 print('Connector departure, early clearance and recovery handover regressions: OK')
+
+-- The trailer must use the same physical clearance decision as the combine, not the broad
+-- staging target margin. Exercise its real request entry point and reverse-first dispatch.
+dofile('scripts/ai/strategies/AIDriveStrategyUnloadCombine.lua')
+do
+    local harvester = vehicle(0, 0, 4, 8)
+    local cutter = vehicle(0, 6, 15, 2)
+    cutter.getAttacherVehicle = function() return harvester end
+    harvester.children = {cutter}
+    local driver = {turningRadius = 12, getWorkWidth = function() return 15 end}
+    harvester.getCpDriveStrategy = function() return driver end
+    local route = course({{0, 0}, {0, 90}})
+    route.copy = function(self) return self end
+    local parked = vehicle(12, 20, 3, 5)
+    local moves, holds, searches = 0, 0, 0
+    local unloader = setmetatable({vehicle = parked, debug = function() end,
+        getHarvesterTurnClearanceDistance = function() return 30 end,
+        holdAtStandbyPosition = function() holds = holds + 1 end,
+        startConnectorReverseEscape = function() moves = moves + 1; return true end,
+        findStandbyClearanceGoal = function() searches = searches + 1; error('Reverse must be tried first') end,
+    }, {__index = AIDriveStrategyUnloadCombine})
+    unloader:startConnectorClearance(harvester, route)
+    assert(holds == 1 and moves == 0 and searches == 0,
+            'A parked trailer beside the real header sweep must remain still despite the wider staging margin')
+    parked.rootNode.x = 7
+    unloader:startConnectorClearance(harvester, route)
+    assert(moves == 1 and searches == 0,
+            'A real header obstruction must immediately try checked reversing before any forward goal search')
+    parked.rootNode.x = 12
+    assert(not unloader:isRigClearOfConnectorClearance(unloader.connectorClearance),
+            'A cached blocked result may retain the hold briefly, but must never authorise unsafe clearance')
+    g_currentMission.time = g_currentMission.time + 250
+    assert(unloader:isRigClearOfConnectorClearance(unloader.connectorClearance),
+            'Physical clearance must release the trailer without forcing an oversized departure')
+end
+print('Parked trailer physical clearance and reverse-first dispatch: OK')
+
+-- No headland route is needed to dispatch clearance from the real departure footprint. Run the
+-- turn caller, live worker scan and unloader request together; only the final reverse driving is adapted.
+CpDebug = {DBG_TURN = 1}
+dofile('scripts/ai/turns/AITurn.lua')
+do
+    local harvester = vehicle(0, 0, 4, 8)
+    local cutter = vehicle(0, 6, 15, 2)
+    cutter.getAttacherVehicle = function() return harvester end
+    harvester.children = {cutter}
+    local parked = vehicle(7, 6, 3, 5, math.pi / 2)
+    local reversed, searches = 0, 0
+    local driver = setmetatable({vehicle = harvester, turningRadius = 12, debug = function() end,
+        getWorkWidth = function() return 15 end, getFrontAndBackMarkers = function() return 4, -4 end,
+        getAllowReversePathfinding = function() return true end, isTurnOnFieldActive = function() return true end,
+        setPathfindingDoneCallback = function() end,
+    }, {__index = AIDriveStrategyFieldWorkCourse})
+    harvester.getCpDriveStrategy = function() return driver end
+    local unloader = setmetatable({vehicle = parked, debug = function() end, states = {},
+        isAvailableForStaging = function() return true end,
+        getHarvesterTurnClearanceDistance = function() return 30 end,
+        startConnectorReverseEscape = function() reversed = reversed + 1; return true end,
+    }, {__index = AIDriveStrategyUnloadCombine})
+    parked.getCpDriveStrategy = function() return unloader end
+    g_currentMission.vehicleSystem = {vehicles = {harvester, parked}}
+    AIDriveStrategyCombineCourse = {isActiveCpCombine = function(v) return v == harvester end}
+    Course = {createStraightForwardCourse = function(_, length)
+        assert(length == 0.5)
+        local route = course({{0, 0}, {0, length}})
+        route.copy = function(self) return self end
+        return route
+    end}
+    PathfinderUtil = {findPathForTurn = function()
+        searches = searches + 1; return {}, {done = false}
+    end}
+    local turn = setmetatable({vehicle = harvester, driveStrategy = driver,
+        isDistantPathfinderTurn = true, turningRadius = 12, workWidth = 15,
+        states = {WAITING_FOR_TURN_PATH = 'clearance', WAITING_FOR_PATHFINDER = 'search'},
+        turnContext = {getTurnEndNodeAndOffsets = function() return {}, 0 end,
+            getBoundaryId = function() return nil end},
+        debug = function() end, getRaisedHeaderTurnBoundary = function() return nil end,
+    }, {__index = CourseTurn})
+    turn:generatePathfinderTurn(true)
+    assert(reversed == 1 and searches == 0 and turn.state == 'clearance' and
+            unloader.connectorClearance.course:getNumberOfWaypoints() == 2,
+            'A transverse parked rig at the header must receive an immediate reverse request without a headland course')
+    parked.rootNode.x = 12
+    g_currentMission.time = turn.distantTurnPathRetryAt
+    turn:updateDistantTurnPathRetry()
+    assert(reversed == 1 and searches == 1 and turn.state == 'search',
+            'A rig which has reversed outside the physical departure must remain parked while normal pathfinding resumes')
+end
+print('No-headland physical departure clearance: OK')

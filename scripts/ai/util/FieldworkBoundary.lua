@@ -207,7 +207,8 @@ function FieldworkBoundary.captureRig(vehicle)
         if byVehicle[object] then return byVehicle[object] end
         local parent = object ~= vehicle and object.getAttacherVehicle and object:getAttacherVehicle()
         local parentPart = parent and add(parent)
-        local node = object == vehicle and vehicle:getAIDirectionNode() or object.rootNode
+        -- Stationary obstacles include trailers and implements without the AI vehicle specialisation.
+        local node = object == vehicle and object.getAIDirectionNode and object:getAIDirectionNode() or object.rootNode
         local x, _, z = getWorldTranslation(node)
         -- Euler Y is not a compass heading: (180, 9, 180) and (0, 171, 0) describe the same
         -- direction. Mixing that folded angle with real hitch offsets makes attachments jump on
@@ -228,7 +229,7 @@ function FieldworkBoundary.captureRig(vehicle)
         return part
     end
     add(vehicle)
-    for _, object in ipairs(vehicle:getChildVehicles()) do add(object) end
+    for _, object in ipairs(vehicle.getChildVehicles and vehicle:getChildVehicles() or {}) do add(object) end
     return rig
 end
 

@@ -298,6 +298,7 @@ local heldForDeparture = false
 strategy.isAvailableForStaging = function() return true end
 strategy.holdAtStandbyPosition = function() heldForDeparture = true end
 strategy.debugSparse = function() end
+g_currentMission = {vehicleSystem = {vehicles = {}}}
 strategy:setStandbyAssignment({ harvester = combine, waypoint = { x = 30, z = 30 } })
 assert(heldForDeparture, 'A standby movement must yield while a nearby active trailer clears the shared entry')
 

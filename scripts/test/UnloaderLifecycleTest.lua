@@ -48,6 +48,59 @@ local function harvester(x)
 end
 local a, b = harvester(100), harvester(200)
 
+-- Preserve predictive staging, but pause it beside any manoeuvring combine and serialise
+-- departures from a shared AD entry. Separate harvester clusters can stage independently.
+do
+    local lead, rear, distant = unloader(0), unloader(4), unloader(300)
+    local oldActive = AIDriveStrategyCombineCourse.isActiveCpCombine
+    AIDriveStrategyCombineCourse.isActiveCpCombine = function(v) return v == a end
+    local driver = a:getCpDriveStrategy()
+    driver.states = {TURNING = 'turn', WAITING_FOR_PATHFINDER = 'search', DRIVING_TO_WORK_START_WAYPOINT = 'connect'}
+    driver.state = 'work'
+    a.rootNode.x = 10
+    g_currentMission.vehicleSystem.vehicles = {a}
+    local departures = 0
+    for _, rig in ipairs({lead, rear, distant}) do
+        rig.isAvailableForStaging = function() return true end
+        rig.getHarvesterTurnClearanceDistance = function() return 40 end
+        rig.startPathfindingToStandby = function(self, _, point)
+            departures = departures + 1
+            self.state = self.states.WAITING_FOR_STANDBY_PATHFINDER
+            self.pathfinderController.active = true
+            self.standbyTargetX, self.standbyTargetZ = point.x, point.z
+        end
+    end
+    local leadPlan = {harvester=a, reserved=true, role='STANDBY', waypoint={x=100,z=0}}
+    local rearPlan = {harvester=a, reserved=false, role='POOL', waypoint={x=80,z=0}}
+    local distantPlan = {harvester=b, reserved=true, role='STANDBY', waypoint={x=400,z=0}}
+    UnloaderCoordinator.assignments = {[lead]=leadPlan,[rear]=rearPlan,[distant]=distantPlan}
+    rear:setStandbyAssignment(rearPlan)
+    assert(departures == 0, 'A local pool trailer must let its lead leave first, regardless of publication order')
+    lead:setStandbyAssignment(leadPlan)
+    rear:setStandbyAssignment(rearPlan)
+    distant:setStandbyAssignment(distantPlan)
+    assert(departures == 2, 'Lead trailers for separate clusters must stage while the nearby successor waits')
+    lead.vehicle.rootNode.x = 60
+    rear:setStandbyAssignment(rearPlan)
+    assert(departures == 3, 'The next trailer must move forward once the shared departure is clear')
+    driver.state = 'connect'
+    rear:setStandbyAssignment(rearPlan)
+    assert(departures == 3 and rear.state == rear.states.WAITING_FOR_STANDBY_PATHFINDER and
+            rear.pathfinderController.active,
+            'A nearby turn must not abandon an already checked staging departure in the passage')
+    rear:setStandbyAssignment({harvester=b, role='STANDBY', waypoint={x=200,z=0}})
+    assert(departures == 3 and rear.state == rear.states.WAITING_IN_STANDBY and
+            not rear.pathfinderController.active,
+            'Reassignment must not send a trailer through the previous combine\'s nearby connector')
+    driver.state = 'work'
+    rear:setStandbyAssignment(rear.standbyAssignment)
+    assert(departures == 4, 'Advance staging must resume when the local manoeuvre clears')
+    AIDriveStrategyCombineCourse.isActiveCpCombine = oldActive
+    a.rootNode.x = 100
+    g_currentMission.vehicleSystem.vehicles = {}
+    UnloaderCoordinator.assignments = {}
+end
+
 -- A callback from the released call must not change a new call, including when the new state has the same name.
 local first = unloader(0)
 first.combineToUnload = a
@@ -96,11 +149,10 @@ assert(staged.pathfinderController.active and staged.state == staged.states.WAIT
 
 local spare = unloader(0)
 spare.isAvailableForStaging = function() return true end
-spare.startPathfindingToStandby = function()
-    error('A pooled spare must remain parked until promoted to the lead')
-end
+local poolMoves = 0
+spare.startPathfindingToStandby = function() poolMoves = poolMoves + 1 end
 spare:setStandbyAssignment({harvester = a, role = 'POOL', waypoint = {x = 100, z = 0}})
-assert(spare.state == spare.states.WAITING_IN_STANDBY)
+assert(poolMoves == 1, 'Successive trailers must be able to stage closer before becoming the lead')
 staged:setStandbyAssignment({harvester = a, role = 'STANDBY', waypoint = {x = 180, z = 0}})
 assert(stagingAttempts == 1 and staged.pathfinderController.active,
         'An advancing staging target must not repeatedly restart the same in-progress departure search')
