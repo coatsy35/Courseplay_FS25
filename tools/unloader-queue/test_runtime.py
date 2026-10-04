@@ -235,6 +235,35 @@ class EngineBoundaryTests(unittest.TestCase):
     def test_growing_crop_rejected(self):
         self.lua.execute('densityCount=20; assert(not CpUnloaderQueueWorld.clear(world,poses))')
 
+    def test_ad_start_outside_field_has_a_bounded_entrance(self):
+        self.lua.execute('''
+            local boundary={{x=-40,z=10},{x=40,z=10},{x=40,z=150},{x=-40,z=150}}
+            v.cpGetFieldPolygon=function() return boundary end
+            u.queueData={operation='prepare'}
+            u.invertedStartPositionMarkerNode={x=0,z=0,t=0}
+            local nativeLength=AIUtil.getLength
+            AIUtil.getLength=function() return 18 end
+            local entry=assert(CpUnloaderQueueWorld.new(u))
+            AIUtil.getLength=nativeLength
+            assert(entry.entrance)
+            assert(CpUnloaderQueueWorld.clear(entry,CpUnloaderQueueWorld.poses(entry.model)))
+            local outside=CpUnloaderQueueWorld.settledPoses(entry.model,{x=90,z=0,t=0})
+            assert(not CpUnloaderQueueWorld.clear(entry,outside))
+            densityCount=20
+            assert(not CpUnloaderQueueWorld.clear(entry,CpUnloaderQueueWorld.poses(entry.model)))
+        ''')
+
+    def test_grass_verge_does_not_waive_grain_crop(self):
+        self.lua.execute('''
+            local rect=CpUnloaderQueueWorld.rectangle(world.model.bodies[1],poses[1])
+            densityCount=20
+            world.fruit[1].grass=true
+            assert(CpUnloaderQueueWorld.cropFree(world,rect,true))
+            assert(not CpUnloaderQueueWorld.cropFree(world,rect,false))
+            world.fruit[1].grass=false
+            assert(not CpUnloaderQueueWorld.cropFree(world,rect,true))
+        ''')
+
     def test_cut_crop_permitted(self):
         self.lua.execute('densityCount=20; cutCount=20; assert(CpUnloaderQueueWorld.clear(world,poses))')
 
@@ -281,6 +310,22 @@ class EngineBoundaryTests(unittest.TestCase):
             local data=CpUnloaderQueue.data(u)
             data.departure={width=10,headlands={{{x=-50,z=0},{x=50,z=0}}}}
             assert(not CpUnloaderQueue.canFinishExit(u))
+        ''')
+
+    def test_new_route_resets_progress_clock_and_retains_validation_mapping(self):
+        self.lua.execute('''
+            u.setMaxSpeed=function() end
+            u.startCourse=function(self,course) self.course=course end
+            local data=CpUnloaderQueue.take(u,'prepare')
+            data.searchGeneration=data.generation
+            data.progressTime=0
+            g_currentMission.time=30000
+            local path={}
+            for i=0,80 do path[#path+1]={x=0,z=i*.25,t=0} end
+            CpUnloaderQueue.startRoute(data,path)
+            assert(data.progressTime==30000)
+            assert(u.course:getNumberOfWaypoints()==21)
+            assert(data.courseToPath[21]==81)
         ''')
 
     def test_capture_uses_saved_work_course_and_survives_second_release(self):

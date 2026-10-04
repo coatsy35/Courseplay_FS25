@@ -4,6 +4,49 @@ local W = CpUnloaderQueueWorld
 local G = CpUnloaderQueueGeometry
 local H = HeadlandLoopGeometry
 
+local function distanceToSegment(p,a,b)
+    local dx,dz=b.x-a.x,b.z-a.z
+    local f=math.max(0,math.min(1,((p.x-a.x)*dx+(p.z-a.z)*dz)/math.max(0.001,dx*dx+dz*dz)))
+    local q={x=a.x+f*dx,z=a.z+f*dz}
+    return math.sqrt((p.x-q.x)^2+(p.z-q.z)^2),q
+end
+
+local function entryGate(strategy,model,boundary)
+    if not strategy.queueData or strategy.queueData.operation~='prepare'
+            or not strategy.invertedStartPositionMarkerNode then return end
+    local start=model.root
+    local outside=false
+    local poses=W.poses(model)
+    for i,body in ipairs(model.bodies) do
+        if not G.within(W.rectangle(body,poses[i]),boundary.polygon,boundary.islands) then outside=true end
+    end
+    if not outside then return end
+    local marker=W.pose(strategy.invertedStartPositionMarkerNode)
+    local width=math.max(15,2*strategy.turningRadius)
+    local length=AIUtil.getLength(strategy.vehicle)
+    if math.sqrt((start.x-marker.x)^2+(start.z-marker.z)^2)>width+length then return end
+    local nearest,entry
+    for i,a in ipairs(boundary.polygon) do
+        local d,p=distanceToSegment(start,a,boundary.polygon[i%#boundary.polygon+1])
+        if not nearest or d<nearest then nearest,entry=d,p end
+    end
+    if nearest and nearest<=100 then return {start=start,entry=entry,width=width+length} end
+end
+
+local function inEntrance(world,rectangle)
+    if not world.entrance then return false end
+    for i,a in ipairs(rectangle) do
+        local b=rectangle[i%#rectangle+1]
+        local count=math.max(1,math.ceil(math.sqrt((b.x-a.x)^2+(b.z-a.z)^2)))
+        for j=0,count do
+            local p={x=a.x+(b.x-a.x)*j/count,z=a.z+(b.z-a.z)*j/count}
+            if not G.inside(world.boundary.polygon,p) and
+                    distanceToSegment(p,world.entrance.start,world.entrance.entry)>world.entrance.width then return false end
+        end
+    end
+    return true
+end
+
 function W.pose(node)
     local x, _, z = getWorldTranslation(node)
     return {x=x, z=z, t=H.math.heading(node)}
@@ -62,13 +105,15 @@ function W.new(strategy)
     local boundary = FieldworkBoundary.forVehicle(strategy.vehicle, 0)
     if not boundary then return nil, 'field boundary unavailable' end
     local world = {strategy=strategy, model=model, boundary=boundary, fruit={}, node=createTransformGroup('cpQueueProbe')}
+    world.entrance=entryGate(strategy,model,boundary)
     link(getRootNode(), world.node)
     world.collision = PathfinderCollisionDetector(strategy.vehicle, {}, {}, false, CpUtil.getDefaultCollisionFlags())
     for _, desc in pairs(g_fruitTypeManager:getFruitTypes()) do
         if desc.terrainDataPlaneId and desc.terrainDataPlaneId ~= 0 and desc.numStateChannels and desc.numStateChannels > 0 then
             local modifier = DensityMapModifier.new(desc.terrainDataPlaneId, desc.startStateChannel, desc.numStateChannels,
                 g_currentMission.terrainRootNode)
-            local item = {modifier=modifier, filter=DensityMapFilter.new(modifier), cut={}}
+            local item = {modifier=modifier, filter=DensityMapFilter.new(modifier), cut={},
+                grass=desc.name=='GRASS' or desc.name=='MEADOW'}
             for state, isCut in pairs(desc.cutStates or {}) do
                 if isCut == true and type(state) == 'number' and state >= 0 and state % 1 == 0 then
                     item.cut[state+1] = true
@@ -85,9 +130,10 @@ function W.delete(world)
     if world and world.node then delete(world.node); world.node=nil end
 end
 
-function W.cropFree(world, rectangle)
+function W.cropFree(world, rectangle, grassVerge)
     local a,b,d = rectangle[1],rectangle[2],rectangle[4]
     for _, item in ipairs(world.fruit) do
+        if not (grassVerge and item.grass) then
         item.modifier:setParallelogramWorldCoords(a.x,a.z,b.x,b.z,d.x,d.z,DensityCoordType.POINT_POINT_POINT)
         item.filter:setValueCompareParams(DensityValueCompareType.GREATER,0)
         local _, count, total = item.modifier:executeGet(item.filter)
@@ -100,18 +146,21 @@ function W.cropFree(world, rectangle)
             standing = standing-cut
         end
         if standing > 0 then return false end
+        end
     end
     return true
 end
 
 function W.bodyClear(world, body, pose, corridor, perimeterConnector)
     local rectangle = W.rectangle(body, pose)
-    if not perimeterConnector and not G.within(rectangle, world.boundary.polygon, world.boundary.islands) then return false, 'field boundary' end
+    local contained=G.within(rectangle,world.boundary.polygon,world.boundary.islands)
+    local entrance=not contained and inEntrance(world,rectangle)
+    if not perimeterConnector and not contained and not entrance then return false, 'field boundary' end
     for _,island in ipairs(world.boundary.islands) do
         if G.overlap(rectangle,island) then return false,'island' end
     end
     if corridor and not corridor(rectangle) then return false, 'outside harvested exit corridor' end
-    if not W.cropFree(world, rectangle) then return false, 'standing crop' end
+    if not W.cropFree(world, rectangle,entrance or perimeterConnector) then return false, 'standing crop' end
     PathfinderUtil.setWorldPositionAndRotationOnTerrain(world.node,pose.x,pose.z,pose.t,0.5)
     -- Reuse native collision filtering, without appending every background
     -- rejection to PathfinderUtil's global debug-box array.

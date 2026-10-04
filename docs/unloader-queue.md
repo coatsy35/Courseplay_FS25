@@ -146,7 +146,7 @@ Where native crop or turn restrictions prevent unloading at the configured
 level, the queue must keep the trailer near the legal entry and preserve the
 restriction. Report the constraint rather than forcing an unsafe approach.
 
-## Operational candidate 2993
+## Operational candidates 2993–2994
 
 Enable **Prepare unloader queue** on each participating CP unloader. It is off
 by default, including existing saves. This is the first integrated candidate,
@@ -162,7 +162,11 @@ remain in their original methods.
 The runtime takes fleet snapshots once per second, measures transfer progress,
 assigns preparation/successor slots and separates reserved parking targets.
 Queue movement uses a private incremental search, strict growing-crop checks,
-field/island containment and every supported towing link. Native calls cancel
+field/island containment and every supported towing link. When the configured
+AD waiting point is outside the field, preparation may use a bounded entrance
+to the nearest field edge. Roadside grass is allowed in that entrance; grain,
+other standing crops, islands and collisions remain forbidden. This entrance
+does not permit unrelated field exits. Native calls cancel
 queue ownership and use their original pathfinder. Stale searches cannot
 replace native courses. Reversing-combine requests retain native backup.
 
@@ -192,7 +196,7 @@ native rear-call dispatch, failed/missing exits, ownership and generation
 changes, actual chain modelling, growing/cut/unknown crop states, obstacles,
 route confinement, reverse tracking-node conversion, clearance choice,
 shared scheduling, saved-course capture and AD/headland eligibility. Together
-with the previous suites these exercise 96 queue-related tests in source and
+with the previous suites these exercise 99 queue-related tests in source and
 the extracted ZIP. The full release also runs existing implement-profile,
 headland, pocket, work-entry, double-pivot and packaging checks.
 

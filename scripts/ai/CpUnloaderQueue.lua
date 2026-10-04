@@ -71,7 +71,7 @@ end
 
 function Q.remove(driver)
     Q.cancel(driver); Q.members[driver]=nil; driver.queueData=nil
-    if next(Q.members)==nil then Q.nextPlan=0; Q.plan=nil; Q.nextDeparture=0 end
+    if next(Q.members)==nil then Q.nextPlan=0; Q.plan=nil; Q.combines=nil; Q.nextDeparture=0 end
 end
 
 function Q.owns(driver)
@@ -317,6 +317,8 @@ end
 function Q.startRoute(data,path)
     if not Q.owns(data.driver) or data.searchGeneration~=data.generation then return end
     data.path=path; data.search=nil
+    data.progressPosition=W.pose(data.driver.vehicle:getAIDirectionNode())
+    data.progressTime=now()
     local points,mapping={},{}
     local previous
     for i,p in ipairs(path) do
