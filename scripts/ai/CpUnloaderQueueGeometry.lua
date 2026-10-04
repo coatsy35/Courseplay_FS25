@@ -96,3 +96,15 @@ function G.bestClearance(candidates, corridor)
     end
     return best, bestTime
 end
+
+-- Final departure gate: the headland polygon must describe a surveyed,
+-- harvested handover area, not merely the field boundary or an AD node.
+-- The engine adapter must supply current rectangles for every attached vehicle.
+function G.canHandOver(rectangles, headland, protectedAreas)
+    if not rectangles or #rectangles == 0 or not headland or #headland < 3 then return false end
+    for _, rectangle in ipairs(rectangles) do
+        if #rectangle ~= 4 or math.abs(cross(rectangle[1],rectangle[2],rectangle[3])) < 1e-6 then return false end
+        if not G.within(rectangle, headland, protectedAreas) then return false end
+    end
+    return true
+end

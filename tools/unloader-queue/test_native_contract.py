@@ -86,9 +86,13 @@ class NativeContractTests(unittest.TestCase):
         self.lua.execute('u.state=u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL; u:onLastWaypointPassed()')
         self.assertEqual(self.lua.eval('result()'), 'speed:0,release,return-start,handover')
 
-    def test_departure_without_marker_retains_direct_native_handover(self):
+    def test_baseline_gap_missing_marker_currently_hands_over_midfield(self):
         self.lua.execute('u:startUnloadingTrailers()')
         self.assertEqual(self.lua.eval('result()'), 'speed:0,release,handover')
+
+    def test_baseline_gap_failed_return_path_currently_hands_over_midfield(self):
+        self.lua.execute('u:onPathfindingDoneToInvertedGoalPositionMarker(nil,false,nil,false)')
+        self.assertEqual(self.lua.eval('result()'),'handover')
 
     def test_giants_departure_is_not_converted_to_ad(self):
         self.lua.execute('u.useGiantsUnload=true; u:onTrailerFull()')

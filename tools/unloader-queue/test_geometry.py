@@ -105,6 +105,36 @@ class GeometryTests(unittest.TestCase):
                 c = self.box(100+sign*2*math.cos(a),200-sign*2*math.sin(a),a)
                 self.assertTrue(self.g.overlap(b,c))
 
+    def test_departure_sequence_keeps_cp_until_whole_train_reaches_headland(self):
+        headland = self.polygon([(-40,0),(40,0),(40,40),(-40,40)])
+        for tractor_z, expected in [(-30,False),(-10,False),(5,False),(10,False),(15,True)]:
+            train = self.lua.table_from([self.box(z=tractor_z,length=4),
+                                         self.box(z=tractor_z-10,length=8)])
+            self.assertEqual(self.g.canHandOver(train,headland,self.table([])),expected)
+
+    def test_no_exit_marker_or_failed_route_cannot_authorise_midfield_handover(self):
+        train = self.lua.table_from([self.box(z=-100),self.box(z=-112)])
+        self.assertFalse(self.g.canHandOver(train,None,self.table([])))
+        headland = self.polygon([(-40,0),(40,0),(40,40),(-40,40)])
+        self.assertFalse(self.g.canHandOver(train,headland,self.table([])))
+
+    def test_departure_waits_when_headland_still_has_crop_or_combine_corridor(self):
+        headland = self.polygon([(-40,0),(40,0),(40,40),(-40,40)])
+        train = self.lua.table_from([self.box(z=25),self.box(z=15)])
+        crop = self.box(z=15,width=1,length=1)
+        self.assertFalse(self.g.canHandOver(train,headland,self.lua.table_from([crop])))
+        self.assertTrue(self.g.canHandOver(train,headland,self.table([])))
+
+    def test_handover_requires_all_trailers_clear(self):
+        headland = self.polygon([(-40,0),(40,40),(40,60),(-40,60)])
+        train = self.lua.table_from([self.box(z=50),self.box(z=40),self.box(z=10)])
+        self.assertFalse(self.g.canHandOver(train,headland,self.table([])))
+
+    def test_unknown_or_degenerate_vehicle_footprint_cannot_authorise_handover(self):
+        headland = self.polygon([(-40,0),(40,0),(40,60),(-40,60)])
+        for rectangles in [[],[[]],[self.box(z=30,width=0)]]:
+            self.assertFalse(self.g.canHandOver(self.table(rectangles),headland,self.table([])))
+
 
 if __name__ == '__main__':
     unittest.main()

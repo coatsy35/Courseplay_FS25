@@ -52,11 +52,24 @@ manoeuvres. Queue routes require their own strict crop, field/island and full
 rig checks. Native CP's existing crop/readiness exceptions remain exactly as
 main; the queue may neither add exceptions nor reinterpret a rejected pocket.
 
-This mod does not control AutoDrive. Preserve CP's existing departure and
-handover: where a valid start marker exists, CP paths to it before finishing;
-without one, CP can finish directly. Any subsequent connection to an AD route,
-including a perimeter catch-all route, belongs to AD. No AD task injection,
-pause control or manoeuvre/resume integration is part of this feature.
+This mod does not control AutoDrive. CP must retain ownership while the loaded
+trailer travels back along the harvested centre-row corridor, clear of crop,
+to a safe headland handover area. Avoid vehicles throughout this exit. A short
+safe detour is allowed; a diagonal shortcut across the field is not.
+
+Only hand over when the whole attached train has reached the harvested
+headland and a suitable AD connection is available. That connection may be
+the field's configured start/return point or a valid connected perimeter
+route. Mere proximity to an arbitrary AD node is insufficient. Do not inject,
+pause or replace AD tasks or control the vehicle after handover.
+
+**Authorised departure exception to native parity:** current CP can finish
+immediately when the return marker is missing or its return path fails. Both
+fallbacks must be intercepted by the operational feature: retain CP ownership,
+retry a safe row/headland exit, or wait safely with a clear reason. A timeout,
+failed search, removed marker or missing AD network never grants permission to
+hand over in the middle of the field. This exception does not change native
+crop protection, combine turns, unloading entry or pipe alignment.
 
 ## Implementation order
 
@@ -67,7 +80,8 @@ pause control or manoeuvre/resume integration is part of this feature.
    lagged preparation with hysteresis and bounded route work.
 4. Add deadline-based preparation and successor coverage without replacing
    native CP's unloading decisions.
-5. Add whole-train priority clearance whilst CP owns the tractor.
+5. Add whole-train priority clearance and the CP-owned row-to-headland exit,
+   including safe retention of control when an exit search fails.
 6. Qualify full sequences against the baseline and run controlled in-game
    acceptance before describing the feature as working.
 
@@ -86,6 +100,10 @@ are not evidence of successful unloading.
 - Failed or delayed searches, moving obstacles, replacement and stale callbacks.
 - Safe parking, queued obstruction clearance and correct rear-entry handover.
 - Successor preparation, native reverse clearance and AutoDrive departure.
+- Full trailer midway along a centre row; whole-train headland arrival; missing
+  return marker; failed/cancelled exit search; blocked headland; crop beside
+  the row; disconnected perimeter route; absent AD network; stale arrival
+  callback. Assert CP retains ownership until the safe handover conditions hold.
 - Bounded search and retry work; diagnostics distinguish search cost from FPS.
 
 ## Qualification status
@@ -111,6 +129,10 @@ explicit inputs; these tests do not establish engine crop or collision safety.
 departure methods with engine boundary mocks. It checks the native 25 m call
 admission and rear target, crop/turn rejection, existing native exceptions,
 reverse-clearance ownership and start-marker/AD/GIANTS handover boundaries.
+The two tests named `baseline_gap` deliberately record native missing-marker
+and failed-return-path behaviour. They document the authorised departure
+changes still needed; they are not operational acceptance tests. Geometry
+tests require the entire train inside a clear headland before handover.
 
 Still required before an operational queue build: engine fleet snapshots,
 ownership/cancellation hooks, crop queries for growing and ripe crops, route
