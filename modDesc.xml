@@ -363,6 +363,13 @@ Changelog 8.1.0.3
 
 		<sourceFile filename="scripts/dev/DevHelper.lua"/>
 
+		<sourceFile filename="scripts/ai/CpUnloaderQueuePolicy.lua"/>
+		<sourceFile filename="scripts/ai/CpUnloaderQueueGeometry.lua"/>
+		<sourceFile filename="scripts/ai/CpUnloaderQueueWorld.lua"/>
+		<sourceFile filename="scripts/ai/CpUnloaderQueueSearch.lua"/>
+		<sourceFile filename="scripts/ai/CpUnloaderQueue.lua"/>
+		<sourceFile filename="scripts/ai/CpUnloaderQueueManoeuvres.lua"/>
+		<sourceFile filename="scripts/ai/CpUnloaderQueueHooks.lua"/>
 	</extraSourceFiles>
 
 	<specializations>

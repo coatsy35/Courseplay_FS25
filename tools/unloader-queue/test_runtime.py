@@ -1,0 +1,338 @@
+"""Integrated queue ownership and real route code at a mocked GIANTS boundary."""
+from pathlib import Path
+import sys
+import unittest
+from lupa.lua52 import LuaRuntime
+
+SOURCE = Path(__file__).resolve().parents[2]
+ROOT = Path(sys.argv.pop(1)).resolve() if len(sys.argv)>1 and not sys.argv[1].startswith('-') else SOURCE
+sys.path.insert(0, str(SOURCE / 'tools/unloader-queue'))
+import test_native_contract as native
+native.ROOT = ROOT
+
+FILES = ['Policy', 'Geometry', 'World', 'Search', '', 'Manoeuvres', 'Hooks']
+
+def load_queue(lua, hooks=True):
+    for suffix in FILES if hooks else FILES[:-1]:
+        lua.execute((ROOT / f'scripts/ai/CpUnloaderQueue{suffix}.lua').read_text())
+
+
+class DisabledContractTests(native.NativeContractTests):
+    """Repeat every native contract through the installed wrappers, disabled."""
+    def setUp(self):
+        super().setUp()
+        self.lua.execute('HeadlandLoopGeometry={}; g_currentMission={time=0}')
+        load_queue(self.lua)
+
+
+class OwnershipTests(unittest.TestCase):
+    def setUp(self):
+        native.NativeContractTests.setUp(self)
+        self.lua.execute('HeadlandLoopGeometry={}; g_currentMission={time=0}')
+        load_queue(self.lua)
+    def test_enabled_missing_marker_retains_cp(self):
+        self.lua.execute('''
+            u.combineToUnload=nil
+            u.settings={unloaderQueue={getValue=function() return true end}}
+            u:startUnloadingTrailers()
+            assert(CpUnloaderQueue.owns(u))
+            assert(u.queueData.operation=='exit')
+            u:onTrailerFull()
+        ''')
+        self.assertNotIn('handover', self.lua.eval('result()'))
+
+    def test_enabled_failed_return_never_grants_handover(self):
+        self.lua.execute('''
+            u.combineToUnload=nil
+            u.settings={unloaderQueue={getValue=function() return true end}}
+            u:onPathfindingDoneToInvertedGoalPositionMarker(nil,false,nil,false)
+            assert(CpUnloaderQueue.owns(u) and u.queueData.operation=='exit')
+        ''')
+        self.assertNotIn('handover', self.lua.eval('result()'))
+
+    def test_queue_call_uses_native_rear_pathfinder(self):
+        self.lua.execute('''
+            u.combineToUnload=nil
+            u.settings={unloaderQueue={getValue=function() return true end}}
+            u.getPipeOffset=function() return 8,2 end
+            u.getCombinesMeasuredBackDistance=function() return 6 end
+            u.isPathfindingNeeded=function(_,vehicle,waypoint,x,z,limit) assert(limit==25); return true end
+            u.setNewState=function(self,state) self.state=state end
+            u.startPathfindingToMovingCombine=function(self,waypoint,x,z)
+                assert(x==8 and z==-11); nativeApproach=true
+            end
+            CpUnloaderQueue.take(u,'prepare')
+            u.queueData.search={}; local generation=u.queueData.generation
+            assert(u:call(c,{})==true)
+            assert(nativeApproach and u.combineToUnload==c)
+            assert(u.state==u.states.WAITING_FOR_PATHFINDER)
+            assert(u.queueData.search==nil and u.queueData.generation>generation)
+        ''')
+
+    def test_exit_is_not_available_to_a_new_native_call(self):
+        self.lua.execute('''
+            u.settings={unloaderQueue={getValue=function() return true end}}
+            CpUnloaderQueue.take(u,'exit')
+            assert(not u:isAllowedToBeCalled())
+            assert(u:call(c,{})==false)
+        ''')
+
+    def test_stale_search_cannot_replace_native_course(self):
+        self.lua.execute('''
+            CpUnloaderQueue.take(u,'prepare')
+            u.queueData.searchGeneration=u.queueData.generation
+            u.state=u.states.BACKING_UP_FOR_REVERSING_COMBINE
+            u.startCourse=function() error('queue overwrote native backup') end
+            CpUnloaderQueue.startRoute(u.queueData,{{x=0,z=0},{x=0,z=10}})
+            assert(u.state==u.states.BACKING_UP_FOR_REVERSING_COMBINE)
+        ''')
+
+    def test_generation_invalidation_blocks_old_completion(self):
+        self.lua.execute('''
+            CpUnloaderQueue.take(u,'prepare')
+            u.queueData.searchGeneration=u.queueData.generation
+            CpUnloaderQueue.cancel(u)
+            u.startCourse=function() error('stale completion applied') end
+            CpUnloaderQueue.startRoute(u.queueData,{{x=0,z=0},{x=0,z=10}})
+        ''')
+
+
+class EngineBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.lua=LuaRuntime(unpack_returned_tuples=True)
+        self.lua.globals().ROOT=ROOT.as_posix()
+        self.lua.execute((SOURCE/'tools/double-pivot/engine-boundary.lua').read_text())
+        load_queue(self.lua, hooks=False)
+        self.lua.execute('''
+            g_currentMission.time=0
+            g_currentMission.vehicleSystem={vehicles={}}
+            getRootNode=function() return 0 end
+            CpUtil.getDefaultCollisionFlags=function() return 255 end
+            densityCount=0; densityTotal=100; cutCount=0; queryCount=0
+            DensityCoordType={POINT_POINT_POINT=1}
+            DensityValueCompareType={GREATER=1,EQUAL=2}
+            DensityMapModifier={new=function()
+                return {setParallelogramWorldCoords=function() end,
+                    executeGet=function(_,filter)
+                        queryCount=queryCount+1
+                        return 0,filter.mode==2 and cutCount or densityCount,densityTotal
+                    end}
+            end}
+            DensityMapFilter={new=function()
+                return {setValueCompareParams=function(self,mode,value) self.mode=mode; self.value=value end}
+            end}
+            g_fruitTypeManager={getFruitTypes=function()
+                return {{terrainDataPlaneId=1,startStateChannel=0,numStateChannels=4,cutStates={[3]=true}}}
+            end}
+            PathfinderUtil.setWorldPositionAndRotationOnTerrain=function(node,x,z,t) node.x=x;node.z=z;node.t=t end
+            collision=0
+            PathfinderCollisionDetector=function()
+                return {collisionMask=255}
+            end
+            overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,object,mask)
+                assert(mask==255); object.collidingShapes=collision
+            end
+            local field={{x=-100,z=-100},{x=100,z=-100},{x=100,z=200},{x=-100,z=200}}
+            v,context,trailer=fixture({single=true,field=field})
+            v.size.length=5
+            trailer.size={width=3,length=6}; trailer.getAIMarkers=nil
+            v.getIsCpActive=function() return true end
+            u={vehicle=v,turningRadius=10,debug=function() end}
+            world=assert(CpUnloaderQueueWorld.new(u))
+            poses=CpUnloaderQueueWorld.poses(world.model)
+        ''')
+
+    def test_single_trailer_uses_real_chain_model(self):
+        self.lua.execute('assert(#world.model.links==1); assert(CpUnloaderQueueWorld.clear(world,poses))')
+
+    def test_unsupported_rig_is_not_approximated(self):
+        self.lua.execute('''
+            trailer.spec_wheels.wheels[1].steering.steeringAxleScale=1
+            local model,reason=CpUnloaderQueueWorld.model(v)
+            assert(not model and reason=='steered implement axle')
+        ''')
+
+    def test_reverse_path_uses_trailer_tracking_node(self):
+        self.lua.execute('''
+            u.ppc={getReverserNode=function() return trailer.steeringAxleNode end}
+            local search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=-20,t=0,reverse=true}))
+            local done,path
+            for i=1,2000 do
+                done,path=CpUnloaderQueueSearch.step(search,4)
+                if done then break end
+            end
+            assert(done and path and path.reverse)
+            assert(math.abs(path[1].trackZ+9.8)<.01)
+            assert(math.abs(path[#path].z+20)<.01)
+            assert(math.abs(path[#path].trackZ+29.8)<.01)
+        ''')
+
+    def test_reverse_unknown_reference_is_rejected(self):
+        self.lua.execute('''
+            u.ppc={getReverserNode=function() return {} end}
+            local search,reason=CpUnloaderQueueSearch.new(world,{x=0,z=-20,t=0,reverse=true})
+            assert(not search and reason=='unsupported reverse tracking node')
+        ''')
+
+    def test_clearance_compares_whole_train_time_in_both_directions(self):
+        self.lua.execute('''
+            u.ppc={getReverserNode=function() return trailer.steeringAxleNode end}
+            u.settings={reverseSpeed={getValue=function() return 10 end}}
+            u.getFieldSpeed=function() return 15 end
+            local G=CpUnloaderQueueGeometry
+            local corridor=G.rectangle({x=0,z=0,heading=0},{width=10,length=5},0)
+            local function accept(poses,model)
+                for i,p in ipairs(poses) do
+                    if G.overlap(CpUnloaderQueueWorld.rectangle(model.bodies[i],p),corridor) then return false end
+                end
+                return true
+            end
+            local search=CpUnloaderQueueSearch.choices(world,{
+                {x=0,z=40,t=0,clearance=corridor,accept=accept},
+                {x=0,z=-10,t=0,reverse=true,clearance=corridor,accept=accept}})
+            local done,path
+            for i=1,5000 do
+                done,path=CpUnloaderQueueSearch.step(search,4)
+                if done then break end
+            end
+            assert(done and path and path.reverse)
+        ''')
+
+    def test_each_search_step_has_bounded_geometry_work(self):
+        self.lua.execute('''
+            local search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))
+            for i=1,100 do
+                local before=queryCount
+                CpUnloaderQueueSearch.step(search,1)
+                assert(queryCount-before<=4)
+            end
+        ''')
+
+    def test_shared_scheduler_advances_only_once_per_frame(self):
+        self.lua.execute('''
+            u.setMaxSpeed=function() end
+            local data=CpUnloaderQueue.take(u,'prepare')
+            data.world=world
+            data.search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))
+            data.searchGeneration=data.generation; data.searchStarted=0
+            u.startCourse=function() error('unexpected completion in two samples') end
+            local ticks=0
+            openIntervalTimer=function() ticks=0; return 1 end
+            readIntervalTimerMs=function() ticks=ticks+1; return ticks end
+            closeIntervalTimer=function() end
+            g_updateLoopIndex=1
+            CpUnloaderQueue.schedule()
+            local work=queryCount
+            CpUnloaderQueue.schedule()
+            assert(queryCount==work)
+            local search=data.search
+            local fake={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
+            g_currentMission.vehicleSystem.vehicles={fake}; g_updateLoopIndex=2
+            CpUnloaderQueue.schedule()
+            assert(queryCount==work and data.search==search)
+        ''')
+
+    def test_growing_crop_rejected(self):
+        self.lua.execute('densityCount=20; assert(not CpUnloaderQueueWorld.clear(world,poses))')
+
+    def test_cut_crop_permitted(self):
+        self.lua.execute('densityCount=20; cutCount=20; assert(CpUnloaderQueueWorld.clear(world,poses))')
+
+    def test_missing_density_rejected(self):
+        self.lua.execute('densityCount=nil; assert(not CpUnloaderQueueWorld.clear(world,poses))')
+
+    def test_empty_density_area_rejected(self):
+        self.lua.execute('densityTotal=0; assert(not CpUnloaderQueueWorld.clear(world,poses))')
+
+    def test_collision_with_other_vehicle_rejected(self):
+        self.lua.execute('collision=1; assert(not CpUnloaderQueueWorld.clear(world,poses))')
+
+    def test_trailer_outside_field_rejected(self):
+        self.lua.execute('poses[2].x=101; assert(not CpUnloaderQueueWorld.clear(world,poses))')
+
+    def test_start_in_crop_does_not_get_free_search_steps(self):
+        self.lua.execute('densityCount=20; assert(not CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))')
+
+    def test_real_direct_search_checks_train_and_finishes_parallel(self):
+        self.lua.execute('''
+            local search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))
+            local done,path
+            for i=1,2000 do
+                done,path=CpUnloaderQueueSearch.step(search,8)
+                if done then break end
+            end
+            assert(done and path and #path>30)
+            assert(math.abs(path[#path].z-30)<1.5)
+            assert(queryCount>100)
+        ''')
+
+    def test_search_cannot_cut_across_exit_corridor(self):
+        self.lua.execute('''
+            local function corridor(rectangle)
+                for _,p in ipairs(rectangle) do if math.abs(p.x)>4 then return false end end
+                return true
+            end
+            local search,reason=CpUnloaderQueueSearch.new(world,{x=20,z=30,t=0},corridor)
+            assert(not search and reason=='outside harvested exit corridor')
+        ''')
+
+    def test_headland_handover_requires_tail_inside(self):
+        self.lua.execute('''
+            local data=CpUnloaderQueue.data(u)
+            data.departure={width=10,headlands={{{x=-50,z=0},{x=50,z=0}}}}
+            assert(not CpUnloaderQueue.canFinishExit(u))
+        ''')
+
+    def test_capture_uses_saved_work_course_and_survives_second_release(self):
+        self.lua.execute('''
+            local course=Course(v,{{x=-50,z=0},{x=0,z=0},{x=50,z=0},
+                {x=0,z=10},{x=0,z=20},{x=0,z=30}},false)
+            course.workWidth=15; course.currentWaypoint=5
+            for i=1,3 do
+                course:getWaypoint(i).attributes:setHeadlandPassNumber(1)
+                course:getWaypoint(i).attributes:setBoundaryId('F')
+            end
+            course:getWaypoint(4).attributes:setRowStart(true)
+            local combine={fieldWorkCourse=course,course={temporary=true}}
+            u.combineToUnload={getIsCpActive=function() return true end,getCpDriveStrategy=function() return combine end}
+            CpUnloaderQueue.capture(u)
+            local saved=assert(u.queueData.departure)
+            assert(#saved.row==2 and saved.row[1].z==10 and saved.row[2].z==20)
+            course.waypoints[4].z=999
+            assert(saved.row[1].z==10)
+            u.combineToUnload=nil; CpUnloaderQueue.capture(u)
+            assert(u.queueData.departure==saved)
+        ''')
+
+    def test_headland_origin_does_not_require_a_previous_centre_row(self):
+        self.lua.execute('''
+            local course=Course(v,{{x=-50,z=0},{x=0,z=0},{x=50,z=0}},false)
+            course.workWidth=15
+            for i=1,3 do
+                course:getWaypoint(i).attributes:setHeadlandPassNumber(1)
+                course:getWaypoint(i).attributes:setBoundaryId('F')
+            end
+            local saved=assert(CpUnloaderQueue.departureFor(course,2))
+            assert(saved.headlandOrigin and #saved.row==1 and #saved.headlands==1)
+            course:getWaypoint(1).attributes:setBoundaryId('I1')
+            course:getWaypoint(2).attributes:setBoundaryId('I1')
+            course:getWaypoint(3).attributes:setBoundaryId('I1')
+            assert(not CpUnloaderQueue.departureFor(course,2))
+        ''')
+
+    def test_ad_connection_requires_correct_headland_and_direction(self):
+        self.lua.execute('''
+            local nodes={{id=1,x=0,z=0,out={2}},{id=2,x=0,z=10,out={}}}
+            FS25_AutoDrive={ADGraphManager={getWayPointById=function(_,i) return nodes[i] end,
+                getWayPointsInRange=function() return {nodes[1]} end,
+                pathFromTo=function() return nodes end}}
+            v.ad={stateModule={getMode=function() return 2 end,getSecondWayPoint=function() return 2 end}}
+            local saved={width=10,headlands={{{x=-50,z=0},{x=50,z=0}}}}
+            assert(CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
+            assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=math.pi},saved))
+            saved.headlands={{{x=-50,z=30},{x=50,z=30}}}
+            assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
+        ''')
+
+
+if __name__=='__main__': unittest.main()

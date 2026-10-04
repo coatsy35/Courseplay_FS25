@@ -134,7 +134,7 @@ and failed-return-path behaviour. They document the authorised departure
 changes still needed; they are not operational acceptance tests. Geometry
 tests require the entire train inside a clear headland before handover.
 
-Still required before an operational queue build: engine fleet snapshots,
+At the foundation milestone, the remaining work was: engine fleet snapshots,
 ownership/cancellation hooks, crop queries for growing and ripe crops, route
 validation for every attachment, straight parking and lag movement, safe
 priority manoeuvres, native-call integration, full harvesting simulations,
@@ -145,6 +145,63 @@ Assert safe geometry and actual transfer progress, not merely state names.
 Where native crop or turn restrictions prevent unloading at the configured
 level, the queue must keep the trailer near the legal entry and preserve the
 restriction. Report the constraint rather than forcing an unsafe approach.
+
+## Operational candidate 2993
+
+Enable **Prepare unloader queue** on each participating CP unloader. It is off
+by default, including existing saves. This is the first integrated candidate,
+not a claim of completed in-game acceptance.
+
+Seven queue modules are loaded through a small hook file. Existing runtime
+files, including both native strategies and every shared solver, remain
+byte-identical to pinned main. The only existing-file changes are the module
+manifest, one setting and its English text. Native crop/readiness checks,
+rear approach, pipe following, combine turns and native reverse clearance
+remain in their original methods.
+
+The runtime takes fleet snapshots once per second, measures transfer progress,
+assigns preparation/successor slots and separates reserved parking targets.
+Queue movement uses a private incremental search, strict growing-crop checks,
+field/island containment and every supported towing link. Native calls cancel
+queue ownership and use their original pathfinder. Stale searches cannot
+replace native courses. Reversing-combine requests retain native backup.
+
+Priority clearance compares validated forward/lateral and straight reverse
+routes by whole-train clearance time. If simple options fail, a bounded queue
+search tries a detour. Native proximity and collision controllers remain
+active. Actual train clearance can release a manoeuvre before its route ends.
+
+Departure captures the saved working course before native release clears the
+combine reference. It returns through that row corridor to the outer headland.
+Resumed full rigs can propose a corridor from their current position on an
+active working course; live crop/geometry validation is still mandatory. Both
+native immediate-finish fallbacks are intercepted. Handover requires all
+bodies on harvested headland, a connected directed AD delivery route and a
+clear local connection. Perimeter nodes just outside the field are supported;
+arbitrary interior nodes and island headlands do not authorise handover. No AD
+task, setting or installed file is changed.
+
+Only one background search advances per frame, with a 2 ms target checked
+between geometry samples; a single engine query can exceed that target. Native
+searches take precedence. Moving rigs retain live body and stopping-horizon
+checks. Background overlap tests do not append to the shared debug-box array.
+Search elapsed time and measured advance cost are different; neither is FPS.
+
+`test_runtime.py` adds engine-boundary coverage for installed disabled hooks,
+native rear-call dispatch, failed/missing exits, ownership and generation
+changes, actual chain modelling, growing/cut/unknown crop states, obstacles,
+route confinement, reverse tracking-node conversion, clearance choice,
+shared scheduling, saved-course capture and AD/headland eligibility. Together
+with the previous suites these exercise 96 queue-related tests in source and
+the extracted ZIP. The full release also runs existing implement-profile,
+headland, pocket, work-entry, double-pivot and packaging checks.
+
+Remaining acceptance is in FS25: vehicle physics and PPC tracking, real crop
+density and collisions, dispatch timings under actual yield, AD pickup/delivery
+and unload modes, and measured frame behaviour with the user's fleet. Unsupported
+attachment geometry, missing course/boundary evidence or an unavailable AD
+connection causes a logged safe wait; it never permits a crop shortcut or a
+mid-field handover. Automated tests cannot establish those engine outcomes.
 
 ## Packaging
 

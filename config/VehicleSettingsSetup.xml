@@ -60,6 +60,7 @@
 		<Setting classType="AIParameterSettingList" name="combineOffsetZ" min="-10" max="10" incremental="0.1" default="0" unit="2"
 				 onChangeCallback="cpShowWorkWidth" isVisible="areCombineUnloaderSettingsVisible" />
 		<!-- Full threshold -->
+		<Setting classType="AIParameterBooleanSetting" name="unloaderQueue" defaultBool="false" isVisible="areCombineUnloaderSettingsVisible" isExpertModeOnly="false"/>
 		<Setting classType="AIParameterSettingList" name="fullThreshold" min="40" max="100" incremental="5" default="85" unit="4" isVisible="areCombineUnloaderSettingsVisible"/>
 		<!--Silage additives needed?-->
 		<Setting classType="AIParameterBooleanSetting" name="useAdditiveFillUnit" defaultBool="false" isVisible="isAdditiveFillUnitSettingVisible" isExpertModeOnly="true"/>
