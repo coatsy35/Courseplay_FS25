@@ -63,7 +63,8 @@ def profiles(runtime):
         cwd=runtime / "scripts/test")
 
 
-def build(number):
+def build(number, *, qualification=check_main_parity, suites=SUITES,
+          stage="main-baseline-no-queue-feature"):
     if number <= 2989:
         raise ValueError("Restart builds must follow the archived build 2989")
     commit = revision()
@@ -74,12 +75,12 @@ def build(number):
     spec = importlib.util.spec_from_file_location("package_mod", ROOT / ".github/scripts/build_mod.py")
     packager = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(packager)
-    check_main_parity(packager)
+    qualification(packager)
     subprocess.run(["git", "diff", "--check", BASE], cwd=ROOT, check=True)
     run("-m", "unittest", "discover", "-s", ".github/scripts", "-p", "test_*.py", "-q")
     check_lua(ROOT)
     profiles(ROOT)
-    for suite in SUITES:
+    for suite in suites:
         run(ROOT / "tools" / suite, "-q")
     staging = ROOT / "out"
     staging.mkdir(exist_ok=True)
@@ -127,7 +128,7 @@ def build(number):
                     ET.fromstring(archive.read(name))
             archive.extractall(extracted)
         check_lua(extracted)
-        for suite in SUITES:
+        for suite in suites:
             run(ROOT / "tools" / suite, extracted, "-q")
         (extracted / "scripts/test").mkdir()
         for name in ("luaunit.lua", "ImplementProfileTest.lua"):
@@ -135,10 +136,10 @@ def build(number):
         profiles(extracted)
         if revision() != commit:
             raise RuntimeError("Source changed during qualification")
-        check_main_parity(packager)
+        qualification(packager)
         data = candidate.read_bytes()
         metadata = {"version": version, "commit": commit, "base": BASE,
-                    "stage": "main-baseline-no-queue-feature",
+                    "stage": stage,
                     "sha256": hashlib.sha256(data).hexdigest()}
         history.mkdir(parents=True)
         (history / NAME).write_bytes(data)
@@ -147,7 +148,7 @@ def build(number):
         staged = latest.with_suffix(".zip.tmp")
         staged.write_bytes(data)
         staged.replace(latest)
-        print(f"PASS: main baseline {version}\n{history / NAME}\nSHA-256: {metadata['sha256']}")
+        print(f"PASS: {stage} {version}\n{history / NAME}\nSHA-256: {metadata['sha256']}")
 
 
 if __name__ == "__main__":

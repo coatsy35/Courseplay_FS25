@@ -33,7 +33,20 @@ function CpUnloaderQueuePolicy.remainingAfterTransfer(trailer, combines)
     return trailer.capacity - expectedFill, finish, expectedFill
 end
 
-local function candidate(trailer, combine, combines, eta)
+local function preparationDeadline(combine, current)
+    if current and current.transferring and finite(current.transferRate) and
+            finite(combine.rate) and combine.rate > 0 and current.transferRate > combine.rate then
+        local finish = combine.fill / (current.transferRate-combine.rate)
+        if current.fill+current.transferRate*finish < current.capacity then
+            -- This tank is covered. Its successor is due for the following tank,
+            -- not ahead of a different combine which is currently filling.
+            return finish+combine.capacity*combine.callPercent/100/combine.rate
+        end
+    end
+    return CpUnloaderQueuePolicy.deadline(combine)
+end
+
+local function candidate(trailer, combine, combines, eta, targetDeadline)
     if not trailer.enabled or trailer.failed or not trailer.compatible[combine.id]
             or trailer.capacity <= 0 or trailer.fill >= trailer.capacity * trailer.departPercent / 100 then
         return nil
@@ -55,7 +68,7 @@ local function candidate(trailer, combine, combines, eta)
         return nil
     end
     local arrival = finish + travel
-    local deadline = CpUnloaderQueuePolicy.deadline(combine)
+    local deadline = targetDeadline or CpUnloaderQueuePolicy.deadline(combine)
     -- A busy trailer must actually be able to meet the next combine's deadline.
     -- At or past the deadline, call an available trailer rather than suppressing it.
     local future = trailer.owner ~= nil or not trailer.available
@@ -64,7 +77,8 @@ local function candidate(trailer, combine, combines, eta)
     end
     return {trailer = trailer.id, combine = combine.id, arrival = arrival,
         future = future, free = free, expectedFill = expectedFill,
-        timely = arrival <= deadline, partial = expectedFill > 0}
+        timely = arrival <= deadline, partial = expectedFill > 0,
+        reserved = trailer.reservedFor == combine.id}
 end
 
 local function better(a, b)
@@ -73,61 +87,47 @@ local function better(a, b)
     -- When both are late, arrival takes precedence over topping up.
     if not a.timely and a.arrival ~= b.arrival then return a.arrival < b.arrival end
     if a.partial ~= b.partial then return a.partial end
+    if a.reserved ~= b.reserved and math.abs(a.arrival-b.arrival) <= 5 then return a.reserved end
     if a.arrival ~= b.arrival then return a.arrival < b.arrival end
     return tostring(a.trailer) < tostring(b.trailer)
 end
 
 function CpUnloaderQueuePolicy.plan(combines, trailers, eta)
-    local byId, ordered, used = {}, {}, {}
+    local byId, byTrailerId, ordered, used = {}, {}, {}, {}
     local plan = {leads = {}, successors = {}, trailers = {}}
     for _, combine in ipairs(combines) do
         byId[combine.id] = combine
         ordered[#ordered + 1] = combine
     end
+    for _, trailer in ipairs(trailers) do byTrailerId[trailer.id] = trailer end
     table.sort(ordered, function(a, b)
-        local da, db = CpUnloaderQueuePolicy.deadline(a), CpUnloaderQueuePolicy.deadline(b)
+        local da, db = preparationDeadline(a,byTrailerId[a.owner]), preparationDeadline(b,byTrailerId[b.owner])
         if da ~= db then return da < db end
+        if not not a.waiting ~= not not b.waiting then return not not a.waiting end
+        if a.fill/a.capacity ~= b.fill/b.capacity then return a.fill/a.capacity > b.fill/b.capacity end
         return tostring(a.id) < tostring(b.id)
     end)
     -- Current native owners are never reassigned. Each can reserve at most one
     -- next combine. Fresh snapshots automatically expire incompatible reservations.
     for _, combine in ipairs(ordered) do
-        if not combine.owner then
+        local current = byTrailerId[combine.owner]
+        local successor = current and (current.capacity-current.fill < combine.fill or
+            (combine.hasMoreWork ~= false and
+                current.fill+combine.fill >= current.capacity*current.departPercent/100))
+        if not combine.owner or successor then
             local best
             for _, trailer in ipairs(trailers) do
-                if not used[trailer.id] then
-                    local option = candidate(trailer, combine, byId, eta)
+                if not used[trailer.id] and (not successor or not trailer.owner) then
+                    local option = candidate(trailer, combine, byId, eta,
+                        successor and preparationDeadline(combine,current) or nil)
                     if option and better(option, best) then best = option end
                 end
             end
             if best then
-                plan.leads[combine.id], plan.trailers[best.trailer] = best, best
+                best.successor = not not successor
+                local targets = successor and plan.successors or plan.leads
+                targets[combine.id], plan.trailers[best.trailer] = best, best
                 used[best.trailer] = true
-            end
-        end
-    end
-    -- Prepare a successor if the current trailer cannot finish the tank, or is
-    -- approaching departure. A successor is preparation, not a second native call.
-    for _, combine in ipairs(ordered) do
-        if combine.owner then
-            local current
-            for _, trailer in ipairs(trailers) do
-                if trailer.id == combine.owner then current = trailer; break end
-            end
-            if current and (current.capacity - current.fill < combine.fill or
-                    current.fill + combine.fill >= current.capacity * current.departPercent / 100) then
-                local best
-                for _, trailer in ipairs(trailers) do
-                    if not used[trailer.id] and not trailer.owner then
-                        local option = candidate(trailer, combine, byId, eta)
-                        if option and better(option, best) then best = option end
-                    end
-                end
-                if best then
-                    best.successor = true
-                    plan.successors[combine.id], plan.trailers[best.trailer] = best, best
-                    used[best.trailer] = true
-                end
             end
         end
     end

@@ -215,6 +215,32 @@ class PolicyTests(unittest.TestCase):
         c2 = self.combine('c2'); c2['fill'] = 17500
         self.assertEqual(self.plan([c1,c2],[self.trailer()]).leads.c2.trailer,'t1')
 
+    def test_waiting_combine_wins_equal_deadline(self):
+        c1 = self.combine(); c1['fill'] = 17000
+        c2 = self.combine('c2',waiting=True); c2['fill'] = 19900
+        p = self.plan([c1,c2],[self.trailer()])
+        self.assertEqual(p.leads.c2.trailer,'t1')
+
+    def test_urgent_successor_not_starved_by_lower_priority_lead(self):
+        c1 = self.combine(owner='t1',waiting=True); c1['fill'] = 19000
+        c2 = self.combine('c2'); c2['fill'] = 4000
+        fleet = [self.trailer(owner='c1',available=False,fill=31000),self.trailer('t2')]
+        p = self.plan([c1,c2],fleet)
+        self.assertEqual(p.successors.c1.trailer,'t2')
+        self.assertIsNone(p.leads.c2)
+
+    def test_end_of_work_does_not_prepare_unneeded_successor(self):
+        c = self.combine(owner='t1',hasMoreWork=False); c['fill'] = 1000
+        p = self.plan([c],[self.trailer(owner='c1',available=False,fill=27000),self.trailer('t2')])
+        self.assertIsNone(p.successors.c1)
+        self.assertTrue(p.trailers.t2.pool)
+
+    def test_existing_reservation_resists_small_eta_fluctuations(self):
+        fleet = [self.trailer(),self.trailer('t2',reservedFor='c1')]
+        for eta in [18,20,22,24]:
+            self.assertEqual(self.plan([self.combine()],fleet,{('t2','c1'):eta}).leads.c1.trailer,'t2')
+        self.assertEqual(self.plan([self.combine()],fleet,{('t2','c1'):60}).leads.c1.trailer,'t1')
+
     def test_mutations_are_detected_by_behavioural_assertions(self):
         source = (ROOT / 'scripts/ai/CpUnloaderQueuePolicy.lua').read_text()
         original = self.policy
