@@ -196,7 +196,8 @@ function Q.refresh()
                     local c={id=id(vehicle),driver=driver,vehicle=vehicle,capacity=total,
                         fill=driver.combineController:getFillLevel(),rate=math.max(0,driver.litersPerSecond or 0),
                         callPercent=driver.settings.callUnloaderPercent:getValue(),waiting=driver:isWaitingForUnload(),
-                        owner=owner and owner.vehicle and id(owner.vehicle),position=W.pose(vehicle:getAIDirectionNode())}
+                        owner=owner and owner.vehicle and id(owner.vehicle),position=W.pose(vehicle:getAIDirectionNode()),
+                        sampleTime=now()}
                     combines[#combines+1]=c; byId[c.id]=c
                 end
             end
@@ -207,11 +208,14 @@ function Q.refresh()
             local total,fill=capacity(driver)
             local elapsed=data.sampleTime and (now()-data.sampleTime)/1000 or 0
             local transfer=elapsed>0 and math.max(0,(fill-(data.lastFill or fill))/elapsed) or 0
+            local owner=driver.combineToUnload and id(driver.combineToUnload)
+            local stableOwner=owner~=nil and data.lastOwner==owner and elapsed>0 and elapsed<=3
             data.sampleTime=now(); data.lastFill=fill
+            data.lastOwner=owner
             local t={id=id(driver.vehicle),driver=driver,capacity=total,fill=fill,enabled=true,
                 departPercent=driver.settings.fullThreshold:getValue(),compatible={},
                 available=driver.state==driver.states.IDLE or (Q.owns(driver) and data.operation=='prepare'),
-                owner=driver.combineToUnload and id(driver.combineToUnload),transferring=transfer>0,
+                owner=owner,transferring=stableOwner and transfer>0,
                 transferRate=transfer,reservedFor=data.assignment and data.assignment.combine,
                 position=W.pose(driver.vehicle:getAIDirectionNode())}
             for _, c in ipairs(combines) do
@@ -223,6 +227,7 @@ function Q.refresh()
             trailers[#trailers+1]=t
         end
     end
+    Q.accountForTransfer(combines,trailers,Q.combines or {})
     Q.plan=P.plan(combines,trailers,function(t,c)
         if not t.compatible[c.id] then return math.huge end
         local _,eta=t.driver:getDistanceAndEteToVehicle(c.vehicle)
@@ -230,6 +235,26 @@ function Q.refresh()
     end)
     Q.combines=byId
     for _, t in ipairs(trailers) do Q.members[t.driver].assignment=Q.plan.trailers[t.id] end
+end
+
+function Q.accountForTransfer(combines,trailers,previous)
+    local unloaders={}
+    for _,trailer in ipairs(trailers) do unloaders[trailer.id]=trailer end
+    for _,combine in ipairs(combines) do
+        local trailer=unloaders[combine.owner]
+        local before=previous[combine.id]
+        if trailer and trailer.transferring then
+            local elapsed=before and (combine.sampleTime-before.sampleTime)/1000 or 0
+            if before and before.owner==combine.owner and elapsed>0 and elapsed<=3 then
+                -- Native litres/second may reset when the tank falls. Conservation
+                -- of grain recovers harvest intake during the measured transfer.
+                combine.rate=math.max(combine.rate,(combine.fill-before.fill)/elapsed+trailer.transferRate,0)
+            else
+                -- An ownership change is not a measured finish-time estimate.
+                trailer.transferring=false
+            end
+        end
+    end
 end
 
 function Q.findUnloader(combine,stopped,waypoint)

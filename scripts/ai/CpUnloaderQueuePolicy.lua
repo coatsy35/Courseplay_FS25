@@ -111,9 +111,14 @@ function CpUnloaderQueuePolicy.plan(combines, trailers, eta)
     -- next combine. Fresh snapshots automatically expire incompatible reservations.
     for _, combine in ipairs(ordered) do
         local current = byTrailerId[combine.owner]
+        local projectedFill=current and current.fill+combine.fill
+        if current and current.transferring and finite(current.transferRate)
+                and current.transferRate>(combine.rate or 0) then
+            projectedFill=current.fill+current.transferRate*combine.fill/(current.transferRate-(combine.rate or 0))
+        end
         local successor = current and (current.capacity-current.fill < combine.fill or
             (combine.hasMoreWork ~= false and
-                current.fill+combine.fill >= current.capacity*current.departPercent/100))
+                projectedFill >= current.capacity*current.departPercent/100))
         if not combine.owner or successor then
             local best
             for _, trailer in ipairs(trailers) do

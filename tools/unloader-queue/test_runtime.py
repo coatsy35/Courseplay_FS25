@@ -96,6 +96,32 @@ class OwnershipTests(unittest.TestCase):
             CpUnloaderQueue.startRoute(u.queueData,{{x=0,z=0},{x=0,z=10}})
         ''')
 
+    def test_transfer_balance_prevents_an_unavailable_future_reservation(self):
+        self.lua.execute('''
+            local combines={
+                {id='a',owner='busy',capacity=20000,fill=18000,rate=0,callPercent=80,sampleTime=1000},
+                {id='b',capacity=10000,fill=1000,rate=50,callPercent=80,sampleTime=1000}}
+            local trailers={
+                {id='busy',owner='a',capacity=32000,fill=7000,departPercent=85,enabled=true,available=false,
+                    compatible={a=true,b=true},transferring=true,transferRate=500},
+                {id='spare',capacity=32000,fill=0,departPercent=85,enabled=true,available=true,compatible={a=true,b=true}}}
+            CpUnloaderQueue.accountForTransfer(combines,trailers,{a={owner='busy',fill=18400,sampleTime=0}})
+            assert(combines[1].rate==100)
+            local plan=CpUnloaderQueuePolicy.plan(combines,trailers,function() return 10 end)
+            assert(plan.leads.b and plan.leads.b.trailer=='spare')
+            assert(not CpUnloaderQueuePolicy.remainingAfterTransfer(trailers[1],{a=combines[1]}))
+            local alone=CpUnloaderQueuePolicy.plan({combines[1]},trailers,function() return 10 end)
+            assert(alone.successors.a and alone.successors.a.trailer=='spare')
+        ''')
+
+    def test_transfer_owner_change_does_not_claim_a_measured_forecast(self):
+        self.lua.execute('''
+            local c={id='a',owner='new',fill=10000,rate=0,sampleTime=1000}
+            local t={id='new',transferring=true,transferRate=500}
+            CpUnloaderQueue.accountForTransfer({c},{t},{a={owner='old',fill=11000,sampleTime=0}})
+            assert(not t.transferring)
+        ''')
+
 
 class EngineBoundaryTests(unittest.TestCase):
     def setUp(self):
