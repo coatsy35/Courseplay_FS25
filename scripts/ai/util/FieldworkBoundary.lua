@@ -10,8 +10,10 @@ end
 
 function FieldworkBoundary.contains(boundary, x, z)
     if not boundary then return true end
+    if boundary.travelBoundary and not FieldworkBoundary.contains(boundary.travelBoundary, x, z) then return false end
     local function inside(px, pz)
-        if not CpMathUtil.isPointInPolygon(boundary.polygon, px, pz) then return false end
+        if not CpMathUtil.isPointInPolygon(boundary.polygon, px, pz) and
+                not (boundary.exitGate and FieldworkBoundary.contains(boundary.exitGate, px, pz)) then return false end
         for _, island in ipairs(boundary.islands) do
             if CpMathUtil.isPointInPolygon(island, px, pz) then return false end
         end
@@ -115,6 +117,15 @@ end
 
 function FieldworkBoundary.boxOutsideDistance(boundary, x, z, heading, box)
     if not boundary then return 0 end
+    if boundary.travelBoundary then
+        local outside = FieldworkBoundary.boxOutsideDistance(boundary.travelBoundary, x, z, heading, box)
+        if outside > 0 then return outside end
+    end
+    -- A departure may cross the edge only through its surveyed access lane. Requiring the
+    -- complete body inside that lane preserves the ordinary concave-field/island checks.
+    if boundary.exitGate and FieldworkBoundary.boxOutsideDistance(boundary.exitGate, x, z, heading, box) == 0 then
+        return 0
+    end
     local geometry = boundaryGeometry(boundary)
     local function inside(px, pz)
         local key = math.floor(px / 32) .. ':' .. math.floor(pz / 32)

@@ -36,7 +36,7 @@ local strategy = setmetatable({
     startCourse = function(_, value, ix) assert(value == course); followedIx = ix end,
     startPathfindingToMovingCombine = function(_, target, x, z) assert(x == 0 and z == 0); pathTarget = target end,
     startWaitingForSomethingToDo = function() released = true end,
-    startUnloadingCombine = function() unloading = true end,
+    startPipeApproachFromPocket = function() unloading = true end,
     setNewState = function(self, state) self.state = state end,
 }, {__index = AIDriveStrategyUnloadCombine})
 
@@ -128,3 +128,177 @@ strategy.state = strategy.states.WAITING_FOR_PATHFINDER
 assert(strategy:onPathfindingDoneToMovingCombine(nil, true, {}) and extensions == 1,
         'Ordinary pipe approaches must retain their original alignment extension')
 print('UnloaderPocketJoinTest: OK')
+
+-- Reproduce the 30 September handover: recovery finished on the harvested centreline,
+-- then PPC was switched directly to a pipe-side course 36 metres away. Exercise the real
+-- last-waypoint dispatcher, stopped handover and alignment predicates in rotated geometry.
+local searched, started
+local pipe = {x = 120, z = -390, heading = 0}
+local tractor = {x = 0, z = 0, heading = 0}
+local function transform(node, x, z)
+    return node.x + math.cos(node.heading) * x + math.sin(node.heading) * z,
+        node.z - math.sin(node.heading) * x + math.cos(node.heading) * z
+end
+localToLocal = function(from, to, x, _, z)
+    local wx, wz = transform(from, x, z)
+    local dx, dz = wx - to.x, wz - to.z
+    return math.cos(to.heading) * dx - math.sin(to.heading) * dz, 0,
+        math.sin(to.heading) * dx + math.cos(to.heading) * dz
+end
+CpMathUtil = {isSameDirection = function(a, b, degrees)
+    return math.cos(a.heading - b.heading) >= math.cos(math.rad(degrees))
+end}
+local pulledBack = false
+local autoAim = false
+local stopped = {isWaitingForUnload = function() return true end,
+    willWaitForUnloadToFinish = function() return true end,
+    isReadyToUnload = function() return true end, hasAutoAimPipe = function() return autoAim end,
+    isWaitingForUnloadAfterPulledBack = function() return pulledBack end}
+local assigned = {rootNode = pipe, lastSpeedReal = 0,
+    getAIDirectionNode = function() return pipe end, getCpDriveStrategy = function() return stopped end}
+Course = {createFromNode = function() return {} end}
+local handover = setmetatable({vehicle = {rootNode = tractor,
+    getAIDirectionNode = function() return tractor end}, combineToUnload = assigned, turningRadius = 9,
+    states = {DRIVING_TO_MOVING_COMBINE = {}, WAITING_FOR_PATHFINDER = {}, UNLOADING_STOPPED_COMBINE = {}},
+    debug = function() end, debugSparse = function() end,
+    getPipeOffset = function() return 12.2, -6.4 end,
+    getPipeOffsetReferenceNode = function() return pipe end,
+    getTargetNode = function(_, target) return target end,
+    getCombinesMeasuredBackDistance = function() return 6.4 end,
+    ppc = {setShortLookaheadDistance = function() end},
+    startCourse = function() started = true end,
+    setNewState = function(self, state) self.state = state end,
+    startPathfindingToWaitingCombine = function(_, x, z)
+        searched = {x = x, z = z}
+    end,
+}, {__index = AIDriveStrategyUnloadCombine})
+local function finishRecovery(x, z, heading, reverse)
+    pipe.heading = heading
+    tractor.x, tractor.z = transform(pipe, x, z)
+    tractor.heading = heading + (reverse and math.pi or 0)
+    handover.state = handover.states.DRIVING_TO_MOVING_COMBINE
+    handover.approachingPocketStandby = true
+    handover.recoveringCombineApproach = true
+    searched, started = nil, false
+    handover:onLastWaypointPassed()
+    assert(handover.combineToUnload == assigned, 'Alignment must retain the called combine')
+end
+for _, heading in ipairs({0, math.pi / 2, math.pi, -math.pi / 2}) do
+    finishRecovery(0, -36.2, heading)
+    assert(searched and not started and handover.state == handover.states.WAITING_FOR_PATHFINDER and
+        searched.x == 12.2 and math.abs(searched.z + 8.4) < 0.001,
+        'A centreline recovery must calculate a pipe approach, not jump 36 metres to the unload course')
+    finishRecovery(0, -24, heading)
+    assert(handover:isOkToStartUnloadingCombine(), 'Reproduce the widening moving-unload tolerance')
+    assert(searched and not started,
+        'The moving-unload tolerance must not authorise a stopped handover from the adjacent row')
+    finishRecovery(12.2, -20, heading)
+    assert(started and not searched and handover.state == handover.states.UNLOADING_STOPPED_COMBINE,
+        'A tractor already in the pipe corridor must retain the immediate approach')
+    finishRecovery(7.2, -21.4, heading)
+    assert(searched and not started, 'A centreline handover must use the normal rear path instead of a lateral correction')
+    finishRecovery(12.2, -20, heading, true)
+    assert(searched and not started, 'Opposite-facing tractor must calculate its approach')
+end
+print('Stopped-combine recovery handover geometry regressions: OK')
+
+pulledBack = true
+finishRecovery(0, -36.2, 0)
+assert(searched and math.abs(searched.z + 16.4) < 0.001,
+    'A pulled-back combine must retain its original target further behind the header')
+pulledBack, autoAim = false, true
+finishRecovery(0, -36.2, 0)
+assert(started and not searched, 'Auto-aim harvesters must retain their existing approach behaviour')
+autoAim = false
+finishRecovery(0, -36.2, 0)
+local releasedFinal = false
+handover.startWaitingForSomethingToDo = function(self)
+    releasedFinal = true
+    self:releaseCombine()
+end
+-- The native registration adapter is mocked; use the real release method to clear call generation and flags.
+assigned.getIsCpActive = function() return false end
+handover.startPathfindingToMovingCombine = function() error('Failed final alignment must not loop back to staging') end
+assert(not handover:onPathfindingDoneToWaitingCombine(nil, false, nil, true))
+assert(releasedFinal and handover.combineToUnload == nil and not handover.stoppedCombineAlignmentSearch and
+    not handover:canRetryCombineApproach(assigned) and handover.failedApproachStagingUntil == 15000,
+    'A blocked final pipe goal must release once and hold through the existing cooldown')
+print('Failed final alignment, pulled-back target and auto-aim compatibility: OK')
+
+-- An initial unaligned approach still gets the existing harvested recovery before final failure releases it.
+handover.combineToUnload = assigned
+handover.combineApproachRecoveryCompleted = nil
+handover.recoveringCombineApproach = nil
+handover.stoppedCombineAlignmentSearch = nil
+searched, started, releasedFinal = nil, false, false
+tractor.x, tractor.z = transform(pipe, 0, -36.2)
+tractor.heading = pipe.heading
+local harvestedRecovery = false
+UnloaderCoordinator.getStagingWaypoint = function(_, combine)
+    assert(combine == assigned)
+    return {x = 110, z = -400}
+end
+handover.startPathfindingToMovingCombine = function(_, waypoint)
+    assert(waypoint.x == 110)
+    harvestedRecovery = true
+end
+handover:startPipeApproachFromPocket()
+assert(searched and not started and not handover.stoppedCombineAlignmentSearch)
+assert(handover:onPathfindingDoneToWaitingCombine(nil, false, nil, true))
+assert(harvestedRecovery and not releasedFinal and handover.combineToUnload == assigned and
+    handover.recoveringCombineApproach and not handover.combineApproachRecoveryCompleted,
+    'An initial checked approach failure must retain the existing harvested recovery')
+-- Finish that actual recovery and fail the final alignment: no second journey to the harvested point.
+harvestedRecovery = false
+handover.state = handover.states.DRIVING_TO_MOVING_COMBINE
+handover:onLastWaypointPassed()
+assert(handover.combineApproachRecoveryCompleted and handover.stoppedCombineAlignmentSearch)
+assert(not handover:onPathfindingDoneToWaitingCombine(nil, false, nil, true))
+assert(releasedFinal and not harvestedRecovery and not handover.recoveringCombineApproach and
+    not handover.combineApproachRecoveryCompleted,
+    'Final failure must release and clear recovery provenance, without another recovery loop')
+print('Initial approach recovery and bounded final retry lifecycle: OK')
+
+-- The ordinary moving entry and offset are base CP's implementation, without a coordinator gate.
+local sourceOffset, follow, followIx = 7.6, nil, nil
+local fieldCourse = {getOffset = function() return sourceOffset end,
+    getCurrentWaypointIx = function() return 100 end}
+function fieldCourse:copy()
+    return {setOffset = function(self, x, z) self.offsetX, self.offsetZ = x, z end}
+end
+stopped.getFieldworkCourse = function() return fieldCourse end
+stopped.getClosestFieldworkWaypointIx = function() return 100 end
+handover.states.UNLOADING_MOVING_COMBINE = {}
+handover.startCourse = function(_, c, ix) follow, followIx = c, ix end
+handover.combineToUnload = assigned
+handover:startCourseFollowingCombine()
+assert(follow and followIx == 100 and math.abs(follow.offsetX - (-12.2 + sourceOffset)) < 0.001,
+    'Stock moving entry must retain its pipe and combine course offsets')
+assert(fieldCourse:getOffset() == 7.6, 'Unloader entry must not alter the combine course offset')
+print('Base CP moving entry and course offsets: OK')
+
+-- A route endpoint alone must not authorise the turn onto the combine's copied working course.
+do
+    local nativeReady, entered, recovered = false, 0, 0
+    local endpoint = setmetatable({combineToUnload = assigned, states = {DRIVING_TO_MOVING_COMBINE = {}},
+        debug = function() end, isOkToStartUnloadingCombine = function() return nativeReady end,
+        startUnloadingCombine = function() entered = entered + 1 end,
+        recoverFromFailedCombineApproach = function() recovered = recovered + 1 end},
+        {__index = AIDriveStrategyUnloadCombine})
+    endpoint.state = endpoint.states.DRIVING_TO_MOVING_COMBINE
+    endpoint:onLastWaypointPassed()
+    assert(entered == 0 and recovered == 1 and endpoint.combineToUnload == assigned,
+        'An unready rendezvous endpoint must retain ownership and recover rather than turn in early')
+    nativeReady = true
+    endpoint:onLastWaypointPassed()
+    assert(entered == 1 and recovered == 1, 'A native-ready endpoint must retain the immediate base CP entry')
+end
+-- Even an apparently aligned stalled follower must perform the checked rear path after clearance.
+handover.combineToUnload = assigned
+tractor.x, tractor.z = transform(pipe, 12.2, -20)
+tractor.heading = pipe.heading
+searched, started = nil, false
+handover:startPipeApproachFromPocket(true)
+assert(searched and not started and handover.stoppedCombineAlignmentSearch,
+    'A stalled recovery must bypass the direct shortcut and mark the checked final alignment as bounded')
+print('Rendezvous endpoint native-entry gate and forced rear retry: OK')

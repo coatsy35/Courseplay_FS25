@@ -18,6 +18,7 @@
 ---@field waitUntilHarvesterPasses boolean|nil Fruit-protected access-point wait.
 ---@field targetMovementThreshold number Metres of target movement needed before retargeting.
 ---@field stagedAtSecondsUntilNeeded number|nil Demand prediction when the current target was selected.
+---@field parkingBay table|nil Oriented whole-rig bay with reserved alignment and departure space.
 ---
 ---@class UnloaderCoordinator
 UnloaderCoordinator = {}
@@ -125,7 +126,17 @@ function UnloaderCoordinator:getStagingWaypoint(harvester, distanceOverride, ref
     if stageIx < minimumIx then
         return nil
     end
-    return course:getWaypoint(stageIx), stageIx
+    -- Shared courses store a centreline; each combine's working lane includes its own offset.
+    -- Waiting on the raw waypoint can put half the trailer in uncut crop between two runs.
+    local waypoint = course:getWaypoint(stageIx)
+    if course.getWaypointPosition then
+        local x,y,z = course:getWaypointPosition(stageIx)
+        local yRot = course:getWaypointYRotation(stageIx)
+        -- Native target-node checks use radians; pathfinder goals use degrees.
+        return {x=x, y=y, z=z, yRot=yRot, angle=math.deg(yRot),
+            getIsReverse=function() return false end}, stageIx
+    end
+    return waypoint, stageIx
 end
 
 ---@param harvester table
@@ -217,8 +228,9 @@ function UnloaderCoordinator:shouldServeHarvesterFirst(unloader, harvester)
     return true
 end
 
---- A nearby combine must not send another rig into the same working corridor while the first is still serving.
---- Once that rig has finished and cleared, the next call can choose it again if it has room, or choose a replacement.
+--- Protect a physically occupied local pipe/turn corridor. A travelling trailer's future service is not coverage:
+--- its first transfer, clearance and second checked approach cannot be promised before another combine's call level.
+--- Separated combines can prepare independent leads; a local replacement still waits for the rig to clear.
 function UnloaderCoordinator:getSharedUnloader(harvester)
     local strategy = self:getHarvesterStrategy(harvester)
     if not strategy or not strategy.alwaysNeedsUnloader or strategy:alwaysNeedsUnloader() then return nil end
@@ -226,28 +238,26 @@ function UnloaderCoordinator:getSharedUnloader(harvester)
     local hx, _, hz = getWorldTranslation(harvester.rootNode)
     for unloader in pairs(AIDriveStrategyUnloadCombine.activeUnloaders or {}) do
         local other = unloader:getCombineToUnload()
-        local clearing = not other and unloader.states and unloader.state == unloader.states.MOVING_BACK and
-                self.clearingUnloaders[unloader.vehicle]
+        local reversing = unloader.states and (unloader.state == unloader.states.MOVING_BACK or
+                unloader.state == unloader.states.MOVING_BACK_WITH_TRAILER_FULL)
+        local clearing = reversing and self.clearingUnloaders[unloader.vehicle]
+        if clearing and other and clearing.harvester ~= other then clearing = nil end
         other = other or clearing and clearing.harvester
         local otherStrategy = other and (other ~= harvester or clearing) and self:getHarvesterStrategy(other)
         if otherStrategy and not otherStrategy:alwaysNeedsUnloader() then
             local x, _, z = getWorldTranslation(other.rootNode)
             local width = math.max(strategy:getWorkWidth(), otherStrategy:getWorkWidth())
             local distance = MathUtil.vector2Length(x - hx, z - hz)
-            local proximity = strategy.fieldWorkerProximityController
-            local otherProximity = otherStrategy.fieldWorkerProximityController
-            local sameCourse = proximity and proximity.hasSameCourse and proximity:hasSameCourse(other) or
-                    otherProximity and otherProximity.hasSameCourse and otherProximity:hasSameCourse(harvester)
-            -- The machines may be separated along a headland yet still converge in the same turn and pipe corridor.
-            local sharingDistance = sameCourse and math.max(250, width * 4) or
-                    math.max(self.minimumPoolDistance, width * 4)
+            local sharingDistance = math.max(width * 2, unloader.getHarvesterTurnClearanceDistance and
+                    unloader:getHarvesterTurnClearanceDistance(other) or width * 3)
             local transferring = unloader.states and (unloader.state == unloader.states.UNLOADING_STOPPED_COMBINE or
                     unloader.state == unloader.states.UNLOADING_MOVING_COMBINE)
             -- A full compatible rig still owns the corridor until it has reversed clear. Capacity decides
             -- the next call after release; using it here would dispatch its replacement into the reverse.
             if distance <= sharingDistance and unloader:isServingPosition(hx, hz, 10) and
                     unloader:canAcceptFillTypeFromHarvester(harvester) and
-                    (transferring or not unloader.isInDeadlock or not unloader:isInDeadlock()) then
+                    (transferring or not unloader.isInDeadlock or not unloader:isInDeadlock()) and
+                    (transferring or reversing) then
                 return unloader
             end
         end
@@ -334,9 +344,7 @@ function UnloaderCoordinator:createDemand(harvester, now)
     local sharedUnloader = self:getSharedUnloader(harvester)
     local activeUnloader = self:getActiveUnloader(harvester)
     local secondsUntilNeeded
-    if sharedUnloader then
-        secondsUntilNeeded = math.huge
-    elseif activeUnloader then
+    if activeUnloader then
         secondsUntilNeeded = self:getSecondsUntilRelief(harvester, strategy, activeUnloader, now)
     elseif isForager then
         secondsUntilNeeded = 0
@@ -421,10 +429,13 @@ end
 ---@param unloader AIDriveStrategyUnloadCombine
 ---@return Waypoint
 function UnloaderCoordinator:getWaypointAtUnloader(unloader)
-    local x, y, z = getWorldTranslation(unloader.vehicle.rootNode)
+    local node = unloader.vehicle.getAIDirectionNode and unloader.vehicle:getAIDirectionNode() or unloader.vehicle.rootNode
+    local x, y, z = getWorldTranslation(node)
     local yRot = 0
-    if getWorldRotation then
-        _, yRot, _ = getWorldRotation(unloader.vehicle.rootNode)
+    if CpMathUtil and CpMathUtil.getNodeDirection then
+        yRot = CpMathUtil.getNodeDirection(node)
+    elseif getWorldRotation then
+        _, yRot, _ = getWorldRotation(node)
     end
     return {
         x = x,
@@ -480,15 +491,16 @@ function UnloaderCoordinator:getStableStagingWaypoint(harvester, role, waypoint,
         local workWidth = demand and demand.harvesterStrategy.getWorkWidth and
                 demand.harvesterStrategy:getWorkWidth() or 0
         local callPercentage = harvester:getCpSettings().callUnloaderPercent:getValue()
-        local atCallPercentage = demand and not demand.isFirm and not demand.activeUnloader and
-                (demand.fillLevelPercentage or 0) >= callPercentage
-        if demand and not atCallPercentage and not self:shouldDeploy(unloader, demand, oldAssignment) then
+        local preparationDue = demand and not demand.isFirm and not demand.activeUnloader and
+                ((demand.fillLevelPercentage or 0) >= callPercentage or
+                    demand.secondsUntilNeeded <= self:getEteToDemand(unloader,demand)+self.combineSafetyMarginSeconds)
+        if demand and not preparationDue and not self:shouldDeploy(unloader, demand, oldAssignment) then
             return oldAssignment.waypoint, oldAssignment.waypointIx
         end
-        local movementBand = atCallPercentage and math.max(15, workWidth) or math.max(50, 2 * workWidth)
+        local movementBand = preparationDue and math.max(15, workWidth) or math.max(50, 2 * workWidth)
         if distance > self:getStandbyDistance(harvester) + movementBand then
-            -- Advance in deliberate hops. Before the call percentage the band is broad; at the call percentage it
-            -- tightens so the lead is genuinely nearby when the combine makes its pocket or requests unloading.
+            -- Advance in deliberate hops. Tighten the band before the configured call,
+            -- when remaining preparation time reaches the travel and safety margin.
             return waypoint, waypointIx
         end
     elseif role == 'STANDBY' and demand and oldAssignment.secondsUntilNeeded and
@@ -734,9 +746,8 @@ function UnloaderCoordinator:createReservedAssignment(unloader, demand, now)
     local oldAssignment = self.assignments[unloader]
     local deploy = oldAssignment and oldAssignment.harvester == demand.harvester and
             oldAssignment.role == 'STANDBY' or self:shouldDeploy(unloader, demand, oldAssignment)
-    -- Combine relief stays in the rear pool until the active rig has left.
-    -- Foragers retain their continuous-feed relief arrangement.
-    if demand.activeUnloader and not demand.isFirm then deploy = false end
+    -- Staging reserves a checked waiting lane, not the pipe. Predictive relief can move there
+    -- while the active rig finishes; the normal call/clearing ownership still protects entry.
     local waypoint, waypointIx, waitUntilHarvesterPasses
     if deploy then
         waypoint, waypointIx = demand.waypoint, demand.waypointIx
@@ -859,6 +870,7 @@ end
 
 ---@param force boolean|nil
 function UnloaderCoordinator:rebalance(force)
+    if self.parkingPlanJob then self:continueParkingPlan(); return end
     local now = getCurrentTime()
     if not force and now < self.nextRebalanceAt then
         return
@@ -868,24 +880,60 @@ function UnloaderCoordinator:rebalance(force)
     local unloaders = self:getAvailableUnloaders()
     local demands = self:getDemands(now)
     local newAssignments = {}
+    local parkingOrder = {}
     local previousAssignments = self.assignments
 
     -- Earliest need gets first choice. Removing each selected trailer prevents duplicate reservations;
-    -- a demand already covered by a shared active rig does not consume another lead.
+    -- Temporary pipe occupancy must not cancel another combine's future lead reservation.
     for _, demand in ipairs(demands) do
         local bestIndex = self:selectReservedUnloaderIndex(unloaders, demand, previousAssignments)
-        if bestIndex and not demand.sharedUnloader then
+        if bestIndex then
             local unloader = table.remove(unloaders, bestIndex)
             newAssignments[unloader] = self:createReservedAssignment(unloader, demand, now)
+            parkingOrder[#parkingOrder + 1] = unloader
         end
     end
 
     local poolCounts = {}
     for _, unloader in ipairs(unloaders) do
         local assignment = self:createPoolAssignment(unloader, demands, poolCounts, previousAssignments, now)
-        if assignment then newAssignments[unloader] = assignment end
+        if assignment then
+            newAssignments[unloader] = assignment
+            parkingOrder[#parkingOrder + 1] = unloader
+        end
+    end
+    if UnloaderParkingPlanner then
+        self.parkingPlanGeneration = self.assignmentGeneration or 0
+        self.parkingPlanJob = UnloaderParkingPlanner.createJob(
+            UnloaderParkingPlanner.planJob(parkingOrder, newAssignments, previousAssignments))
+        self.parkingPreviousAssignments = previousAssignments
+        self:continueParkingPlan()
+        return
     end
     self:applyAssignments(newAssignments, previousAssignments)
+end
+
+-- Keep the old published reservations intact while bays are checked. Publish only a complete plan.
+function UnloaderCoordinator:continueParkingPlan()
+    local job = self.parkingPlanJob
+    if not job then return end
+    if self.parkingPlanGeneration ~= (self.assignmentGeneration or 0) then
+        self.parkingPlanJob, self.parkingPreviousAssignments = nil, nil
+        self.nextRebalanceAt = 0
+        return
+    end
+    local done, assignments = UnloaderParkingPlanner.resumeJob(job)
+    if done then
+        local previous = self.parkingPreviousAssignments
+        self.parkingPlanJob, self.parkingPreviousAssignments = nil, nil
+        for driver, assignment in pairs(assignments) do
+            if driver.isAvailableForStaging and not driver:isAvailableForStaging() or
+                    assignment.harvester.getIsCpActive and not assignment.harvester:getIsCpActive() then
+                assignments[driver] = nil
+            end
+        end
+        self:applyAssignments(assignments, previous)
+    end
 end
 
 ---@param unloader AIDriveStrategyUnloadCombine
@@ -897,6 +945,7 @@ end
 
 ---@param unloader AIDriveStrategyUnloadCombine
 function UnloaderCoordinator:release(unloader)
+    self.assignmentGeneration = (self.assignmentGeneration or 0) + 1
     local assignment = self.assignments[unloader]
     self.assignments[unloader] = nil
     if assignment and unloader.clearStandbyAssignment then
@@ -907,6 +956,7 @@ end
 
 ---@param unloader AIDriveStrategyUnloadCombine
 function UnloaderCoordinator:unregister(unloader)
+    self.assignmentGeneration = (self.assignmentGeneration or 0) + 1
     self.assignments[unloader] = nil
     self.trailerFillSamples[unloader] = nil
     self.nextRebalanceAt = 0
@@ -919,12 +969,23 @@ function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
     local assignment = self.assignments[unloader]
     if assignment and assignment.isFirm and assignment.harvester ~= callingHarvester and
             self:getHarvesterStrategy(assignment.harvester) and self:getRequestedStandbyCount(assignment.harvester) > 0 then
-        return false
+        return false, 'firm forage reservation'
     end
     if assignment and assignment.waitUntilHarvesterPasses and
             (not callingHarvester or not unloader.shouldWaitAtPoolForHarvester or
                     unloader:shouldWaitAtPoolForHarvester(callingHarvester)) then
-        return false
+        local strategy=self:getHarvesterStrategy(callingHarvester)
+        local settings=callingHarvester and callingHarvester:getCpSettings()
+        local needsUnloader=strategy and ((strategy.isWaitingForUnload and strategy:isWaitingForUnload()) or
+            strategy.alwaysNeedsUnloader and strategy:alwaysNeedsUnloader() or
+            strategy.getFillLevelPercentage and settings.callUnloaderPercent and
+                strategy:getFillLevelPercentage()>=settings.callUnloaderPercent:getValue())
+        -- Ahead-of-combine parking prevents speculative staging through crop. A real
+        -- call must still be accepted and use CP's normal checked approach from behind;
+        -- waiting for a stopped combine to pass first otherwise deadlocks both machines.
+        local predictiveCall = strategy and strategy.isPredictiveUnloaderCallDue and
+                strategy:isPredictiveUnloaderCallDue(unloader)
+        if not needsUnloader and not predictiveCall then return false, 'parked until harvester passes' end
     end
     if assignment and assignment.reserved and assignment.harvester ~= callingHarvester and callingHarvester then
         local assignedSeconds = self:getSecondsUntilUncovered(assignment.harvester)
@@ -934,13 +995,92 @@ function UnloaderCoordinator:canBeCalledBy(unloader, callingHarvester)
             self:debug('Keeping %s reserved for %s: downtime in %.1fs versus %.1fs for %s',
                     getVehicleName(unloader.vehicle), getVehicleName(assignment.harvester), assignedSeconds,
                     callingSeconds, getVehicleName(callingHarvester))
-            return false
+            return false, 'reserved for more urgent harvester'
         end
     end
     return true
 end
 
+--- Release only a straight centre-row continuation; turning, pocket and pullback returns keep full clearance.
+function UnloaderCoordinator:canHarvesterAdvanceWhileReversing(unloader, harvester)
+    if not unloader or not unloader.states or not unloader.state or
+            (unloader.state ~= unloader.states.MOVING_BACK and
+             unloader.state ~= unloader.states.MOVING_BACK_WITH_TRAILER_FULL) or
+            not unloader.ppc or not unloader.ppc.isReversing or not unloader.ppc:isReversing() or
+            not FieldworkBoundary or not VehicleRouteConflict then return false end
+    local strategy = harvester and harvester.getCpDriveStrategy and harvester:getCpDriveStrategy()
+    local states = strategy and strategy.states
+    if not states or not ((states.WAITING_FOR_UNLOAD_ON_FIELD and
+            strategy.unloadState == states.WAITING_FOR_UNLOAD_ON_FIELD) or
+            (states.WORKING and strategy.state == states.WORKING)) or
+            not strategy.getFieldworkCourse or not strategy.getClosestFieldworkWaypointIx or
+            not strategy.isTurning or strategy:isTurning() or
+            (strategy.isDischarging and strategy:isDischarging()) then return false end
+    local course, ix = strategy:getFieldworkCourse(), strategy:getClosestFieldworkWaypointIx()
+    if not course or not ix or not course.isOnHeadland or course:isOnHeadland(ix) or
+            not course.isOnConnectingPath or course:isOnConnectingPath(ix) or
+            not course.isReverseAt or course:isReverseAt(ix) or not course.getDistanceToNextTurn or
+            not course.getWaypointYRotation then return false end
+    local untilTurn = course:getDistanceToNextTurn(ix)
+    if not untilTurn or untilTurn <= math.max(20, 2 * strategy:getWorkWidth()) then return false end
+    local rig = FieldworkBoundary.captureRig(harvester)
+    local heading = rig[1].heading
+    if math.cos(heading - course:getWaypointYRotation(ix)) < math.cos(math.rad(5)) then return false end
+    if not course.getWaypointPosition or not course.getNumberOfWaypoints then return false end
+    -- Turn markers do not describe every bend. Verify the actual upcoming centre-row
+    -- segments, including alignment to the lane, before using a straight translation envelope.
+    local previousX, previousZ, covered = nil, nil, false
+    for i = math.max(1, ix - 1), math.min(course:getNumberOfWaypoints(), ix + 32) do
+        if course:isOnHeadland(i) or course:isOnConnectingPath(i) or course:isReverseAt(i) then return false end
+        local x, _, z = course:getWaypointPosition(i)
+        local dx, dz = x - rig[1].x, z - rig[1].z
+        local along = math.sin(heading) * dx + math.cos(heading) * dz
+        if math.abs(math.cos(heading) * dx - math.sin(heading) * dz) > 0.25 then return false end
+        if previousX then
+            local length = MathUtil.vector2Length(x - previousX, z - previousZ)
+            if length > 0.01 and math.cos(math.atan2(x - previousX, z - previousZ) - heading) <
+                    math.cos(math.rad(3)) then return false end
+            if along >= 6 then covered = true; break end
+        end
+        previousX, previousZ = x, z
+    end
+    if not covered then return false end
+    local departingRig = FieldworkBoundary.captureRig(unloader.vehicle)
+    for _, part in ipairs(departingRig) do
+        -- Reversing is clearance only when the train faces along the working row.
+        -- An opposite-facing tractor or folded trailer can move towards the header instead.
+        if math.cos(part.heading - heading) < math.cos(math.rad(15)) then return false end
+    end
+    -- One conservative rectangle per body contains its complete six-metre straight translation.
+    -- Keep two metres of clearance, including the header and every unloader attachment.
+    for _, part in ipairs(rig) do
+        if part.articulated then return false end
+        local side, along = 3 * math.sin(heading - part.heading), 3 * math.cos(heading - part.heading)
+        local box = part.box
+        part.box = {width = box.width + math.abs(side) + 2, length = box.length + math.abs(along) + 2,
+            xOffset = (box.xOffset or 0) + side, zOffset = (box.zOffset or 0) + along}
+    end
+    local x, z = rig[1].x, rig[1].z
+    local pose = {getNumberOfWaypoints = function() return 1 end,
+        getWaypointPosition = function() return x, 0, z end}
+    return not VehicleRouteConflict.findConflict(VehicleRouteConflict.createSweep(rig, pose, 1),
+        departingRig)
+end
+
 --- Clearance ownership survives assignment release and AD takeover until the rig is physically clear.
+function UnloaderCoordinator:hasPhysicalHarvesterClearance(vehicle, harvester)
+    if not FieldworkBoundary or not FieldworkBoundary.captureRig or not VehicleRouteConflict then return true end
+    local rig = FieldworkBoundary.captureRig(harvester)
+    for _, part in ipairs(rig) do
+        local box = part.box
+        part.box = {width = box.width + 2, length = box.length + 2,
+            xOffset = box.xOffset, zOffset = box.zOffset}
+    end
+    local pose = {getNumberOfWaypoints = function() return 1 end}
+    return not VehicleRouteConflict.findConflict(VehicleRouteConflict.createSweep(rig, pose, 1),
+            FieldworkBoundary.captureRig(vehicle))
+end
+
 ---@param unloader AIDriveStrategyUnloadCombine|nil
 ---@param harvester table
 ---@param departingVehicle table|nil ignore only this vehicle's own record when dispatching its next call
@@ -952,7 +1092,15 @@ function UnloaderCoordinator:isStillClearingHarvester(unloader, harvester, depar
         elseif record.harvester == harvester and vehicle ~= departingVehicle then
             local x, _, z = getWorldTranslation(vehicle.rootNode)
             local hx, _, hz = getWorldTranslation(harvester.rootNode)
-            if MathUtil.vector2Length(x - hx, z - hz) < record.distance then return true end
+            local owner = record.unloader
+            local reversing = owner and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy() == owner and
+                    owner.state and owner.states and
+                    (owner.state == owner.states.MOVING_BACK or owner.state == owner.states.MOVING_BACK_WITH_TRAILER_FULL)
+            local properties = reversing and owner.state.properties
+            if (properties and properties.reverseOrigin and not owner:isAtHarvesterClearance()) or
+                    (properties and properties.retryPipeApproach) or
+                    MathUtil.vector2Length(x - hx, z - hz) < record.distance or
+                    not self:hasPhysicalHarvesterClearance(vehicle, harvester) then return true end
             self.clearingUnloaders[vehicle] = nil
         end
     end
@@ -961,5 +1109,5 @@ end
 
 function UnloaderCoordinator:registerClearingUnloader(unloader, harvester, distance)
     if not harvester then return end
-    self.clearingUnloaders[unloader.vehicle] = {harvester = harvester, distance = distance}
+    self.clearingUnloaders[unloader.vehicle] = {harvester = harvester, distance = distance, unloader = unloader}
 end

@@ -632,9 +632,9 @@ function HybridAStar:run(start, goal, turnRadius, allowReverse, constraints, hit
     end
     self.timer = openIntervalTimer()
     while self.openList:size() > 0 and self.iterations < self.maxIterations do
-        -- yield after the configured iterations or after 20 ms
+        -- Ordinary CP keeps its 20 ms slice; coordinated background work uses its smaller shared allowance.
         self.iterationsSinceYield = self.iterationsSinceYield + 1
-        if (self.iterationsSinceYield % self.yieldAfter == 0 or readIntervalTimerMs(self.timer) > 20) then
+        if (self.iterationsSinceYield % self.yieldAfter == 0 or readIntervalTimerMs(self.timer) > (self.constraints.pathfindingSliceMs or 20)) then
             self.yields = self.yields + 1
             closeIntervalTimer(self.timer)
             -- if we had the coroutine package, we would coursePlayCoroutine.yield(false) here

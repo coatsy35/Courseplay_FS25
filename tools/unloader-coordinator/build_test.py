@@ -25,6 +25,9 @@ LUA_REGRESSIONS = (
     "PathfinderTurnTravelTest",
     "VehicleRouteConflictTest",
     "UnloaderPocketJoinTest",
+    "UnloaderParkingPlannerTest",
+    "UnloaderFieldDepartureTest",
+    "UnloaderArrivalDeadlineTest",
 )
 
 

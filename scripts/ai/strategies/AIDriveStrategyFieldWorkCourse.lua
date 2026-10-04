@@ -860,7 +860,7 @@ function AIDriveStrategyFieldWorkCourse:tryResumeGeneratedConnectingPath()
 end
 
 --- Warn parked rigs before finishing the row. Keep harvesting and leave PPC/turn ownership untouched;
---- only an eligible standby unloader physically intersecting the upcoming route receives a request.
+--- only a yielding-capable unloader physically intersecting the upcoming route receives a request.
 function AIDriveStrategyFieldWorkCourse:scoutUpcomingConnectingPath(ix)
     if self.course ~= self.fieldWorkCourse or not (self.vehicle.spec_combine or self.callUnloader) then return end
     local course = self.fieldWorkCourse
@@ -893,8 +893,8 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
             local fieldWorker = other.getIsCpFieldWorkActive and
                     (other:getIsCpFieldWorkActive() or AIUtil.isStopped(other)) and
                     self.fieldWorkerProximityController and self.fieldWorkerProximityController:hasSameCourse(other)
-            -- An assigned unloader is still a physical obstacle. Only the request to move is restricted
-            -- to a staging rig; an active call must not be cancelled merely to clear this connector.
+            -- An assigned unloader is still a physical obstacle. Preparation can yield to a confirmed
+            -- conflict; actual pipe approaches and transfers retain their native ownership.
             local unloader = not workerOnly and otherStrategy and otherStrategy.requestToMoveOutOfWay and
                     otherStrategy.getCombineToUnload
             if unloader and not fieldWorker and liveUnloaderScan then
@@ -955,8 +955,10 @@ function AIDriveStrategyFieldWorkCourse:isConnectingPathBlockedByWorker(course, 
     if parkedUnloader and (not workerProgress or parkedProgress < workerProgress) then
         -- Ask one parked rig at a time to clear the corridor. Its local escape course must not conflict with
         -- another trailer's escape course, and the combine keeps collision checks enabled while it waits.
-        if not parkedUnloader:getCombineToUnload() and parkedUnloader.isAvailableForStaging and
-                parkedUnloader:isAvailableForStaging() then
+        if (not parkedUnloader:getCombineToUnload() and parkedUnloader.isAvailableForStaging and
+                parkedUnloader:isAvailableForStaging()) or
+                (parkedUnloader.canYieldPreparingCallForConnector and
+                parkedUnloader:canYieldPreparingCallForConnector(self.vehicle)) then
             parkedUnloader:requestToMoveOutOfWay(self.vehicle, nil, course)
         end
         self:debug('Connecting path occupied by %s%s; requesting clearance', CpUtil.getName(parkedVehicle),

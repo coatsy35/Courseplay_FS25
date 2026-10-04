@@ -22,7 +22,7 @@ class EntryTests(unittest.TestCase):
         for mirror in (-1, 1):
             for degrees in (0, 37, 90, 192):
                 with self.subTest(mirror=mirror, degrees=degrees):
-                    points, iterations, margin, checks = self.lua.globals().recordedTurnSearch(
+                    points, iterations, margin, checks, _ = self.lua.globals().recordedTurnSearch(
                         degrees, mirror, 'combine', False)
                     self.assertGreater(points, 2)
                     self.assertLess(iterations, 5000)
@@ -32,21 +32,36 @@ class EntryTests(unittest.TestCase):
     def test_recorded_turn_keeps_corner_implement_and_collision_protection(self):
         self.lua.execute((SOURCE / 'tools/straight-entry/turn-pathfinder-fixture.lua').read_text())
         for kind in ('corner', 'tractor'):
-            points, _, margin, _ = self.lua.globals().recordedTurnSearch(0, 1, kind, False)
+            points, _, margin, _, _ = self.lua.globals().recordedTurnSearch(0, 1, kind, False)
             self.assertEqual(points, 0)
             self.assertEqual(margin, 7.6)
-        points, _, margin, checks = self.lua.globals().recordedTurnSearch(0, 1, 'combine', True)
+        points, _, margin, checks, _ = self.lua.globals().recordedTurnSearch(0, 1, 'combine', True)
         self.assertEqual(points, 0)
         self.assertAlmostEqual(margin, 1.975)
         self.assertGreater(checks, 0)
 
     def test_recorded_turn_joins_smooths_and_starts_with_its_lowering_approach(self):
         self.lua.execute((SOURCE / 'tools/straight-entry/turn-pathfinder-fixture.lua').read_text())
-        points, iterations, margin, checks = self.lua.globals().recordedTurnSearch(0, 1, 'combine', False, True)
+        points, iterations, margin, checks, _ = self.lua.globals().recordedTurnSearch(0, 1, 'combine', False, True)
         self.assertGreater(points, 2)
         self.assertLess(iterations, 5000)
         self.assertAlmostEqual(margin, 1.975)
         self.assertGreater(checks, 0)
+
+    def test_recorded_transfer_restores_checked_reverse_without_changing_the_goal(self):
+        self.lua.execute((SOURCE / 'tools/straight-entry/turn-pathfinder-fixture.lua').read_text())
+        for mirror, degrees in ((1, 0), (-1, 37), (1, 90)):
+            with self.subTest(mirror=mirror, degrees=degrees):
+                forward = self.lua.globals().recordedTurnSearch(degrees, mirror, 'combine', False, True, False)
+                restored = self.lua.globals().recordedTurnSearch(degrees, mirror, 'combine', False, True, True)
+                self.assertGreater(restored[0], 2)
+                self.assertGreater(restored[3], 0)  # physical collision checks still run
+                self.assertGreater(restored[4], 0)  # a searched reverse, with its real acceptance callback
+                self.assertLess(restored[1], forward[1])
+                self.assertAlmostEqual(restored[2], 1.975)
+        blocked = self.lua.globals().recordedTurnSearch(0, 1, 'combine', True, True, True)
+        self.assertEqual(blocked[0], 0)  # restoring reverse never disables obstacles
+        self.assertGreater(blocked[3], 0)
 
     def test_short_headland_handover_respects_corner_and_missing_continuation(self):
         self.lua.execute((SOURCE / 'tools/straight-entry/handover-fixture.lua').read_text())

@@ -866,6 +866,30 @@ function AIDriveStrategyCombineCourse:getSecondsUntilUnloaderCall()
     return percentageRemaining * 6
 end
 
+--- Allow the checked rear approach to finish before the configured unloading level.
+--- Ordinary CP retains its five-second reserve; coordinated trailers also need time to leave a bay and align.
+function AIDriveStrategyCombineCourse:getUnloaderArrivalMargin()
+    local standby = self.settings.nearbyStandbyUnloaders
+    return standby and standby:getValue() > 0 and UnloaderCoordinator.combineSafetyMarginSeconds or 5
+end
+
+--- Use CP's measured course prediction, never the coordinator's unknown-rate staging fallback, for a real call.
+function AIDriveStrategyCombineCourse:getUnloaderRendezvousEte(ix)
+    if not ix then return nil end
+    local speed = self.vehicle:getSpeedLimit(true)
+    if speed <= 0 or speed >= 100 then return nil end
+    return self.course:getDistanceBetweenWaypoints(ix, self.course:getCurrentWaypointIx()) / (speed / 3.6)
+end
+
+--- A parked trailer ahead of the combine must remain callable when departure is needed to meet the deadline.
+--- Accepting this call still uses CP's normal collision-checked target behind the combine.
+function AIDriveStrategyCombineCourse:isPredictiveUnloaderCallDue(unloader)
+    local ete = self:getUnloaderRendezvousEte(self.waypointIxWhenCallUnloader)
+    if not ete then return false end
+    local _, trailerEte = unloader:getDistanceAndEteToWaypoint(self.course:getWaypoint(self.waypointIxWhenCallUnloader))
+    return trailerEte + self:getUnloaderArrivalMargin() >= ete
+end
+
 --- Estimated seconds until the harvester tank is full. Unlike the normal call estimate, this remains useful after
 --- the configured call percentage has been passed and lets the fleet coordinator prioritise imminent downtime.
 ---@return number
@@ -963,16 +987,6 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
         return
     end
 
-    -- With a coordinator lead available, movement before the configured percentage is staging only. Keep that lead
-    -- parked nearby and preserve the vehicle setting as the actual promotion point.
-    local coordinatedStandby = self.settings.nearbyStandbyUnloaders and
-            self.settings.nearbyStandbyUnloaders:getValue() > 0
-    if coordinatedStandby and not self:alwaysNeedsUnloader() and not self:isWaitingForUnload() and
-            self.combineController:getFillLevelPercentage() < self.settings.callUnloaderPercent:getValue() then
-        self:debug('callUnloaderWhenNeeded: lead is staged; waiting for configured call percentage')
-        return
-    end
-
     local bestUnloader, bestEte
     if self:isWaitingForUnload() then
         self:debug('callUnloaderWhenNeeded: stopped, need unloader here')
@@ -1005,10 +1019,9 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
         bestUnloader, bestEte = self:findUnloader(nil, self.course:getWaypoint(tentativeRendezvousWaypointIx))
         -- getSpeedLimit() may return math.huge (inf), when turning for example, not sure why, and that throws off
         -- our ETE calculation
-        if bestUnloader and self.vehicle:getSpeedLimit(true) < 100 then
-            local dToUnloadWaypoint = self.course:getDistanceBetweenWaypoints(tentativeRendezvousWaypointIx,
-                    self.course:getCurrentWaypointIx())
-            local myEte = dToUnloadWaypoint / (self.vehicle:getSpeedLimit(true) / 3.6)
+        local myEte = self:getUnloaderRendezvousEte(tentativeRendezvousWaypointIx)
+        if bestUnloader and myEte then
+            local arrivalMargin = self:getUnloaderArrivalMargin()
             self:debug('callUnloaderWhenNeeded: best unloader ETE at waypoint %d %.1fs, my ETE %.1fs',
                     tentativeRendezvousWaypointIx, bestEte, myEte)
             if bestEte - 5 > myEte then
@@ -1017,22 +1030,27 @@ function AIDriveStrategyCombineCourse:callUnloaderWhenNeeded()
                 -- So, set something up further away, with better chances,
                 -- using the unloader's ETE, knowing that 1) that ETE is for the current rendezvous point, 2) there
                 -- may be another unloader selected for that waypoint
-                local dToTentativeRendezvousWaypoint = bestEte * (self.vehicle:getSpeedLimit(true) / 3.6)
+                local dToTentativeRendezvousWaypoint = math.min(bestEte, self:getSecondsUntilFull()) *
+                        (self.vehicle:getSpeedLimit(true) / 3.6)
                 self:debug('callUnloaderWhenNeeded: too close to rendezvous waypoint, trying move it %.1fm',
                         dToTentativeRendezvousWaypoint)
                 tentativeRendezvousWaypointIx = self.course:getNextWaypointIxWithinDistance(
                         self.course:getCurrentWaypointIx(), dToTentativeRendezvousWaypoint)
+                tentativeRendezvousWaypointIx = tentativeRendezvousWaypointIx and
+                        self:findBestWaypointToUnload(tentativeRendezvousWaypointIx, false)
                 if tentativeRendezvousWaypointIx then
                     bestUnloader, bestEte = self:findUnloader(nil, self.course:getWaypoint(tentativeRendezvousWaypointIx))
                     if bestUnloader then
                         self:callUnloader(bestUnloader, tentativeRendezvousWaypointIx, bestEte)
                     end
                 else
-                    self:debug('callUnloaderWhenNeeded: still can\'t find a good waypoint to meet the unloader')
+                    self:callLeadForPocketWhenNeeded()
                 end
-            elseif coordinatedStandby or bestEte + 5 > myEte then
-                -- do not call too early (like minutes before we get there), only when it needs at least as
-                -- much time to get there as the combine (-5 seconds)
+            elseif bestEte + arrivalMargin >= myEte then
+                -- The percentage is the arrival deadline, not the departure trigger. A nearby parked trailer
+                -- stays parked until travel plus the approach reserve consumes the remaining time.
+                self:debug('Unloader departure due: %.1fs travel + %.1fs approach reserve, %.1fs to rendezvous',
+                        bestEte, arrivalMargin, myEte)
                 self:callUnloader(bestUnloader, tentativeRendezvousWaypointIx, bestEte)
             end
         end
@@ -1060,16 +1078,22 @@ function AIDriveStrategyCombineCourse:dispatchUnloaderForCurrentFill(unloader, e
 end
 
 --- A first-headland restriction prevents unloading alongside; it must not suppress the unloader call itself. Call
---- the stable lead at the configured percentage, then let it follow behind until the combine makes its pocket.
+--- the stable lead in time for the configured percentage, then let it follow behind until CP permits pipe entry.
 ---@return boolean true when a lead accepted the call
 function AIDriveStrategyCombineCourse:callLeadForPocketWhenNeeded()
-    if self.combineController:getFillLevelPercentage() < self.settings.callUnloaderPercent:getValue() then
-        return false
+    local due = self.combineController:getFillLevelPercentage() >= self.settings.callUnloaderPercent:getValue()
+    local ete = self:getUnloaderRendezvousEte(self.waypointIxWhenCallUnloader)
+    if not due and not ete then return false end
+    local bestUnloader, trailerEte
+    if due then
+        bestUnloader, trailerEte = self:findUnloader(self.vehicle, nil)
+    else
+        bestUnloader, trailerEte = self:findUnloader(nil, self.course:getWaypoint(self.waypointIxWhenCallUnloader))
     end
-    local bestUnloader = self:findUnloader(self.vehicle, nil)
     if not bestUnloader then
         return false
     end
+    if not due and trailerEte + self:getUnloaderArrivalMargin() < ete then return false end
     local strategy = bestUnloader:getCpDriveStrategy()
     return strategy.callForPocket and strategy:callForPocket(self.vehicle) or false
 end
@@ -1141,15 +1165,23 @@ function AIDriveStrategyCombineCourse:trySwitchToCloserUnloader(assignedUnloader
         course, currentIx = self:getFieldworkCourse(), self:getClosestFieldworkWaypointIx()
         if not course or not currentIx then return false end
     end
-    if not assignedUnloader:yieldCallToCloserUnloader(self.vehicle, assignedIsStuck) then
+    local replacement = bestUnloader:getCpDriveStrategy()
+    -- A rejected pocket/approach must not cancel the existing call or discard its route search.
+    -- Acceptance is synchronous; install the new registration before releasing the old owner so
+    -- its deregistration cannot cancel the newly accepted rendezvous.
+    local accepted
+    if waitingForUnload then accepted = replacement:call(self.vehicle, nil)
+    else accepted = self:dispatchUnloaderForCurrentFill(bestUnloader, bestEte) end
+    if not accepted or replacement.getCombineToUnload and replacement:getCombineToUnload() ~= self.vehicle then
+        -- A synchronous pathfinder failure can release the accepted call before call() returns.
         return false
     end
+    self:registerUnloader(replacement)
+    assignedUnloader:yieldCallToCloserUnloader(self.vehicle, assignedIsStuck)
     self:debug('Switching from %s (ETE %.1fs%s) to %s (ETE %.1fs)',
             CpUtil.getName(assignedUnloader.vehicle or assignedUnloader), assignedEte,
             assignedIsStuck and ', stuck' or '', CpUtil.getName(bestUnloader), bestEte)
-    local replacement = bestUnloader:getCpDriveStrategy()
-    if waitingForUnload then return replacement:call(self.vehicle, nil) end
-    return self:dispatchUnloaderForCurrentFill(bestUnloader, bestEte)
+    return true
 end
 
 ---@param vehicle table
@@ -1181,7 +1213,8 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
             -- or when starting.
             if driveStrategy:isServingPosition(x, z, 10) then
                 local unloaderFillLevelPercentage = driveStrategy:getFillLevelPercentage()
-                if driveStrategy:isAllowedToBeCalled(self.vehicle) and unloaderFillLevelPercentage < 99 and
+                local allowed, callBlockReason=driveStrategy:isAllowedToBeCalled(self.vehicle)
+                if allowed and unloaderFillLevelPercentage < 99 and
                         UnloaderCoordinator:shouldServeHarvesterFirst(driveStrategy, self.vehicle) then
                     local unloaderDistance, unloaderEte
                     if combine then
@@ -1202,7 +1235,11 @@ function AIDriveStrategyCombineCourse:findUnloader(combine, waypoint)
                         bestEte = unloaderEte
                     end
                 else
-                    self:debug('findUnloader: %s serving my field but already busy', CpUtil.getName(vehicle))
+                    local reason=not allowed and (callBlockReason or 'call unavailable') or
+                        unloaderFillLevelPercentage>=99 and 'trailer at least 99% full' or 'shared corridor or harvester priority'
+                    self:debug('findUnloader: %s unavailable (%s), state %s, fill %.1f', CpUtil.getName(vehicle),
+                        reason, tostring(driveStrategy.state and driveStrategy.state.name or driveStrategy.state),
+                        unloaderFillLevelPercentage)
                 end
             else
                 self:debug('findUnloader: %s is not serving my field', CpUtil.getName(vehicle))

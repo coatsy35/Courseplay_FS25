@@ -304,6 +304,19 @@ local advancedStandbyWaypoint = UnloaderCoordinator:getStableStagingWaypoint(pro
 assert(advancedStandbyWaypoint.x == -50,
         'A reached lead must advance from a distant stop when its combine reaches the call percentage')
 
+progressiveTrailer.x=-80
+progressionDemand.fillLevelPercentage=70
+progressionDemand.secondsUntilNeeded=20
+local readyPoint={x=-50,z=0}
+assert(UnloaderCoordinator:getStableStagingWaypoint(progressionCombine,'STANDBY',readyPoint,950,
+        standbyAssignment,progressiveTrailer,progressionDemand)==readyPoint,
+        'A reached lead must move closer before the call when remaining preparation time is short')
+progressionDemand.secondsUntilNeeded=300
+assert(UnloaderCoordinator:getStableStagingWaypoint(progressionCombine,'STANDBY',readyPoint,950,
+        standbyAssignment,progressiveTrailer,progressionDemand)==promotedWaypoint,
+        'Earlier deliberate parking must retain its wider movement band instead of following constantly')
+progressiveTrailer.x=-200
+progressionDemand.fillLevelPercentage=80
 local accessPointTrailer = makeUnloader('Access-point trailer', -110, true, nil, 0)
 local accessPointAssignment = {
     harvester = progressionCombine,
@@ -356,6 +369,14 @@ predictive:getCpDriveStrategy().getClosestFieldworkWaypointIx = function() retur
 assert(UnloaderCoordinator:getPredictedStagingWaypoint(predictive, predictive:getCpDriveStrategy(), 20) == nil,
         'Starting a temporary pocket course without a passed waypoint must not crash fleet staging')
 print('Fleet reservation, capacity and prediction regressions: OK')
+
+local offsetHarvester=makeHarvester('Offset lane',0,false,30,0)
+local offsetCourse=offsetHarvester:getCpDriveStrategy():getFieldworkCourse()
+offsetCourse.getWaypointPosition=function(_,ix) return 7.6,0,ix end
+offsetCourse.getWaypointYRotation=function() return 0 end
+local actualLane=UnloaderCoordinator:getStagingWaypoint(offsetHarvester)
+assert(actualLane.x==7.6 and actualLane.z==950,
+        'Staging must use the combine\'s actual working lane rather than the shared raw centreline')
 
 -- Coverage, not the still-full tank of a served combine, determines who gets the remaining trailer.
 local covered = makeHarvester('Covered full combine', 0, false, 0, 0, 0, 100)
@@ -427,6 +448,18 @@ assert(not UnloaderCoordinator:canBeCalledBy(aheadTrailer, fleetHarvesters[1]),
         'An ahead trailer must retain its fruit-protected wait for a harvester that has not passed')
 assert(UnloaderCoordinator:canBeCalledBy(aheadTrailer, fleetHarvesters[2]),
         'A wait for one harvester must not exclude a safe call from another that has already passed')
+local waitingStrategy=fleetHarvesters[1]:getCpDriveStrategy()
+waitingStrategy.isWaitingForUnload=function() return true end
+assert(UnloaderCoordinator:canBeCalledBy(aheadTrailer,fleetHarvesters[1]),
+        'A parked trailer ahead must accept a stopped combine call instead of waiting for it to pass')
+waitingStrategy.isWaitingForUnload=function() return false end
+local originalFill=waitingStrategy.getFillLevelPercentage
+waitingStrategy.getFillLevelPercentage=function() return 80 end
+assert(UnloaderCoordinator:canBeCalledBy(aheadTrailer,fleetHarvesters[1]),
+        'An actual configured 80% call must take precedence over speculative ahead-of-combine parking')
+waitingStrategy.getFillLevelPercentage=originalFill
+assert(not UnloaderCoordinator:canBeCalledBy(aheadTrailer,fleetHarvesters[1]),
+        'Removing the actual demand must preserve the parked hold before the combine passes')
 print('Fleet coverage, call timing and parked-lead acceptance regressions: OK')
 
 -- Reproduce the follower claiming a newly available nearby trailer before the full lead's update runs.
@@ -455,6 +488,8 @@ assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, lead) and
         not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
         'One recorded convoy trail must establish the same priority from both callers')
 local servingLead = makeUnloader('Serving lead', 200, false, lead, 0)
+servingLead.states={UNLOADING_STOPPED_COMBINE={}}
+servingLead.state=servingLead.states.UNLOADING_STOPPED_COMBINE
 AIDriveStrategyUnloadCombine.activeUnloaders[servingLead] = servingLead.vehicle
 assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
         'The follower must not send a second trailer into the lead trailer’s working corridor')
@@ -489,6 +524,8 @@ assert(clearedWaypoint.x == justCleared.vehicle.rootNode.x,
 PathfinderUtil.hasFruit = function() return false end
 print('Parked spare does not backtrack: OK')
 
+servingLead.states={UNLOADING_STOPPED_COMBINE={}}
+servingLead.state=servingLead.states.UNLOADING_STOPPED_COMBINE
 -- Two nearby combines share a rig that can finish its current tank and still take more crop.
 lead.rootNode.x = 200
 leadStrategy.combineController = {getFillLevel = function() return 10000 end}
@@ -496,25 +533,35 @@ leadStrategy.litersPerSecond = 0
 servingLead.getFreeCapacityForHarvester = function() return 25000 end
 AIDriveStrategyUnloadCombine.activeUnloaders = {[servingLead] = servingLead.vehicle, [freeTrailer] = freeTrailer.vehicle}
 lead.rootNode.x = 380
-assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
-        'The same-course sharing corridor must extend beyond the old 100 m cutoff')
-assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
-        'Combines on the same headland must share the serving trailer before they converge at a corner')
+assert(not UnloaderCoordinator:getSharedUnloader(follower),
+        'A shared future corner must not reserve the whole headland for a distant transferring rig')
+assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
+        'Separated combines on the same headland must prepare their independent leads')
 lead.rootNode.x = 200
 g_currentMission.vehicleSystem.vehicles = {lead, follower}
 UnloaderCoordinator.assignments = {}
 assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
         'Nearby follower must wait for the shared rig instead of calling a second trailer')
 assert(UnloaderCoordinator:createDemand(follower, g_currentMission.time).sharedUnloader == servingLead)
+assert(UnloaderCoordinator:createDemand(follower,g_currentMission.time).secondsUntilNeeded < math.huge,
+        'Shared pipe occupancy must not erase the follower\'s predicted staging deadline')
 UnloaderCoordinator:rebalance(true)
-assert(freeTrailer.assignment.role == 'POOL', 'Relief stays well back even when both combines need unloading')
+assert(freeTrailer.assignment.role == 'STANDBY',
+        'Temporary shared pipe occupancy must not cancel the follower\'s predictive lead')
 servingLead.getFreeCapacityForHarvester = function() return 5000 end
 assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
         'Remaining capacity alone must not summon another trailer before the lead has finished')
 UnloaderCoordinator:rebalance(true)
-assert(freeTrailer.assignment.role == 'POOL', 'Urgent combine relief must not enter close standby while the pipe is occupied')
-assert(math.abs(freeTrailer.assignment.waypoint.x - lead.rootNode.x) >= UnloaderCoordinator.minimumPoolDistance,
-        'Even urgent relief must park outside the rear pool clearance')
+assert(freeTrailer.assignment.role == 'STANDBY',
+        'Urgent relief must be permitted to approach a checked waiting bay before the lead departs')
+assert(not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer,follower),
+        'Approaching standby must still not grant pipe entry while the active rig occupies the corridor')
+local urgentRelief=UnloaderCoordinator:createReservedAssignment(freeTrailer,
+    {harvester=lead,harvesterStrategy=leadStrategy,activeUnloader=servingLead,isFirm=false,
+        secondsUntilNeeded=0,secondsUntilDowntime=0,fillLevelPercentage=90,
+        waypoint={x=150,z=0},waypointIx=950},g_currentMission.time)
+assert(urgentRelief.role=='STANDBY',
+        'The successor must move closer before an insufficient active trailer finishes filling')
 servingLead.getFreeCapacityForHarvester = function() return 25000 end
 lead.rootNode.x = 2000
 assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
@@ -525,7 +572,7 @@ assert(UnloaderCoordinator:getSecondsUntilRelief(lead, leadStrategy, servingLead
         'Rapid pipe transfer must not predict that a sufficient trailer needs immediate replacement')
 leadStrategy.litersPerSecond = 50
 assert(UnloaderCoordinator:getSecondsUntilRelief(lead, leadStrategy, servingLead, g_currentMission.time) == 300)
-print('Shared combine trailer, rear relief and crop-rate regressions: OK')
+print('Shared pipe ownership, predictive relief and crop-rate regressions: OK')
 
 servingLead.getCombineToUnload = function() return nil end
 servingLead.states = {MOVING_BACK = {}}
@@ -540,19 +587,53 @@ servingLead.state = {}
 assert(not UnloaderCoordinator:getSharedUnloader(follower), 'Clearance coverage ends when reversing ends')
 print('Partial-load clearance and blocked coverage regressions: OK')
 
--- A shared rig travelling to the first nearby combine must not be rejected just because
--- its current journey estimate to the second exceeds the staging margin.
+followerStrategy.isWaitingForUnload=function() return false end
+-- A travelling rig cannot suppress a different combine whose tank will fill before it arrives.
 servingLead.state = {}
 servingLead.getCombineToUnload = function() return lead end
 servingLead.getDistanceAndEteToVehicle = function() return 300, 70 end
 UnloaderCoordinator.clearingUnloaders[servingLead.vehicle] = nil
-assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
-        'The active rig must cover an adjacent combine throughout its first journey')
+assert(UnloaderCoordinator:getSharedUnloader(follower)==nil,
+        'A distant travelling rig must not monopolise a near-full adjacent combine')
+assert(UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer,follower),
+        'An urgent uncovered combine must be able to call its own compatible standby trailer')
+local oldDeadline=followerStrategy.getSecondsUntilFull
+followerStrategy.getSecondsUntilFull=function() return 300 end
+assert(not UnloaderCoordinator:getSharedUnloader(follower),
+        'Arriving before 100% full is insufficient when the configured unloading deadline is sooner')
+assert(not UnloaderCoordinator:getSharedUnloader(follower),
+        'Travel alone cannot promise completion of the first unload, clearance and the second approach')
+local previousFirstController=leadStrategy.combineController
+local previousCallerController=followerStrategy.combineController
+local previousFirstRate=leadStrategy.litersPerSecond
+leadStrategy.combineController={getFillLevel=function() return 10000,20000 end}
+followerStrategy.combineController={getFillLevel=function() return 5000,20000 end}
+leadStrategy.litersPerSecond=100
+assert(not UnloaderCoordinator:getSharedUnloader(follower),
+        'The first tank can grow during a journey; current tank sizes alone must not promise shared capacity')
+leadStrategy.combineController,followerStrategy.combineController=previousFirstController,previousCallerController
+leadStrategy.litersPerSecond=previousFirstRate
+followerStrategy.isWaitingForUnload=function() return true end
+assert(not UnloaderCoordinator:getSharedUnloader(follower),
+        'A stopped combine needs immediate service even when its fill-time estimator is long')
+followerStrategy.isWaitingForUnload=function() return false end
+local originalController=followerStrategy.combineController
+followerStrategy.combineController={getFillLevel=function() return 20000 end}
+assert(not UnloaderCoordinator:getSharedUnloader(follower),
+        'A travelling rig with insufficient space after its first combine must not cover a second tank')
+followerStrategy.combineController=originalController
+followerStrategy.getSecondsUntilFull=oldDeadline
 servingLead.states.UNLOADING_STOPPED_COMBINE = {}
 servingLead.state = servingLead.states.UNLOADING_STOPPED_COMBINE
 servingLead.isInDeadlock = function() return true end
 assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead,
         'A temporary hold during transfer must not release the nearby corridor to a second trailer')
+lead.rootNode.x=300
+followerStrategy.fieldWorkerProximityController={hasSameCourse=function() return true end}
+assert(not UnloaderCoordinator:getSharedUnloader(follower),
+        'An active transfer further along the same course must not suppress an independent prepared lead')
+lead.rootNode.x=200
+followerStrategy.fieldWorkerProximityController=nil
 servingLead.isInDeadlock = nil
 print('Adjacent combine shares en-route active trailer: OK')
 
@@ -575,7 +656,12 @@ assert(UnloaderCoordinator:getSharedUnloader(follower) == servingLead and
         not UnloaderCoordinator:shouldServeHarvesterFirst(freeTrailer, follower),
         'A full compatible rig must retain corridor ownership until its reverse clearance finishes')
 servingLead.getCombineToUnload = function() return nil end
-assert(UnloaderCoordinator:getSharedUnloader(follower) == nil,
+UnloaderCoordinator.clearingUnloaders[servingLead.vehicle]={harvester=lead,distance=60}
+assert(UnloaderCoordinator:getSharedUnloader(follower)==servingLead,
+        'A released full rig must retain recorded ownership throughout its physical reverse clearance')
+servingLead.state={}
+UnloaderCoordinator.clearingUnloaders[servingLead.vehicle]=nil
+assert(UnloaderCoordinator:getSharedUnloader(follower)==nil,
         'Once the full lead has cleared, ordinary harvester priority may select its replacement')
 
 -- Rebalancing must not revoke an assignment while its rig is still clearing a connector.
@@ -630,3 +716,66 @@ UnloaderCoordinator.assignments = oldPlan
 UnloaderCoordinator:rebalance(true)
 assert(notified == 3, 'The complete plan must be delivered to each retained or newly assigned driver')
 print('Fleet plan publication and clearance retention: OK')
+
+-- Live 3 October pocket calls passed an offset staging point without yRot to the native
+-- target-node check. Exercise the real producer and consumer, including helper-node reuse.
+function CpObject() return {} end
+AIDriveStrategyCourse = {}
+dofile('scripts/ai/strategies/AIDriveStrategyUnloadCombine.lua')
+CpUtil.createNode = function(_, x, z, heading)
+    assert(type(heading) == 'number', 'Staging target creation needs a numeric heading')
+    return {x = x, z = z, heading = heading}
+end
+function setTranslation(target, x, y, z)
+    assert(type(y) == 'number')
+    target.x, target.y, target.z = x, y, z
+end
+function setRotation(target, x, heading, z)
+    assert(type(heading) == 'number', 'Native setRotation must not receive a nil staging heading')
+    target.heading = heading
+end
+function localToLocal(target, origin, x, y, z)
+    local wx = target.x + x * math.cos(target.heading) + z * math.sin(target.heading)
+    local wz = target.z - x * math.sin(target.heading) + z * math.cos(target.heading)
+    local dx, dz = wx - origin.x, wz - origin.z
+    return dx * math.cos(origin.heading) - dz * math.sin(origin.heading), y,
+        dx * math.sin(origin.heading) + dz * math.cos(origin.heading)
+end
+CpMathUtil = {isSameDirection = function(a, b)
+    return math.cos(a.heading - b.heading) > math.cos(math.rad(30))
+end}
+offsetHarvester:getCpDriveStrategy().isWaitingForUnload = function() return false end
+UnloaderCoordinator.assignments = {}
+local tractorNode = {x = -100, z = 0, heading = 0}
+local pocketTarget, followed
+local pocket = setmetatable({
+    vehicle = {getAIDirectionNode = function() return tractorNode end},
+    states = {WAITING_FOR_PATHFINDER = {}},
+    debug = function() end,
+    beginCombineCall = function(self, harvester) self.combineToUnload = harvester end,
+    queueForDeparture = function() return false end,
+    holdNearbyStandbyUnloadersForDeparture = function() end,
+    setNewState = function(self, state) self.state = state end,
+    startPathfindingToMovingCombine = function(_, point) pocketTarget = point end,
+    startFollowingCombineToPocket = function() followed = true end,
+}, {__index = AIDriveStrategyUnloadCombine})
+for _, heading in ipairs({0, math.pi / 2, math.pi, -math.pi / 2}) do
+    offsetCourse.getWaypointYRotation = function() return heading end
+    tractorNode.x, tractorNode.z, tractorNode.heading = -100, 0, heading
+    pocketTarget, followed = nil, false
+    assert(pocket:callForPocket(offsetHarvester))
+    assert(pocketTarget and not followed and pocket.state == pocket.states.WAITING_FOR_PATHFINDER,
+        'A distant pocket staging point must use the checked approach')
+    assert(pocketTarget.x == 7.6 and pocketTarget.yRot == heading and
+        math.abs(math.rad(pocketTarget.angle) - heading) < 1e-10 and not pocketTarget:getIsReverse(),
+        'Offset staging must preserve one consistent heading for native checks and pathfinding')
+    tractorNode.x, tractorNode.z = pocketTarget.x, pocketTarget.z
+    pocketTarget, followed = nil, false
+    assert(pocket:callForPocket(offsetHarvester) and followed and not pocketTarget,
+        'An aligned tractor at the staging point must keep the existing immediate handover')
+    tractorNode.heading = heading + math.pi
+    followed = false
+    assert(pocket:callForPocket(offsetHarvester) and pocketTarget and not followed,
+        'A nearby opposite-facing tractor must still calculate its alignment path')
+end
+print('Offset pocket staging native heading and handover regressions: OK')

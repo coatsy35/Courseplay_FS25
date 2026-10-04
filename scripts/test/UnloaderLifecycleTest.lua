@@ -167,7 +167,6 @@ local function configureCall(s)
     s.getPipeOffsetReferenceNode = function() return 1 end
     s.getCombinesMeasuredBackDistance = function() return 6 end
     s.isOkToStartUnloadingCombine = function() return false end
-    s.canStartDirectStoppedCombineApproach = function() return false end
     s.isPathfindingNeeded = function() return true end
     s.startPathfindingToMovingCombine = function(self) self.pathfinderController.active = true end
 end
@@ -297,6 +296,8 @@ close.combineToUnload = {getCpDriveStrategy = function() return moving end}
 close.vehicle.getAIDirectionNode = function() return 1 end
 close.getTargetNode = function() return 2 end
 close.getFieldworkBoundaryForCombineApproach = function() return nil end
+moving.getMeasuredBackDistance = function() return 6 end
+moving.hasAutoAimPipe = function() return false end
 close.getPipeOffset = function() return 10, -6 end
 close.getPipeOffsetReferenceNode = function() return 2 end
 localToLocal = function() return 5, 0, 13 end
@@ -309,14 +310,17 @@ local joinedMoving, joinedStopped = 0, 0
 close.startCourseFollowingCombine = function() joinedMoving = joinedMoving + 1 end
 close.startUnloadingStoppedCombine = function() joinedStopped = joinedStopped + 1 end
 assert(not moving:willWaitForUnloadToFinish())
-assert(close:canStartDirectStoppedCombineApproach(2, 10, -6))
 close:startUnloadingCombine()
 assert(joinedMoving == 1 and joinedStopped == 0)
 moving.state, moving.unloadState = combineStates.UNLOADING_ON_FIELD, combineStates.WAITING_FOR_UNLOAD_ON_FIELD
 assert(not moving:willWaitForUnloadToFinish() and moving:isWaitingForUnload())
-assert(close:canStartDirectStoppedCombineApproach(2, 10, -6))
 close:startUnloadingCombine()
-assert(joinedMoving == 1 and joinedStopped == 1)
+assert(joinedMoving == 2 and joinedStopped == 0,
+    'Stock CP selects moving unloading when stopForUnload is disabled, including waiting-for-unload state')
+moving.settings.stopForUnload = setting(true)
+close:startUnloadingCombine()
+assert(joinedMoving == 2 and joinedStopped == 1,
+    'Stock CP selects stopped unloading when its own wait predicate requests it')
 print('Recorded moving/stopped combine join regressions: OK')
 
 -- Exercise the actual update dispatcher: boundary preference must not cancel driving or override proximity control.
@@ -470,6 +474,34 @@ parked:getDriveData(16)
 assert(parked.state == parked.states.MOVING_BACK,
         'Stopping the combine must retain clearance movement without calling a deleted strategy')
 
+local continuing, continuingStrategy = harvester(100)
+continuingStrategy.registerUnloader = function() end
+local holdCalls, clearForward = 0, false
+continuingStrategy.hold = function(_, duration) assert(duration == 1000); holdCalls = holdCalls + 1 end
+local originalForwardCheck = UnloaderCoordinator.canHarvesterAdvanceWhileReversing
+UnloaderCoordinator.canHarvesterAdvanceWhileReversing = function(_, driver, combine)
+    assert(driver == parked and combine == continuing)
+    return clearForward
+end
+parked.combineToUnload, parked.state.properties.vehicle = continuing, continuing
+parked.state = parked.states.MOVING_BACK
+parked.state.properties.vehicle, parked.state.properties.holdCombine = continuing, true
+parked.isDriveUnloadNowRequested = function() return false end
+parked.checkForTrailerToUnloadTo = {get = function() return false end}
+parked.updateStandbyCoordinator = function() end
+UnloaderCoordinator:registerClearingUnloader(parked, continuing, 40)
+local continuingReservation = UnloaderCoordinator.clearingUnloaders[parked.vehicle]
+parked:getDriveData(16)
+assert(holdCalls == 1, 'A blocked straight continuation must still renew the combine hold')
+clearForward = true
+parked:getDriveData(16)
+assert(holdCalls == 1 and parked.state == parked.states.MOVING_BACK and
+    UnloaderCoordinator.clearingUnloaders[parked.vehicle] == continuingReservation,
+    'A cleared forward departure must stop renewing the hold while reverse travel and corridor ownership continue')
+UnloaderCoordinator.canHarvesterAdvanceWhileReversing = originalForwardCheck
+UnloaderCoordinator.clearingUnloaders[parked.vehicle] = nil
+parked.combineToUnload, parked.state.properties.vehicle = ended, ended
+
 -- A served trailer can already be parked when the final combine stops.
 parked.isAtHarvesterClearance = function() return true end
 parked:startWaitingForSomethingToDo()
@@ -520,3 +552,97 @@ clearing = false
 blockedCombine:onBlockingVehicle(blockingTractor, false)
 assert(replans == 1, 'Retain ordinary obstruction recovery when no trailer escape is pending')
 print('Restarted clearance, stopped combine and final parked load regressions: OK')
+
+-- A recovery reverse owns its call until the reverse endpoint, even if radial clearance was already met.
+do
+    local rig = unloader(150)
+    local combine, driver = harvester(100)
+    local holds, approached = 0, 0
+    driver.registerUnloader = function() end
+    driver.hold = function() holds = holds + 1 end
+    rig.combineToUnload = combine
+    rig.updateLowFrequencyImplementControllers = function() end
+    rig.calculateAutoAimPipeOffsetX = function() end
+    rig.ppc = {isReversing = function() return true end}
+    rig.getReverseDriveData = function() return 0, 0, 8 end
+    rig.maxSpeed = math.huge
+    rig.setMaxSpeed = function(self, value) self.maxSpeed = math.min(self.maxSpeed, value) end
+    rig.checkProximitySensors = function(self) self:setMaxSpeed(3) end
+    rig.checkCollisionWarning = function() end
+    rig.settings = {reverseSpeed = setting(8)}
+    rig.getDistanceFromCombine = function() return 50, 0, 50 end
+    rig.isAtHarvesterClearance = function() return true end
+    rig.startWaitingForSomethingToDo = function() error('Reverse must retain the active call until its endpoint') end
+    rig.startPipeApproachFromPocket = function(self, forced)
+        assert(forced and self.combineToUnload == combine)
+        approached = approached + 1
+    end
+    rig.state = rig.states.MOVING_BACK
+    rig.state.properties = {vehicle = combine, holdCombine = true, clearanceDistance = 30, retryPipeApproach = true}
+    UnloaderCoordinator:registerClearingUnloader(rig,combine,30)
+    rig:getDriveData(16)
+    assert(rig.state == rig.states.MOVING_BACK and rig.combineToUnload == combine and rig.maxSpeed == 3 and holds == 1,
+        'Recovery reverse must preserve ownership, hold the combine and obey native reverse proximity braking')
+    rig.extendReverseForClearance = function() return false end
+    rig:onLastWaypointPassed()
+    assert(approached == 1, 'Only completed clearance may start the forced checked rear approach')
+end
+print('No-flow reverse ownership, braking and checked reapproach lifecycle: OK')
+
+-- Four background controllers cannot each take a search slice in the same game frame.
+-- Their continuations retain state, and queued cancellation/re-entrant calls remain isolated.
+do
+    local oldFrame,oldOpen,oldRead,oldClose=g_updateLoopIndex,openIntervalTimer,readIntervalTimerMs,closeIntervalTimer
+    g_updateLoopIndex=1
+    openIntervalTimer=function() return {} end
+    readIntervalTimerMs=function() return 0 end
+    closeIntervalTimer=function() end
+    PathfinderController.backgroundQueue={}; PathfinderController.backgroundFrame=nil
+    local drivers,counts={},{}
+    for i=1,4 do
+        counts[i]=0
+        local c=setmetatable({debug=function() end},{__index=PathfinderController})
+        c:start({_avoidStandingCrop=true},0,function()
+            counts[i]=counts[i]+1
+            return {isActive=function() return true end,resume=function()
+                counts[i]=counts[i]+1; return {done=false}
+            end},{done=false}
+        end)
+        drivers[i]=c
+        assert(c:isActive() and counts[i]==0,'Background start must be deferred, including its initial native checks')
+    end
+    for frame=1,8 do
+        g_updateLoopIndex=frame
+        local before=0; for _,n in ipairs(counts) do before=before+n end
+        for _,c in ipairs(drivers) do c:update(16) end
+        local after=0; for _,n in ipairs(counts) do after=after+n end
+        assert(after-before==1,'Only one background continuation may advance per game frame')
+    end
+    for _,n in ipairs(counts) do assert(n==2,'Update order must not starve a later tractor') end
+    drivers[1]:cancel()
+    g_updateLoopIndex=9; for _,c in ipairs(drivers) do c:update(16) end
+    assert(counts[1]==2 and counts[2]==3,'A cancelled queued search must not run or block the next controller')
+    -- Ordinary combine/actual-call searches retain immediate start and per-frame continuation.
+    local foreground=setmetatable({debug=function() end},{__index=PathfinderController})
+    local advances=0
+    foreground:start({},0,function()
+        advances=advances+1
+        return {isActive=function() return true end,resume=function() advances=advances+1; return {done=false} end},{done=false}
+    end)
+    foreground:update(16)
+    assert(advances==2,'A real CP call must not queue behind speculative staging')
+    assert(drivers[2].currentContext._pathfindingSliceMs==4)
+    -- A completed background callback can create another queued search safely.
+    for _,c in ipairs(drivers) do c:cancel() end
+    local completed=setmetatable({debug=function() end},{__index=PathfinderController})
+    completed.onFinish=function(c)
+        c:start({_avoidStandingCrop=true},0,function() error('New callback search must wait for the next frame') end)
+    end
+    completed:start({_avoidStandingCrop=true},0,function() return nil,{done=true} end)
+    g_updateLoopIndex=10; completed:update(16)
+    assert(completed.pendingBackgroundStart and completed:isActive())
+    completed:cancel(); foreground:cancel()
+    PathfinderController.backgroundQueue={}; PathfinderController.backgroundFrame=nil
+    g_updateLoopIndex,openIntervalTimer,readIntervalTimerMs,closeIntervalTimer=oldFrame,oldOpen,oldRead,oldClose
+end
+print('Shared background pathfinder frames, fair continuation, cancellation and foreground priority: OK')

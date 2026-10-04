@@ -120,10 +120,12 @@ strategy.combineToUnload = pocketCombine
 strategy.setFieldSpeed = function() end
 strategy.isOkToStartUnloadingCombine = function() return true end
 strategy.startUnloadingCombine = function() startedPocketUnload = true end
+strategy.startPipeApproachFromPocket = function() startedPocketUnload = true end
 strategy.getDistanceFromCombine = function() return 20 end
 strategy.getHarvesterTurnClearanceDistance = function() return 50 end
 strategy.setMaxSpeed = function(_, speed) heldBehindPocket = speed == 0 end
-UnloaderCoordinator = { getStandbyDistance = function() return 30 end }
+UnloaderCoordinator = { getStandbyDistance = function() return 30 end,
+    hasPhysicalHarvesterClearance = function() return true end }
 strategy:followCombineToPocket()
 assert(not startedPocketUnload and heldBehindPocket,
         'A trailer must hold behind instead of copying the combine reverse course while a pocket is being made')
@@ -139,10 +141,9 @@ strategy.isOkToStartUnloadingCombine = function() return false end
 pocketCombineStrategy.isWaitingForUnload = function() return true end
 strategy:followCombineToPocket()
 assert(startedPocketUnload,
-        'A completed pocket must start a fresh forward pipe approach without the moving-unload alignment gate')
+        'A completed coordinator pocket must request the normal pipe approach')
 
--- A full trailer must hand over where it stands when AutoDrive is ready. AutoDrive then owns the route from the
--- field to its network; Courseplay must not drive back across the field to the configured access point first.
+-- AD readiness is not permission to abandon CP's checked field departure.
 local handovers = 0
 local pathfindingStarted = false
 strategy.useGiantsUnload = false
@@ -154,12 +155,12 @@ strategy.fieldUnloadPositionNode = nil
 strategy.invertedStartPositionMarkerNode = {}
 strategy.setMaxSpeed = function() end
 strategy.releaseCombine = function() end
-strategy.startPathfindingToInvertedGoalPositionMarker = function() pathfindingStarted = true end
+strategy.startFullTrailerDeparture = function() pathfindingStarted = true end
 strategy.onTrailerFull = function() handovers = handovers + 1 end
 UnloaderCoordinator.release = function() end
 strategy:startUnloadingTrailers()
-assert(handovers == 1 and not pathfindingStarted,
-        'A full trailer must release directly to an available AutoDrive job instead of returning to the start marker')
+assert(handovers == 0 and pathfindingStarted,
+        'A full trailer must retain CP control and start its checked departure even when AD is ready')
 
 -- If a legacy return route reaches the field edge, stop at the last safe position and request the handover once.
 strategy.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL = {}
@@ -167,7 +168,7 @@ strategy.state = strategy.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL
 strategy.fullTrailerHandoverRequested = nil
 strategy:requestFullTrailerHandover('boundary')
 strategy:requestFullTrailerHandover('boundary repeated')
-assert(handovers == 2, 'A boundary-triggered full-trailer handover must only be requested once')
+assert(handovers == 1, 'A verified full-trailer handover must only be requested once')
 
 -- Active approaches use the actual field polygon. The full-rig boundary remains deliberately stricter for
 -- unattended staging and clearance moves, but must not reject a normal pipe-side target near an edge.
@@ -215,58 +216,24 @@ local approachCourse = {
 assert(strategy:extendCombineApproachWithinField(approachCourse, 10, 1, 0) == 4 and extendedBy == 4,
         'The final alignment extension must be clipped at the boundary instead of discarding the valid route')
 
--- A short, forward pipe-side correction must join the normal stopped-combine unload course directly. Running the
--- exact-heading pathfinder for this geometry creates a needless loop and can leave a full combine waiting.
-local directCombineStrategy = {
-    willWaitForUnloadToFinish = function() return true end,
-    isReadyToUnload = function() return true end,
-}
-local directTarget = {}
-strategy.combineToUnload = { getCpDriveStrategy = function() return directCombineStrategy end }
-strategy.vehicle = { getAIDirectionNode = function() return 'tractorDirection' end }
-strategy.turningRadius = 9
-strategy.directStoppedApproachTurningRadiusFactor = 3
-strategy.getTargetNode = function() return directTarget end
-strategy.getFieldworkBoundaryForCombineApproach = function() return {} end
-local directDx, directDz = 5, 13
-localToLocal = function() return directDx, 0, directDz end
-getWorldTranslation = function() return 0, 0, 0 end
-localToWorld = function() return directDx, 0, directDz end
-MathUtil = MathUtil or {}
-MathUtil.vector2Length = function(x, z) return math.sqrt(x * x + z * z) end
-CpMathUtil = CpMathUtil or {}
-CpMathUtil.isSameDirection = function() return true end
-FieldworkBoundary.containsSegment = function() return true end
-FieldworkBoundary.captureRig = function() return {} end
-FieldworkBoundary.sweepRigSegment = function() return true end
-assert(strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
-        'A target 14 metres ahead with a modest lateral correction must bypass the global pathfinder')
-directDz = -13
-assert(not strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
-        'A target behind the tractor must still use a manoeuvring route')
-directDz = 13
-FieldworkBoundary.containsSegment = function() return false end
-assert(strategy:canStartDirectStoppedCombineApproach(directTarget, 0, 0),
-        'The optional boundary preference must not veto a normal nearby pipe approach')
-FieldworkBoundary.containsSegment = function() return true end
-directCombineStrategy.isWaitingForUnloadAfterPulledBack = function() return false end
-directCombineStrategy.hasAutoAimPipe = function() return false end
-directCombineStrategy.getMeasuredBackDistance = function() return 6 end
-local directApproachStarted = false
+-- A nearby but unaligned call must use CP's ordinary rear pathfinding target, with no direct shortcut.
+local requested
+local waitingStrategy = {willWaitForUnloadToFinish = function() return true end,
+    isWaitingForUnloadAfterPulledBack = function() return false end,
+    hasAutoAimPipe = function() return false end, getMeasuredBackDistance = function() return 6 end}
+local waitingCombine = {getCpDriveStrategy = function() return waitingStrategy end}
 strategy.getPipeOffset = function() return 11, -6 end
-strategy.getPipeOffsetReferenceNode = function() return directTarget end
-local originalHoldNearbyStandbyUnloadersForDeparture =
-        AIDriveStrategyUnloadCombine.holdNearbyStandbyUnloadersForDeparture
+strategy.getPipeOffsetReferenceNode = function() return {} end
+local originalHold = AIDriveStrategyUnloadCombine.holdNearbyStandbyUnloadersForDeparture
 strategy.holdNearbyStandbyUnloadersForDeparture = function() end
 strategy.isOkToStartUnloadingCombine = function() return false end
-strategy.startUnloadingStoppedCombine = function() directApproachStarted = true end
-strategy.startUnloadingCombine = AIDriveStrategyUnloadCombine.startUnloadingCombine
 strategy.queueForDeparture = function() return false end
-strategy.isPathfindingNeeded = function() error('The direct approach must not invoke the global pathfinder') end
+strategy.isPathfindingNeeded = function() return true end
+strategy.startPathfindingToWaitingCombine = function(_, x, z) requested = {x, z} end
 UnloaderCoordinator.release = function() end
-assert(strategy:call(strategy.combineToUnload, nil) and directApproachStarted,
-        'A stopped combine call with close forward geometry must start the unload course immediately')
-strategy.holdNearbyStandbyUnloadersForDeparture = originalHoldNearbyStandbyUnloadersForDeparture
+assert(strategy:call(waitingCombine, nil) and requested and requested[1] == 11 and requested[2] == -8,
+    'An unaligned tractor must enter from the original rear target, not jump directly onto the pipe course')
+strategy.holdNearbyStandbyUnloadersForDeparture = originalHold
 
 -- A standby at a shared entry holds while a nearby active trailer departs. Clearance scales with both complete
 -- tractor/trailer trains and their turning radii rather than a fixed user-facing distance.
@@ -351,3 +318,147 @@ assert(clearRig:extendReverseForClearance() and started and extension > 30,
 clearRig.vehicle.rootNode.x = 55
 assert(not clearRig:extendReverseForClearance(), 'Verified clearance must finish the reverse')
 print('Moving-combine release and measured reverse clearance regressions: OK')
+
+-- Recorded Oct 1 row-end stall: 89% grain remains, TURNING, no discharge or processing,
+-- but the tractor stayed in UNLOADING_MOVING_COMBINE indefinitely instead of reversing clear.
+local autoAim = false
+local turning, finishing, discharging, processing, always, headland = true, false, false, false, false, false
+local rowEnd = {
+    isTurning = function() return turning end, isAboutToTurn = function() return not turning end,
+    isFinishingRow = function() return finishing end, isDischarging = function() return discharging end,
+    isProcessingFruit = function() return processing end, alwaysNeedsUnloader = function() return always end,
+    hasAutoAimPipe = function() return autoAim or always end,
+    getFillLevelPercentage = function() return 89 end,
+    willWaitForUnloadToFinish = function() return false end,
+    isManeuvering = function() return turning end,
+}
+local endCombine = {getCpDriveStrategy = function() return rowEnd end}
+local reversed, forwardGoal, speed, normalLookahead = nil, false, nil, false
+local rowRig = setmetatable({combineToUnload = endCombine,
+    state = {}, states = {MOVING_BACK = {}, UNLOADING_STOPPED_COMBINE = {}},
+    followCourse = {setOffset = function() end, isTurnStartAtIx = function() return false end,
+        getCurrentWaypointIx = function() return 100 end},
+    settings = {fullThreshold = {getValue = function() return 85 end}},
+    getFollowingCourseOffset = function() return -12.2 end,
+    changeToUnloadWhenTrailerFull = function() return false end,
+    driveBesideCombine = function() return 90, 90 end,
+    ppc = {setNormalLookaheadDistance = function() normalLookahead = true end},
+    startMovingBackFromCombine = function(self, state, combine, hold)
+        reversed = {state = state, combine = combine, hold = hold}
+        self.state = state
+    end,
+    isBehindAndAlignedToCombine = function() return true end,
+    setMaxSpeed = function(_, value) speed = value end,
+    debug = function() end, debugSparse = function() end,
+}, {__index = AIDriveStrategyUnloadCombine})
+local gx = rowRig:unloadMovingCombine()
+assert(reversed and reversed.state == rowRig.states.MOVING_BACK and reversed.combine == endCombine and
+    reversed.hold and normalLookahead and gx == nil,
+    'A fixed-pipe combine starting a turn without discharge must trigger clearance reverse even with grain remaining')
+for _, reason in ipairs({'discharge', 'processing', 'finishing', 'forager', 'autoAim', 'aboutToTurn'}) do
+    reversed, normalLookahead = nil, false
+    rowRig.state = {}
+    turning, finishing, discharging, processing, always, autoAim = true, false, false, false, false, false
+    if reason == 'discharge' then discharging = true
+    elseif reason == 'processing' then processing = true
+    elseif reason == 'finishing' then finishing = true
+    elseif reason == 'forager' then always, processing = true, true
+    elseif reason == 'autoAim' then autoAim = true
+    else turning = false end
+    rowRig:unloadMovingCombine()
+    assert(not reversed, 'Do not interrupt ' .. reason .. ' for row-end clearance')
+end
+-- The actual reverse primitive reserves/holds the full turn clearance, rather than post-unload clearance.
+turning, finishing, always = true, false, false
+rowRig.UNLOAD_TYPES = {SILO_LOADER = 'silo'}
+rowRig.unloadTargetType = 'combine'
+rowRig.vehicle = {rootNode = {x = 50, z = 0}}
+rowRig.getHarvesterTurnClearanceDistance = function() return 40 end
+local registered, requested, startedReverse
+UnloaderCoordinator.registerClearingUnloader = function(_, driver, combine, distance)
+    registered = distance; assert(driver == rowRig and combine == endCombine)
+end
+rowRig.createClearanceReverseCourse = function(_, distance) requested = distance; return {}, distance end
+rowRig.setNewState = function(self, state) self.state = {properties = {}, requested = state} end
+rowRig.startCourse = function() startedReverse = true end
+rowRig.settings.reverseSpeed = {getValue = function() return 5 end}
+AIDriveStrategyUnloadCombine.startMovingBackFromCombine(rowRig, rowRig.states.MOVING_BACK, endCombine, true)
+assert(requested == 40 and registered == 40 and startedReverse and rowRig.state.properties.holdCombine and
+    rowRig.state.properties.clearanceDistance == 40,
+    'An active turn must reserve and drive the full reverse clearance while holding the combine')
+print('Row-end no-discharge reverse and protected transfer regressions: OK')
+
+-- Recorded 2986 stall: a full on-field combine stopped, but its follower did not transfer or retry.
+do
+    local states = {UNLOADING_ON_FIELD = {}, WAITING_FOR_UNLOAD_ON_FIELD = {}, POCKET = {}}
+    local status = {flow = false, processing = false, pipeMoving = false, turning = false, autoAim = false, fill = 99.5}
+    local driver = {states = states, state = states.UNLOADING_ON_FIELD, unloadState = states.WAITING_FOR_UNLOAD_ON_FIELD,
+        hasAutoAimPipe = function() return status.autoAim end, alwaysNeedsUnloader = function() return false end,
+        isTurning = function() return status.turning end, isManeuvering = function() return status.turning end,
+        isProcessingFruit = function() return status.processing end, isPipeMoving = function() return status.pipeMoving end,
+        isDischarging = function() return status.flow end, isUnloadFinished = function() return false end,
+        getFillLevelPercentage = function() return status.fill end}
+    local combine = {getCpDriveStrategy = function() return driver end, getIsCpActive = function() return true end}
+    local reversed, attempted, released = 0, 0, 0
+    local rig = setmetatable({vehicle = {rootNode = {x = 0, z = 0}}, combineToUnload = combine,
+        states = {UNLOADING_MOVING_COMBINE = {}, UNLOADING_STOPPED_COMBINE = {}, MOVING_BACK = {}},
+        ppc = {setNormalLookaheadDistance = function() end}, debug = function() end,
+        startMovingBackFromCombine = function(self, state, target, hold)
+            assert(target == combine and hold and self.combineToUnload == combine)
+            self.state = state; self.state.properties = {}; reversed = reversed + 1
+        end,
+        startPipeApproachFromPocket = function(self, force)
+            assert(force and self.combineToUnload == combine)
+            attempted = attempted + 1
+        end,
+        recordFailedCombineApproach = function() released = released + 1 end,
+        startWaitingForSomethingToDo = function() released = released + 1 end},
+        {__index = AIDriveStrategyUnloadCombine})
+    rig.state = rig.states.UNLOADING_MOVING_COMBINE
+    g_time = 0
+    assert(not rig:recoverStalledPipeApproach())
+    g_time = 4999
+    assert(not rig:recoverStalledPipeApproach(), 'A brief no-flow pause must retain normal unloading')
+    g_time = 5000
+    assert(rig:recoverStalledPipeApproach() and reversed == 1 and rig.state.properties.retryPipeApproach,
+        'Five seconds without motion or flow must reverse with the original call retained')
+    rig:finishPipeApproachReverse()
+    assert(attempted == 1 and released == 0, 'Completed clearance must force the checked rear pipe approach')
+    for _, reason in ipairs({'flow', 'processing', 'pipeMoving', 'turning', 'autoAim', 'pocket', 'movement', 'grain'}) do
+        rig.state = rig.states.UNLOADING_STOPPED_COMBINE
+        rig.pipeApproachProgress = nil
+        g_time = 10000
+        rig:recoverStalledPipeApproach()
+        g_time = 16000
+        if reason == 'pocket' then driver.unloadState = states.POCKET
+        elseif reason == 'movement' then rig.vehicle.rootNode.x = rig.vehicle.rootNode.x + 1.1
+        elseif reason == 'grain' then status.fill = status.fill - 1
+        else status[reason] = true end
+        assert(not rig:recoverStalledPipeApproach(), 'Do not recover during ' .. reason)
+        status.flow, status.processing, status.pipeMoving, status.turning, status.autoAim = false, false, false, false, false
+        driver.unloadState = states.WAITING_FOR_UNLOAD_ON_FIELD
+    end
+    rig.pipeApproachRecoveryAttempts = 2
+    rig.pipeApproachProgress = nil
+    rig.state = rig.states.UNLOADING_MOVING_COMBINE
+    g_time = 20000; rig:recoverStalledPipeApproach()
+    g_time = 25000; assert(rig:recoverStalledPipeApproach())
+    assert(rig.state.properties.releaseFailedPipeApproach and released == 0,
+        'An exhausted retry must still clear before releasing ownership')
+    rig:finishPipeApproachReverse()
+    assert(released == 2 and attempted == 1, 'Repeated failure must release once without an endless retry route')
+end
+print('Stopped full-combine no-progress recovery regressions: OK')
+
+-- The 2986 turn reverse was cancelled immediately because its radial distance was already large.
+do
+    local combine = {rootNode = {x = 0, z = 0}}
+    local rig = setmetatable({vehicle = {rootNode = {x = 50, z = 0}},
+        state = {properties = {vehicle = combine, clearanceDistance = 40,
+            reverseOrigin = {x = 50, z = 0}, minimumReverseTravel = 5}}},
+        {__index = AIDriveStrategyUnloadCombine})
+    assert(not rig:isAtHarvesterClearance(), 'A new reverse must not finish before moving despite existing radial separation')
+    rig.vehicle.rootNode.x = 55
+    assert(rig:isAtHarvesterClearance(), 'Actual reverse travel and physical clearance may finish the reverse')
+end
+print('Already-separated reverse initial travel regression: OK')

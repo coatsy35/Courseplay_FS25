@@ -451,3 +451,281 @@ No safe segment releases the call while retaining the running job; a pocket beco
 paths, endpoint handovers, opposite-facing approaches and preserved ordinary pipe behaviour. Build 2974 includes
 the advance-staging and clearance fixes from 2973. Game physics and under-five-second timing still require replay;
 already stopped tractors need their CP jobs restarted after loading the new build.
+
+
+## Build 2975: deliberate whole-rig parking and checked short approaches
+
+Waiting positions now have an orientation and enough harvested space for the complete tractor/trailer train,
+a straight run-in and a 12 m forward exit. On a harvested headland the allocator prefers parallel side bays;
+within the field it can reserve straight bays on the worked row or an adjacent harvested strip. The reserved
+lead is allocated first, then following pool trailers receive separate bays. Reservations include the full
+alignment/exit lane, not just a distance between tractor centres. Field edges, islands, standing crop,
+current vehicle footprints, imminent combine/unloader routes and physical world shapes remain obstacles.
+An aligned straight lane is checked as the exact union of elongated body rectangles, avoiding repeated
+quarter-metre density/shape probes during each fleet rebalance.
+
+Advance staging still uses the existing fill prediction, deployment threshold and progressive pool layers.
+A safely parked trailer retains its bay and reserved exit space; a freshly created current-position waypoint does not make it follow
+the combine or repeatedly move by the offset between its root and AI direction node. Existing approaches
+retain their destination, and unfinished clearance destinations are reserved before new bays are selected.
+A real unloading call can interrupt staging through the existing call/ownership contract.
+
+For short journeys, the existing Dubins solver generates a forward, cross-row or U-turn approach to the bay's
+run-in. The whole articulated route and final alignment are checked before driving. Rejected short routes
+use the existing pathfinder with an accurate heading at the run-in; the served combine is not ignored.
+The completed search is checked again against current occupancy before driving the alignment. Arrival
+requires each physical body to be within 2 m and 12 degrees of the intended pose, rather than accepting
+a tractor centre within 8 m while its trailer is skewed. The actual arrival pose must also remain clear of
+other vehicles, moving routes and world shapes. Failed searches/alignment request another bay.
+AD entry may start outside the field only while protrusion decreases; a fully entered rig cannot leave again.
+
+This is the first parking/manoeuvre layer. The reserved exit is a checked 12 m straight departure, not a
+promise of a complete route to any future unloading point. Actual calls still plan their complete approach,
+and physical obstruction clearance retains the checked reverse escapes from 2973/2974. No shared combine
+search algorithm has been changed in this build. Terrain, steering physics, busy-field timing and behaviour
+with the saved multiple-combine scenarios still need in-game validation.
+
+`UnloaderParkingPlannerTest` exercises full articulated geometry, native oriented density queries, disjoint
+queue lanes, current/future traffic, paused clearance, offset AI nodes, stable holds, actual Dubins straight/
+cross-row/U-turn generation, strategy fallback/callback/arrival and monotonic AD field entry. Release gates
+run this alongside the existing lifecycle, clearance, pocket and course-generation suites against source
+and the packaged runtime.
+
+
+## Build 2976: repair the parking terrain-transform call
+
+The live 30 September log exposes a build 2975 integration error: parking shape checks call
+`PathfinderUtil.setWorldPositionAndRotationOnTerrain` without its required fifth `yOffset` argument.
+The helper then adds nil to terrain height, aborting unloader planning repeatedly. Supply zero at this
+caller. The shared terrain helper and pathfinding algorithms retain their existing behaviour.
+
+The regression reproduces the omitted-argument failure before the fix. Its engine adapter now requires
+the complete signature, and the strategy/Dubins integration portion executes the production terrain
+transform with native terrain/node adapters instead of replacing the helper. It also verifies a non-zero
+height offset and heading, preventing this integration gap from being hidden by the fixture again.
+
+The same log gives separate explanations for the two stopped combines. At 21:16:38.887 CR11/319's
+next-row turn search reaches its iteration limit after repeated collision reports against map shape
+117282 near the final approach to x 44.30, z -341.62. It repeats headland joins and a free search; no
+field-boundary or accepted-route rejection is recorded. The exact map object's geometry/name cannot
+be identified from the log alone. CR11/318 then yields to that turning combine: the log records 49.7 m
+along-course separation against a 75 m convoy setting, plus 57.3 m physical separation against 54.3 m
+turn clearance. The physical slowdown caps speed at about 1 km/h, which the existing controller rounds
+to zero. Lowering the convoy setting alone does not remove that physical turn hold.
+
+This build repairs the independently confirmed parking exception. It does not claim to resolve the
+front combine's map-collision route failure or change the user's convoy setting/turn-clearance rules.
+Those require the recorded approach geometry to be checked in game; collision detection stays enabled.
+
+
+## Build 2977: restore searched reversing for harvester transfers
+
+The earlier distant-turn protection changed two independent behaviours: it removed the unchecked
+calculated fallback, and also forced every distant search and accepted course to be forward-only.
+The latter overrode the vehicle's existing reversing permission and selected Dubins instead of the
+original forward-ending Reeds–Shepp solver. An adjacent row with a staggered end can meet the
+'distant' threshold, so the restriction also affected ordinary harvester manoeuvres.
+
+Restore the strategy's reversing permission on every turn-search attempt and accept searched reverse
+segments when that strategy permits them. The shared solver selection continues to respect that
+permission, including the existing chopper-with-unloader and user/implement restrictions. Failed
+distant searches still cannot use the unchecked calculated fallback. The target, field corridor,
+physical collision checks, departure clearance and final worker-route checks retain their behaviour.
+
+The real search replay of the saved CR11/319 headland-to-row geometry uses 138 iterations with the
+restored permission, versus 1,368 with the forward-only restriction, including real joined-course
+acceptance and the lowering approach. Rotated/reflected cases also pass; a completely obstructed
+scene still rejects the route. Regression coverage retains forbidden-reverse rejection and all retry
+checks. These are planar engine adapters, not a reconstruction of map shape 117282 or a guarantee
+of game wall-clock timing. Replay the front combine in game to confirm its specific map approach
+and the requested under-five-second response. The following combine should then lose its existing
+turn-clearance hold as the front combine moves away; convoy settings have not been changed.
+
+
+## Build 2978: prevent parking validation from blocking the game loop
+
+The live build 2977 log records repeated 2.2–3.3 second stalls within a single game loop during
+standby route completion. Emergency garbage collection coincides with memory spikes to 743–919 MB.
+The physical rectangle checker allocated an axis array plus four axis tables for every body pair,
+multiplied across every sampled parking route and each moving vehicle's sampled future route.
+
+Keep the same four-axis separating test with scalar arguments and a conservative world-axis rejection.
+The regression allocates 89.1 KiB for 100 sampled-route scans versus 4,126.6 KiB with the old checker,
+with garbage collection paused. Existing rotated, articulated, header, clearance and approach geometry
+regressions retain their results. No obstacle footprint or collision mask is reduced.
+
+Short parking manoeuvres and completed parking searches now validate incrementally while the rig
+remains in the stopped waiting state. All parking jobs share a 3 ms allowance per game frame, with
+256 checkpoints as a second limit. A native probe can finish before the next checkpoint yields;
+this is a cooperative budget, not a promise to pre-empt a native game call. Terrain/crop queries,
+articulated boundary checks, world shapes, moving routes and bay reservations remain active.
+The actual departure and complete parking lane retain native occupancy checks. An immutable spatial
+index lets the final handover check the whole intermediate route against current physical rigs,
+imminent moving routes and reserved lanes without repeating the expensive native route validation.
+That final live geometry check is atomic; the frame allowance applies to the preceding incremental
+work and cannot pre-empt an individual native probe or the final handover.
+Real unloading calls, changed bays and cancellation discard paused work without driving stale results.
+Normal pathfinding and emergency reverse clearance keep their existing dispatch.
+
+Repeated parked-status queries check physical position and heading instead of reconstructing the
+entire fleet's moving-route plan. Actual arrival, allocation and ongoing standby traffic clearance
+still check occupancy. Fleet bay allocation also shares the incremental budget. The previous published reservations remain
+intact until the complete replacement is checked, then publication and driver notifications are atomic.
+Releases/active calls invalidate unfinished plans. Candidate poses are sorted by their existing cost and stable tie order;
+full geometry is checked only until the first feasible candidate is found, preserving the selected
+minimum-cost bay. Rejected routes now log the failed boundary, crop, occupancy or alignment check.
+
+Regression coverage runs the production incremental strategy path with simulated native-probe costs,
+shared frame budgeting, interruption by an active call, newly occupied departure/middle sections,
+atomic fleet publication and plan invalidation. Indexed conflicts are compared against the original
+linear exact test for rotated bodies across negative/positive grid cells and touching edges. All release
+gates run against source and packaged runtime. Busy-field frame times and staging success still
+need confirmation in game with build 2978; the log alone cannot attribute every stall to this subsystem.
+
+### Build 2979: stopped-combine approach handover
+
+A called tractor finishing a harvested recovery route must not jump directly from another row onto the stopped combine's pipe-side course. The final handover now checks the actual pipe corridor and retains the existing bounded forward-correction option. If neither applies, it retains the combine call and calculates a collision-checked approach to the pipe. The moving-unload tolerance alone no longer authorises a cross-row stopped approach. Rotated geometry regressions exercise the real recovery completion and alignment predicates, including an opposite-facing tractor and the existing immediate forward approach. Trailer staging, parked holds and the 2978 parking scheduler remain intact. First-centre-row combine alignment is still under investigation.
+
+If the checked final pipe approach is still blocked, release the call once and use the existing failed-approach hold/cooldown instead of cycling back to the same harvested recovery point. Auto-aim harvesters keep their original approach; a pulled-back combine keeps its existing target further behind the header. Regression coverage includes the failed callback and call release.
+
+
+### Build 2980: restore stock unloading entry and clear row-end deadlocks
+
+The ordinary entry/alignment functions, pipe-side stopped course, moving follow course, course-copy setup and pipe/course offsets now match the checked-out upstream CP source exactly. Remove the coordinator's direct stopped-approach shortcut: an unaligned call uses the stock rear target and normal pathfinder. CP's willWaitForUnloadToFinish predicate again chooses stopped versus moving unloading; the coordinator does not override this with isWaitingForUnload. A completed coordinator harvested/pocket approach is not a pipe approach: it explicitly hands back to the normal rear search if it is outside the actual pipe lane. This preserves the single harvested recovery and bounded final-failure cooldown.
+
+At an actual row-end turn, a fixed-pipe combine with grain remaining but no discharge or fruit processing previously left its tractor in UNLOADING_MOVING_COMBINE indefinitely. Reverse using the established clearance primitive and hold/reserve the full turn clearance until the rig clears. Continue actual discharge and row finishing; retain the original auto-aim/chopper handling and do not trigger on isAboutToTurn alone. Regression tests cover these exclusions and both choices of stopForUnload.
+
+FS25's Luau environment has no standard coroutine library. Replace the 2978 scheduler's coroutine.create/resume/yield with explicit step jobs for fleet snapshots, sampled forecasts, native crop/shape probes, ordered bay allocation and articulated route validation. All jobs share the existing 3 ms/256-step cooperative frame allowance. Tests explicitly remove coroutine before running the production scheduler, including interrupted calls and atomic fleet publication. Keep the final whole-route live occupancy check atomic, so an obstacle entering the middle after a paused check still rejects handover.
+
+A truly straight translation with unchanged body headings uses the union of each body's elongated rectangle instead of hundreds of sampled poses. Skewed attachments, steering and direction changes retain the complete rollout. Rotated forward/reverse tests verify that every padded sampled-body corner is covered by the compact union. On a local headless fixture of four straight moving 60 m tractor/trailer routes, snapshot median was 0.163 ms versus 11.346 ms sampled; this is not an in-game frame-time guarantee. The final atomic handover and an individual native call cannot be pre-empted by the cooperative allowance.
+
+Evidence distinction: the supplied saved log is the complete 28 September session. It records T7.300/322 joining waypoint 1851, 14.2 m cross-track error, and an off-course stop at 15:56:09 before the later 17:02 blockage. The separate current 1 October log records T7.300/324 waiting beside turning CR11/319 with no discharge, plus repeated coroutine.create update failures. These are separate incidents/files. First-centre-row combine overshoot remains a separate unresolved issue; this build does not change shared implement entry. In-game entry, row-end reverse and busy-field performance still require validation.
+
+
+### Build 2981: predictive staging and controlled field departures
+
+The current 1 October log records standby approaches rejected for standing crop, followed by T7.300/322 travelling a long distance to CR11/319, missing the rendezvous, and the combine waiting at 99 percent. Staging now takes actual offset course positions rather than the raw shared centreline. Deliberate bay searches reject crop under the tractor and towed body during calculation, with complete articulated/native validation retained before movement; standard CP unloading entry keeps its existing policy. Transient shared pipe occupancy no longer erases the next combine's predictive deadline or lead reservation. Predicted relief may move to a checked waiting bay while the active trailer finishes. Pipe-entry/call ownership, clearance holds, physical/moving traffic and disjoint bay reservations remain enforced.
+
+The same session records CP releasing full T7.300/325 to AD after reverse clearance at 16:26:39, followed by CR11/318 reporting it blocking the header at 16:27:00. Full trailers now retain CP control through checked legs down the actual harvested working row and around its headland to the configured access. Each leg intersects a bounded travel corridor with the field polygon and a narrow access gate. The start marker is extended along its outward heading until the complete aligned train clears the field; a recorded CP entry pose is the fallback access reference. No callback failure or AD-readiness change permits an early handover. Failed or newly occupied routes remain braked for replanning. Upcoming traffic scans and native/articulated validation share the existing cooperative frame allowance; collision warning and proximity remain enabled. AD receives control only after actual whole-train position, alignment and live occupancy are checked outside the working field.
+
+Regression coverage includes offset lanes, retained predictive deadlines, successor staging during active unloading, crop under the towed body, headland traversal tangents, bounded row corridors, complete gate crossings, a field edge through the middle of a trailer, obstacles in the alignment tail, stale callbacks, traffic holds, and deferred/idempotent handover. The nine ordinary base CP entry/alignment functions remain identical to upstream. Build 2981 passes the full source and extracted-runtime release gates; actual staging lead time and departure behaviour require the next in-game run.
+
+
+### Build 2982: departure checkpoint and parked-call deadlocks
+
+The complete 2981 session shows T7.300/323 and /324 full but unable to plan a departure because the invented forward access extension could not leave the field. T7.300/325 reached exit checkpoint 4/7, then repeatedly searched to a point only 0.017 m away with an 11-degree heading difference. CR11/318 needed unloading while CR11/319 stopped behind it at 43% fill. Return to the configured, already validated CP marker without changing its position or demanding an outward heading. Intermediate checkpoints require position rather than a final parking heading and are consumed before another search. The final alignment run-in belongs to the travel corridor and access gate; actual whole-train alignment, crop, native obstacles and current vehicle occupancy still gate AD handover. Row and headland routes remain mandatory.
+
+A separate reproducible coordinator fault made a parked tractor ahead of a stopped requesting combine wait for that combine to pass. Preserve this hold for speculative staging, but let a stopped/threshold/forage demand accept an ordinary CP call and use the unchanged normal approach. Firm forage reservations, capacity checks, connector clearance and active pipe ownership retain priority. The session's generic rejection message does not prove which gate rejected T7.300/322; new diagnostics report the reason, strategy state and fill level rather than calling every rejected rig busy.
+
+Regression coverage reproduces the near-coincident checkpoint and checks inside-field and parallel access markers, normal marker offsets outside the 40 m validation range, final run-in containment, trailer alignment, final occupancy/crop rejection, preserved early parked holds and real calls from stopped or 80% combines. Full source and extracted-runtime release checks precede publishing build 2982. In-game departure and resumed unloading still require validation.
+
+
+### Build 2983: shared background search scheduling and uncovered combine demand
+
+The 3 October session has overlapping standby searches while CR11/318 enters its first centre row. The parking allocator's 3 ms cooperative allowance does not include ordinary pathfinder starts/resumes. Those controllers previously each used the default 20 ms search slice, and JPS expansions or initial analytic validation can individually overrun it. Queue only hard-crop staging/departure contexts through a shared FIFO: at most one background start or continuation runs per game frame, with a nominal 4 ms Hybrid/JPS slice. Include initial start calls, retain generation-safe cancellation/retry and rotate fairly. Ordinary combine turn/entry searches and actual unloading approaches retain their normal immediate start and defaults. Log an inclusive background advance over 16 ms at most once per controller every five seconds. A single native probe, jump or initial candidate still cannot be pre-empted; this is not a hard in-game frame-time guarantee.
+
+At 13:04:58 CR11/319 rejects three empty standby tractors as shared-corridor/priority while T7.300/325 is travelling to CR11/318, initially 239 m away and later missing its rendezvous. Same-course proximity alone is not sufficient to cover another combine's tank. Preserve active pipe transfer and measured reverse-clearance ownership. For an en-route rig, check a minimum travel estimate to the first combine and then the caller against its remaining tank time, with the existing safety margin; a stopped requesting combine requires immediate service. When known, subtract the first tank from the compatible free capacity before treating the second as covered. An uncovered combine can use the existing call scorer and checked base CP approach to select its own available trailer. No ordinary unloading alignment or combine turn geometry is changed.
+
+Regression tests exercise four background starts/continuations under a shared frame grant, FIFO fairness, cancellation, callback replacement and unaffected real calls. Demand tests distinguish a genuinely covered later tank from an urgent/stopped or capacity-uncovered caller, retaining transfer and reverse-clearance exclusions. The full source/extracted-runtime release checks precede publishing 2983. Actual frame time and earlier unloading arrival remain in-game validation.
+
+The final 2983 review also preserves recorded reverse ownership when a full tractor has released its combine, projects the first tank to its arrival and reserves capacity for the caller's full tank, and tightens the lead's parked-position movement band before the call when its preparation window reaches the remaining travel/safety margin. Tests retain the wider early hold while checking advance before the configured call percentage.
+
+## Test build 2984 - pocket staging heading
+
+The live 2982 session reported native setRotation errors at 13:29:44 and 13:30:23 on 3 October. Offset staging points supplied angle in degrees but omitted yRot in radians, which the existing getTargetNode check requires. Staging now supplies both from the same course heading, retaining the actual lane position and forward direction. Base CP entry, pipe spacing and unloading checks are unchanged. Regression coverage exercises the real staging producer and pocket call through the native target-node adapter, at four headings, with distant, aligned nearby and opposite-facing nearby tractors. Build 2984 includes the previously released 2983 scheduling and preparation changes. In-game arrival timing and frame-rate still require validation.
+
+## Test build 2985 - conservative exit refinement and straight resumption
+
+The 2982 live session repeatedly rejected successful full-exit routes for tractors 324 and 325 after pathfinding. The log did not identify the failed sample; tractor 325 subsequently began a different checked route, while tractor 324 remained on leg 1. A regression reproduces a validator false positive: a physically contained edge-parallel train is rejected because the half-metre swept collision padding protrudes sideways. Validation now retries the interval at half its length, with at most six refinements per segment under the existing shared job allowance. Every accepted conservative envelope must fit within the previous raw boundary distance; the field, harvested corridor, surveyed access, crop, shapes and vehicle checks remain enforced. Exhausted boundary rejections report segment, position, raw/swept protrusion and step length. Tests cover forward/reverse edge travel, actual crossings, narrow corridor and access gates, native crop/shape/vehicle rejection and bounded incremental work. This corrects the demonstrated false positive, but does not establish that every logged route was physically valid.
+
+During a held reverse after unloading, the tractor may stop renewing the combine hold once all its attachments clear the combine/header six-metre straight-forward envelope plus a two-metre margin. This applies only to aligned centre-row fieldwork, away from the next turn, with no discharge. It does not shorten the trailer reverse, release shared corridor ownership, alter ordinary unloading entry, or bypass pocket/pullback/next-row waits. Physical/header/attachment, rotated-heading and actual hold-renewal regressions cover the new behaviour.
+
+The early straight-release guard additionally requires every unloader body to face within 15 degrees of the harvester working direction: opposite-facing reverse movement or a skewed trailer retains the hold. Dedicated regressions reproduce both cases.
+
+Straight resumption also checks actual course segments covering the next six metres, not just the current bearing or turn markers. A curved work row, lateral misalignment, or insufficient known forward course retains the hold; an unmarked bend regression covers this condition.
+
+## Test build 2986: checked exit endpoint recovery
+
+The next live-log check still showed build 2982. Tractor 322 repeatedly failed
+the first of 17 exit legs from 13:58:35 through 14:30 because the native goal
+was invalid; its precise crop/boundary cause was not recorded. Tractor 325
+reached its final leg at 14:14:24, but the fixed run-in point collided with a
+physical shape at x=110.9, z=-338.5 and was still being retried at 14:30.
+Tractor 323 continued along its checked route; this was not recovery of 322 or
+325. All four trailers subsequently being full explained the lack of supply
+for the waiting combine and the convoy hold behind it. There were no new Lua
+errors or actual FPS samples in the inspected interval.
+
+Departure searches now record the actual requested native endpoint rejection
+as crop, rig-boundary protrusion or physical shape. An analytic-only invalid
+flag, an intermediate search goal or a general failed route does not trigger
+endpoint recovery. A confirmed invalid navigation checkpoint can try six
+nearby poses within the original harvested corridor. The next leg retains the
+original nearby route corner; the checkpoint is consumed only after arrival.
+The final marker and heading never move: its default run-in can try four
+shorter lengths. Each route still passes native pathfinding, standing-crop,
+whole-rig swept boundary, shape, vehicle, traffic and reservation validation.
+Before driving a final approach, the complete articulated simulation must
+reach the marker within the same heading limits as live handover. Actual
+arrival and occupancy checks remain mandatory.
+
+Recovery requests are deferred to the next update and existing shared
+background scheduler. Each round is finite; exhaustion retains CP control and
+the existing five-second hold. A final alignment failure can try another
+run-in, but an obstruction elsewhere on the route retains its normal hold
+without cycling endpoints. No extra native probes or per-node closures were
+added to goal diagnostics. Base CP unloading entry, combine call threshold,
+parking ownership and reverse-pathfinding settings remain unchanged.
+
+Regressions exercise real native trailer-crop, goal-boundary and physical-shape
+rejections; scoped endpoint diagnostics; deferred finite retries and holds;
+immutable navigation/marker poses; checkpoint arrival; articulated final
+alignment; and shape rejection across the completed route. Whether these
+alternatives clear the recorded vehicles requires the next in-game run; a
+genuinely blocked access still holds safely.
+
+The final follow-up inspection reached 14:55:10 without log replacement or
+new Lua errors. Tractor 323 progressed to its final leg at 14:46:00, then
+repeatedly exhausted the native search after the analytic endpoint check
+failed. Its initial goal check passed; the old log cannot discriminate the
+analytic scalar fruit sample, trailer footprint or boundary reason. The
+departure diagnostics therefore also retain reasons from the explicit native
+analytic check of the requested endpoint. A bare analytic-invalid flag without
+an endpoint reason still does not cycle candidates. No analytic fruit,
+collision, trailer or boundary rejection was relaxed. Regression fixtures
+prove scalar analytic fruit and physical trailer-goal rejection are diagnosed
+even when the first goal-shape check passes. Search elapsed time of about four
+seconds in the old log is not an FPS or frame-advance measurement.
+
+
+### Test build 8.1.0.2987 - stalled pipe approach recovery
+
+The 3 October 2986 run recorded tractor 324 starting a clearance reverse at 15:37:46 and cancelling it 65 ms later because its existing tractor-centre separation already met the threshold. At 15:38:47 it entered moving unload for combine 319; the combine stopped full on-field at 15:38:55, but no discharge or recovery followed through 15:46.
+
+Rendezvous route completion now checks the unchanged native CP entry predicate before entering the copied working course. A fixed-pipe follower serving a combine in the exact WAITING_FOR_UNLOAD_ON_FIELD state retries after five seconds without movement or grain transfer. It retains its call, reverses with native proximity control, holds the combine, then forces the existing checked rear pipe approach. Two failed rear approaches are bounded: clear before releasing for another eligible trailer. Discharge, actual approach movement, processing, pipe unfolding, turns, pockets and auto-aim harvesters are protected.
+
+Reverse completion now requires initial reverse travel and whole-rig physical clearance, including the header and every attachment; existing radial separation alone cannot cancel the new reverse. Clearance ownership survives release and expires physically after the rig leaves. Straight-row early harvester resumption remains unchanged.
+
+The nine native unloading entry and offset functions, combine fieldwork strategy and pathfinder scheduling are unchanged from 2986. Regression coverage includes timeout/progress guards, bounded retries, reverse ownership and proximity braking, premature endpoint entry, forced final alignment and trailer/header occupancy. In-game validation of the reported articulated approach remains required. This build does not claim to resolve the separate slow pre-positioning search.
+
+
+### Test build 8.1.0.2988 - arrive at the configured unloading level
+
+The coordinator had suppressed CP's predictive active call below callUnloaderPercent, then forced a call as soon as that level was reached. That made the configured arrival level a departure trigger. In the 2986 run, tractor 324 was still roughly 270 m away at its 15:35:33 call and missed two rendezvous before reaching combine 319 during its 97% row-end turn. Long background staging searches did not excuse this dispatch gate.
+
+Normal CP course-based prediction now triggers departure before the setting is reached. Coordinated unloaders retain a 25-second approach reserve for starting, leaving the bay, checked routing and alignment; disabling nearby standby preserves CP's five-second reserve. A nearby trailer stays parked while ample time remains. Unknown harvest-rate predictions do not create speculative active calls; already-due saved workers and stopped combines dispatch immediately. First-headland/pipe-in-crop restrictions prepare the lead behind the combine and preserve CP's pocket/turn safety rather than forcing parallel unloading in an unsafe position. Late fallback targets are rechecked against native unloading restrictions and bounded by remaining tank-full time.
+
+Ahead-of-combine crop-protected parking now permits an actual predictive call when travel and approach consume the predicted time to the setting. The normal checked rear target remains compulsory. An en-route trailer is no longer treated as guaranteed coverage for another combine: travel-only estimates omitted the first transfer, reverse clearance and second approach. Pipe/reverse exclusivity is local and scales with the actual rig/header clearance; separated combines on the same course can prepare independent compatible leads. Existing successor preparation, partial-load preference, firm forage relief and native proximity/pathfinder checks remain intact.
+
+Closer-trailer recovery retains the current call until its replacement accepts and still owns its call, including synchronous pathfinder failure. The replacement is registered before old deregistration, so releasing the old owner cannot cancel the accepted new rendezvous. Transfers are excluded from switching as before.
+
+The nine native unloading entry and offset functions match both the local upstream/main and origin/main source exactly. No entry geometry, pipe spacing, parking bay manoeuvre, crop/shape rejection or pathfinder scheduling was changed. Regression coverage includes near/far travel deadlines, different settings, parked holds, unknown rates, saved starts, invalid speeds, pockets, row ends, late invalid targets, distinct current/future ETEs, ownership handover, compatible fleet shortages, successive trailers and multiple/shared/separated combines. Full source and packaged release gates run before publication. Actual arrival under live traffic still needs the next in-game run; insufficient compatible vehicles or a physically blocked approach cannot be made safe by bypassing base CP restrictions.
+
+
+### Test build 8.1.0.2989 - called preparation clears another combine
+
+The 4 October 2988 session showed CR11/319 requesting clearance from T7.300/325 at 16:18:45.573, 90 m ahead on its connector. The tractor followed CR11/318 to a pocket at 16:18:46.500, so the staging-only caller excluded it. It moved only after the proximity timeout at 16:19:04.147, clearing at 16:19:25.966.
+
+A pocket follower or waiting rendezvous can now release preparation when another active combine has a confirmed physical header/train conflict. The existing full-rig checked reverse is tried first; obstacle-aware clearance routing remains the fallback. Release invalidates approach callbacks and deregisters the old owner before escape. The combine retains its checked connector while the trailer clears, and the trailer becomes available for a fresh normal CP approach afterwards. Active pipe approaches, grain transfers, continuous forage service, and native turn/reverse clearance remain protected. Safely parked trailers beside the real header sweep retain their calls and positions.
+
+The end-to-end regression runs the production live scan, physical sweep, request and ownership release. It covers early warning before braking, repeated requests, retained connector holds until clearance, safe-side parking, protected transfers/forage and native approach states. Release gates and base-CP entry parity are checked before packaging. In-game clearance timing still requires validation.

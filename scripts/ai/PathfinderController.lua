@@ -129,19 +129,73 @@ end
 function PathfinderController:cancel()
     self.requestGeneration = (self.requestGeneration or 0) + 1
     self.pathfinder = nil
+    self.pendingBackgroundStart,self.backgroundQueuedGeneration=nil,nil
     self.currentContext = nil
     self.currentPathfinderCall = nil
     self:reset()
 end
 
+-- Background staging/departure searches must not each consume a frame allowance.
+-- FIFO continuation avoids favouring the first vehicle in the update order. Real CP
+-- calls retain the ordinary pathfinder; a cancelled queued request cannot run later.
+PathfinderController.backgroundQueue = {}
+PathfinderController.backgroundSliceMs = 4
+function PathfinderController:queueBackgroundSearch()
+    if self.backgroundQueuedGeneration == self.requestGeneration then return end
+    self.backgroundQueuedGeneration = self.requestGeneration
+    table.insert(PathfinderController.backgroundQueue,{controller=self,generation=self.requestGeneration})
+end
+
+function PathfinderController:claimBackgroundFrame()
+    local queue=PathfinderController.backgroundQueue
+    while queue[1] do
+        local entry=queue[1]
+        if entry.generation~=entry.controller.requestGeneration or not entry.controller:isActive() then
+            table.remove(queue,1)
+        else break end
+    end
+    if PathfinderController.backgroundFrame==g_updateLoopIndex or not queue[1] or queue[1].controller~=self then
+        return false
+    end
+    table.remove(queue,1)
+    self.backgroundQueuedGeneration=nil
+    PathfinderController.backgroundFrame=g_updateLoopIndex
+    return true
+end
+
 function PathfinderController:update(dt)
-    if self:isActive() then
-        --- Applies coroutine for path finding
-        local result = self.pathfinder:resume()
-        if result.done then
-            self:onFinish(result)
+    if not self:isActive() then return end
+    local background=g_updateLoopIndex~=nil and self.currentContext and self.currentContext._avoidStandingCrop
+    if background then
+        self:queueBackgroundSearch()
+        if not self:claimBackgroundFrame() then return end
+    end
+    local generation=self.requestGeneration
+    local timer=background and openIntervalTimer()
+    local function advance()
+        if self.pendingBackgroundStart then
+            self.pendingBackgroundStart=nil
+            local pathfinder,result=self.currentPathfinderCall()
+            if not result.done then self.pathfinder=pathfinder end
+            return result
+        end
+        return self.pathfinder:resume()
+    end
+    local ok,result=pcall(advance)
+    if timer then
+        local elapsed=readIntervalTimerMs(timer)
+        closeIntervalTimer(timer)
+        -- Include initialisation and native checks: an individual probe/expansion may
+        -- exceed the slice. Report that cost without flooding the live game log.
+        if elapsed>16 and (g_time or 0)>=(self.nextBackgroundCostLogAt or 0) then
+            self:debug('Background pathfinding advance took %.1f ms (slice %.1f ms); concurrent background advances deferred',
+                elapsed,PathfinderController.backgroundSliceMs)
+            self.nextBackgroundCostLogAt=(g_time or 0)+5000
         end
     end
+    if not ok then error(result) end
+    if result.done then self:onFinish(result)
+    elseif background and self.requestGeneration==generation then self:queueBackgroundSearch() end
 end
 
 function PathfinderController:getDriveData()
@@ -154,7 +208,7 @@ function PathfinderController:getDriveData()
 end
 
 function PathfinderController:isActive()
-    return self.pathfinder and self.pathfinder:isActive()
+    return self.pendingBackgroundStart or self.pathfinder and self.pathfinder:isActive()
 end
 
 ---@return PathfinderContext
@@ -194,6 +248,14 @@ function PathfinderController:start(context, numRetries, pathfinderCall)
     self.startedAt = g_time
     self.currentContext = context
     self.currentPathfinderCall = pathfinderCall
+    self.pendingBackgroundStart,self.backgroundQueuedGeneration=nil,nil
+    if g_updateLoopIndex~=nil and context._avoidStandingCrop then
+        context._pathfindingSliceMs=PathfinderController.backgroundSliceMs
+        self.pathfinder=nil
+        self.pendingBackgroundStart=true
+        self:queueBackgroundSearch()
+        return true
+    end
 
     local pathfinder, result = self.currentPathfinderCall()
     if result.done then

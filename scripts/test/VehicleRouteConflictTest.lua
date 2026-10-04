@@ -53,6 +53,48 @@ local function course(points, reverse)
         isReverseAt = function() return reverse or false end}
 end
 local straight = course({{0, 0}, {0, 90}})
+-- The compact straight union must cover every sampled physical body in both directions,
+-- including displaced headers and all compass rotations. Steering/articulation must fall back.
+do
+    for _, heading in ipairs({0, math.pi / 2, math.pi, -math.pi / 2, 0.71}) do
+        for _, reverse in ipairs({false, true}) do
+            local machine = vehicle(25, -30, 4, 8, heading, 1.3)
+            -- A front header at its true longitudinal offset, with an asymmetric body offset.
+            local hx, _, hz = localToWorld(machine.rootNode, 0, 0, 6)
+            local cutter = vehicle(hx, hz, 15, 2, heading, 0.7)
+            cutter.getAttacherVehicle = function() return machine end
+            machine.children = {cutter}
+            local sign = reverse and -1 or 1
+            local route = course({{25, -30}, {25 + math.sin(heading) * 60 * sign,
+                -30 + math.cos(heading) * 60 * sign}}, reverse)
+            local compact = VehicleRouteConflict.createStraightSweep(FieldworkBoundary.captureRig(machine), route)
+            assert(compact and #compact == 1)
+            local sampled = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(machine), route, 12)
+            for _, sample in ipairs(sampled) do
+                for i, body in ipairs(sample.parts) do
+                    local lane = compact[1].parts[i]
+                    for _, side in ipairs({-1, 1}) do
+                        for _, endSide in ipairs({-1, 1}) do
+                            local dx = body.x + side * body.ux * body.width + endSide * body.vx * body.length - lane.x
+                            local dz = body.z + side * body.uz * body.width + endSide * body.vz * body.length - lane.z
+                            assert(math.abs(dx * lane.ux + dz * lane.uz) <= lane.width + 0.000001 and
+                                math.abs(dx * lane.vx + dz * lane.vz) <= lane.length + 0.000001,
+                                'Compact straight occupancy must include every sampled padded body corner')
+                        end
+                    end
+                end
+            end
+            cutter.rootNode.heading = heading + 0.01
+            assert(not VehicleRouteConflict.createStraightSweep(FieldworkBoundary.captureRig(machine), route),
+                'A skewed attachment must retain the articulated sampled forecast')
+        end
+    end
+    assert(not VehicleRouteConflict.createStraightSweep(FieldworkBoundary.captureRig(combine),
+        course({{0, 0}, {0, 30}, {20, 50}})), 'A bend must retain the full rollout')
+    assert(not VehicleRouteConflict.createStraightSweep(FieldworkBoundary.captureRig(combine),
+        course({{0, 0}, {0, -30}})), 'A direction mismatch must retain the full rollout')
+end
+print('Compact straight occupancy: complete sampled-body coverage and curved/skewed fallbacks OK')
 local function conflict(route, other)
     return VehicleRouteConflict.findConflict(
         VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(combine), route, 12),
@@ -325,6 +367,38 @@ g_currentMission.time, speedLimit = 8000, nil
 strategy:checkWorkerOnConnectingPath()
 assert(speedLimit == nil and strategy.connectingWorkerWaitFor == nil and requests == 4,
         'The combine must proceed towards row entry immediately with the distant trailer clear')
+-- The immutable grid must preserve the earliest conflict/body pair from the linear scan,
+-- including negative cells, edge-touching rectangles and sweeps spanning multiple cells.
+do
+    local sweep = VehicleRouteConflict.createSweep(FieldworkBoundary.captureRig(vehicle(-20,-20,4,8)),
+        course({{-20,-20},{20,20},{-20,40}}),12)
+    local linear={}; for i,sample in ipairs(sweep) do linear[i]=sample end
+    for _,heading in ipairs({0,math.pi/7,math.pi/2,math.pi}) do
+        for x=-40,40,5 do for z=-40,60,5 do
+            local rig=FieldworkBoundary.captureRig(vehicle(x,z,3,5,heading))
+            local indexed,details=VehicleRouteConflict.findConflict(sweep,rig)
+            local expected,original=VehicleRouteConflict.findConflict(linear,rig)
+            assert(indexed==expected and (not indexed or details.ownIndex==original.ownIndex and details.otherIndex==original.otherIndex),
+                'Grid broad phase must preserve the original exact geometry and earliest-body ordering')
+        end end
+    end
+end
+-- The 2977 parking hangs allocated an axis table and four child tables per rectangle pair.
+-- Keep exact geometry but bound temporary allocation even with collection paused.
+do
+    local rig = FieldworkBoundary.captureRig(vehicle(0,0,4,8))
+    local sweep = VehicleRouteConflict.createSweep(rig,course({{0,0},{0,20}}),12)
+    local other = FieldworkBoundary.captureRig(vehicle(30,10,3,5))
+    collectgarbage('collect'); collectgarbage('stop')
+    local before = collectgarbage('count')
+    for i=1,100 do
+        assert(not VehicleRouteConflict.findConflict(sweep,other))
+    end
+    local allocated = collectgarbage('count') - before
+    collectgarbage('restart')
+    assert(allocated < 1024, 'Repeated route rectangle comparisons must not allocate megabytes of temporary axis tables')
+    print(string.format('Rectangle comparison allocation: %.1f KiB for 100 sampled-route scans',allocated))
+end
 print('VehicleRouteConflictTest: OK')
 
 -- End-to-end connector dispatch: real context/boundary/rig/sweep/clearance decisions. The course
@@ -680,6 +754,108 @@ do
 end
 print('Parked trailer physical clearance and reverse-first dispatch: OK')
 
+-- Reproduce a called pocket follower crossing another combine's accepted connector. Run the real
+-- live scan, request, physical sweep and call release; only the final reverse driving is adapted.
+do
+    local harvester = vehicle(0, 0, 4, 8)
+    local cutter = vehicle(0, 6, 15, 2)
+    cutter.getAttacherVehicle = function() return harvester end
+    harvester.children = {cutter}
+    local parked = vehicle(7, 75, 3, 5, math.pi / 2)
+    local route = course({{0, 0}, {0, 90}})
+    route.copy = function(self) return self end
+    route.getNextWaypointIxWithinDistance = function() return 2 end
+    route.getCurrentWaypointIx = function() return 1 end
+    local reversed, cancelled, deregistered, recovered = 0, 0, 0, 0
+    local ownerDriver = {deregisterUnloader = function() deregistered = deregistered + 1 end}
+    local owner = {getIsCpActive = function() return true end,
+        getCpDriveStrategy = function() return ownerDriver end}
+    local driver = setmetatable({vehicle = harvester, course = route, turningRadius = 12,
+        states = {DRIVING_TO_WORK_START_WAYPOINT = 'travel'}, state = 'travel', connectingPathStartIx = 722,
+        debug = function() end, getWorkWidth = function() return 15 end,
+        ppc = {getRelevantWaypointIx = function() return 1 end, getCourse = function() return route end},
+        setMaxSpeed = function(self, value) self.speed = value end,
+        startBlockedConnectorRecovery = function() recovered = recovered + 1 end,
+    }, {__index = AIDriveStrategyFieldWorkCourse})
+    harvester.getCpDriveStrategy = function() return driver end
+    harvester.getIsCpActive = function() return true end
+    local states = {FOLLOWING_COMBINE_TO_POCKET = 'pocket', WAITING_FOR_COMBINE_AT_RENDEZVOUS = 'waiting',
+        DRIVING_TO_MOVING_COMBINE = 'approach', UNLOADING_MOVING_COMBINE = 'unload',
+        UNLOADING_STOPPED_COMBINE = 'stopped', MOVING_BACK = 'back', IDLE = 'idle',
+        WAITING_IN_STANDBY = 'parked', DRIVING_TO_STANDBY = 'escape'}
+    local unloader = setmetatable({vehicle = parked, states = states, state = states.FOLLOWING_COMBINE_TO_POCKET,
+        combineToUnload = owner, debug = function() end, turningRadius = 12,
+        pathfinderController = {cancel = function() cancelled = cancelled + 1 end},
+        isAvailableForStaging = function(self)
+            return self.combineToUnload == nil and (self.state == states.IDLE or self.state == states.DRIVING_TO_STANDBY)
+        end,
+        getHarvesterTurnClearanceDistance = function() return 30 end,
+        startConnectorReverseEscape = function(self)
+            reversed = reversed + 1; self.state = states.DRIVING_TO_STANDBY; return true
+        end,
+        updateStandbyTrafficYield = function() return false end,
+        setNewState = function(self, value) self.state = value end,
+    }, {__index = AIDriveStrategyUnloadCombine})
+    parked.getCpDriveStrategy = function() return unloader end
+    AIDriveStrategyCombineCourse = {isActiveCpCombine = function(v) return v == harvester end}
+    g_currentMission.vehicleSystem = {vehicles = {harvester, parked}}
+    g_currentMission.time = 100000
+    driver:checkWorkerOnConnectingPath()
+    assert(reversed == 1 and cancelled == 1 and deregistered == 1 and unloader.combineToUnload == nil and
+            unloader.connectorClearance.harvester == harvester and driver.speed == nil and recovered == 0,
+            'A called pocket follower must begin checked clearance at the scout horizon, before proximity braking')
+    local activeEscape = unloader.connectorClearance
+    g_currentMission.time = 101000
+    driver:checkWorkerOnConnectingPath()
+    assert(reversed == 1 and cancelled == 1 and unloader.connectorClearance == activeEscape,
+            'Repeated connector requests must retain the escape instead of restarting its reverse or call release')
+    parked.rootNode.z = 30
+    g_currentMission.time = 102000
+    driver:checkWorkerOnConnectingPath()
+    g_currentMission.time = 112000
+    driver:checkWorkerOnConnectingPath()
+    assert(driver.speed == 0 and driver.connectingWorkerWaitFor == parked and recovered == 0,
+            'The combine must retain its checked route and brake while the preparing trailer is still clearing it')
+    parked.rootNode.x = 14
+    g_currentMission.time = 113000
+    unloader:updateStandbyCoordinator()
+    driver:checkWorkerOnConnectingPath()
+    assert(unloader.state == states.IDLE and not unloader.connectorClearance and
+            not driver.connectingWorkerWaitFor and recovered == 0,
+            'Full physical clearance must release the hold and make the trailer available for a fresh native approach')
+    -- Waiting at a moving rendezvous can also yield; actual approaches/transfers/turn reversals cannot.
+    parked.rootNode.x, parked.rootNode.z = 7, 75
+    for _, state in ipairs({states.WAITING_FOR_COMBINE_AT_RENDEZVOUS, states.DRIVING_TO_MOVING_COMBINE,
+            states.UNLOADING_MOVING_COMBINE, states.UNLOADING_STOPPED_COMBINE, states.MOVING_BACK}) do
+        unloader.state, unloader.combineToUnload, unloader.connectorClearance = state, owner, nil
+        local before = reversed
+        g_currentMission.time = g_currentMission.time + 1000
+        driver:isConnectingPathBlockedByWorker(route, 0, false, true)
+        local yielding = state == states.WAITING_FOR_COMBINE_AT_RENDEZVOUS
+        assert(reversed == before + (yielding and 1 or 0) and
+                unloader.combineToUnload == (not yielding and owner or nil),
+                'Only preparation may release ownership; native approaches, transfers and reverse clearance must be protected')
+    end
+    unloader.state, unloader.combineToUnload = states.FOLLOWING_COMBINE_TO_POCKET, harvester
+    assert(not unloader:canYieldPreparingCallForConnector(harvester),
+            'The assigned combine must retain its own pocket follower')
+    unloader.combineToUnload = owner
+    ownerDriver.alwaysNeedsUnloader = function() return true end
+    assert(not unloader:canYieldPreparingCallForConnector(harvester),
+            'A continuous forage harvester must keep its firm service ownership')
+    ownerDriver.alwaysNeedsUnloader = nil
+    ownerDriver.isDischarging = function() return true end
+    assert(not unloader:canYieldPreparingCallForConnector(harvester),
+            'A real grain transfer must stay protected even if the trailer has not changed its preparation state yet')
+    ownerDriver.isDischarging = nil
+    parked.rootNode.x = 14
+    local before = cancelled
+    unloader:requestToMoveOutOfWay(harvester, nil, route)
+    assert(unloader.combineToUnload == owner and cancelled == before,
+            'A preparing trailer beside the actual header sweep must not lose its call or leave its position')
+end
+print('Called pocket/rendezvous trailer early connector clearance and protected native unloading: OK')
+
 -- No headland route is needed to dispatch clearance from the real departure footprint. Run the
 -- turn caller, live worker scan and unloader request together; only the final reverse driving is adapted.
 CpDebug = {DBG_TURN = 1}
@@ -732,3 +908,116 @@ do
             'A rig which has reversed outside the physical departure must remain parked while normal pathfinding resumes')
 end
 print('No-headland physical departure clearance: OK')
+
+-- A straight-working combine may proceed before the trailer completes its longer reverse.
+-- Use the actual chassis/header and trailer footprints, without shortening turn reservations.
+dofile('scripts/ai/UnloaderCoordinator.lua')
+local resumeCombine = vehicle(0,0,4,8)
+local resumeHeader = vehicle(0,6,15,2)
+resumeHeader.getAttacherVehicle = function() return resumeCombine end
+resumeCombine.children = {resumeHeader}
+local resumeStates = {WORKING='working',WAITING_FOR_UNLOAD_ON_FIELD='onField',
+    WAITING_FOR_UNLOADER_TO_LEAVE='leaving',WAITING_FOR_UNLOAD_IN_POCKET='pocket'}
+local isHeadland, isConnector, isReverse, turning, discharging = false,false,false,false,false
+local untilTurn, laneHeading, curveAhead = 200,0,false
+local resumeCourse = {
+    isOnHeadland=function() return isHeadland end,
+    isOnConnectingPath=function() return isConnector end,
+    isReverseAt=function() return isReverse end,
+    getDistanceToNextTurn=function() return untilTurn end,
+    getWaypointYRotation=function() return laneHeading end,
+    getNumberOfWaypoints=function() return 200 end,
+    getWaypointPosition=function(_, ix)
+        local along = (ix-100)*2
+        local side = curveAhead and ix>100 and 1 or 0
+        return math.cos(laneHeading)*side+math.sin(laneHeading)*along,0,
+            -math.sin(laneHeading)*side+math.cos(laneHeading)*along
+    end,
+}
+local resumeStrategy = {states=resumeStates,state='waiting',unloadState=resumeStates.WAITING_FOR_UNLOAD_ON_FIELD,
+    getFieldworkCourse=function() return resumeCourse end,getClosestFieldworkWaypointIx=function() return 100 end,
+    getWorkWidth=function() return 15 end,isTurning=function() return turning end,
+    isDischarging=function() return discharging end}
+resumeCombine.getCpDriveStrategy = function() return resumeStrategy end
+local departing = vehicle(6,-10,3,6)
+local departingTrailer = vehicle(6,-18,3,9)
+departingTrailer.getAttacherVehicle = function() return departing end
+departing.children = {departingTrailer}
+local reverseStates = {MOVING_BACK={},MOVING_BACK_WITH_TRAILER_FULL={}}
+local reverseDriver = {vehicle=departing,states=reverseStates,state=reverseStates.MOVING_BACK,
+    ppc={isReversing=function() return true end}}
+UnloaderCoordinator:registerClearingUnloader(reverseDriver,resumeCombine,40)
+assert(UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+    'A clear straight departure should not wait for the entire forty-metre turn reservation')
+assert(UnloaderCoordinator:isStillClearingHarvester(nil,resumeCombine),
+    'Allowing forward progress must retain shared corridor ownership during the ongoing reverse')
+curveAhead = true
+assert(not UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+    'An unmarked bend ahead must not be treated as a straight forward departure')
+curveAhead = false
+-- The trailer can still block while the tractor itself is clear.
+departingTrailer.rootNode.x,departingTrailer.rootNode.z = 0,-5
+assert(not UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+    'An attachment remaining under the chassis must keep the combine held')
+departingTrailer.rootNode.x,departingTrailer.rootNode.z = 6,-18
+departing.rootNode.heading = math.pi
+assert(not UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+    'An opposite-facing tractor would reverse towards the combine and must keep its hold')
+departing.rootNode.heading = 0
+departingTrailer.rootNode.heading = math.pi/2
+assert(not UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+    'A skewed trailer must align before releasing the combine during reverse motion')
+departingTrailer.rootNode.heading = 0
+departing.rootNode.x,departing.rootNode.z = 8,7
+assert(not UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+    'The full-width header must still prevent a premature release')
+departing.rootNode.x,departing.rootNode.z = 6,-10
+for _, reason in ipairs({'turn','nearTurn','headland','connector','reverse','misaligned','discharging','pocket'}) do
+    turning,isHeadland,isConnector,isReverse,discharging = false,false,false,false,false
+    untilTurn,laneHeading,resumeStrategy.unloadState = 200,0,resumeStates.WAITING_FOR_UNLOAD_ON_FIELD
+    if reason=='turn' then turning=true
+    elseif reason=='nearTurn' then untilTurn=20
+    elseif reason=='headland' then isHeadland=true
+    elseif reason=='connector' then isConnector=true
+    elseif reason=='reverse' then isReverse=true
+    elseif reason=='misaligned' then laneHeading=math.pi/2
+    elseif reason=='discharging' then discharging=true
+    else resumeStrategy.unloadState=resumeStates.WAITING_FOR_UNLOADER_TO_LEAVE end
+    assert(not UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+        'Early straight release must not override '..reason..' protection')
+end
+resumeStrategy.unloadState,resumeStrategy.state = nil,resumeStates.WORKING
+assert(UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+    'The unloader must not renew its stop once the cleared combine has resumed straight fieldwork')
+for _, h in ipairs({math.pi/2,math.pi,-math.pi/2}) do
+    laneHeading,resumeCombine.rootNode.heading = h,h
+    for _, placement in ipairs({{resumeHeader,0,6},{departing,6,-10},{departingTrailer,6,-18}}) do
+        local node, x, z = placement[1].rootNode,placement[2],placement[3]
+        node.x,node.z,node.heading = math.cos(h)*x+math.sin(h)*z,-math.sin(h)*x+math.cos(h)*z,h
+    end
+    assert(UnloaderCoordinator:canHarvesterAdvanceWhileReversing(reverseDriver,resumeCombine),
+        'Straight-release footprints must preserve world headings in every field orientation')
+end
+print('Early straight combine resumption with full-train, header and turn protection: OK')
+
+do
+    local harvester = vehicle(0,0,4,8)
+    local header = vehicle(0,6,15,2)
+    header.getAttacherVehicle = function() return harvester end
+    harvester.children = {header}
+    local tractor = vehicle(14,0,3,6)
+    local trailer = vehicle(7,6,3,9,math.pi/2)
+    trailer.getAttacherVehicle = function() return tractor end
+    tractor.children = {trailer}
+    local driver = {vehicle = tractor}
+    UnloaderCoordinator.clearingUnloaders = {}
+    UnloaderCoordinator:registerClearingUnloader(driver,harvester,10)
+    assert(not UnloaderCoordinator:hasPhysicalHarvesterClearance(tractor,harvester) and
+        UnloaderCoordinator:isStillClearingHarvester(nil,harvester),
+        'Tractor-centre separation must not clear a trailer that still occupies the header envelope')
+    trailer.rootNode.x = 20
+    assert(UnloaderCoordinator:hasPhysicalHarvesterClearance(tractor,harvester) and
+        not UnloaderCoordinator:isStillClearingHarvester(nil,harvester),
+        'The physical clearance reservation must expire once the whole train is clear')
+end
+print('Whole-rig reverse clearance after tractor-centre separation: OK')

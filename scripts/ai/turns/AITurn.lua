@@ -992,8 +992,10 @@ function CourseTurn:generatePathfinderTurn(useHeadland)
         local departure = Course.createStraightForwardCourse(self.vehicle, 0.5, 0, self.vehicle:getAIDirectionNode())
         local blocked, kind, vehicle = self.driveStrategy:isConnectingPathBlockedByWorker(departure, 0, false, true)
         local unloader = vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
-        if blocked and kind == 'unloader' and unloader and not unloader:getCombineToUnload() and
-                unloader.isAvailableForStaging and unloader:isAvailableForStaging() then
+        if blocked and kind == 'unloader' and unloader and
+                ((not unloader:getCombineToUnload() and unloader.isAvailableForStaging and
+                unloader:isAvailableForStaging()) or
+                (unloader.isConnectorClearancePending and unloader:isConnectorClearancePending())) then
             self.state = self.states.WAITING_FOR_TURN_PATH
             self.distantTurnPathRetryAt = g_currentMission.time + 500
             self:debug('Waiting for parked unloader to clear the physical turn departure')
@@ -1005,7 +1007,10 @@ function CourseTurn:generatePathfinderTurn(useHeadland)
     local turnEndNode, goalOffset = self.turnContext:getTurnEndNodeAndOffsets(self.steeringLength)
     local _, backMarkerDistance = self.driveStrategy:getFrontAndBackMarkers()
     self:debug('Pathfinder turn (useHeadland: %s): generate turn with hybrid A*, goal offset %.1f', useHeadland, goalOffset)
-    local allowReverse = not self.isDistantPathfinderTurn and self.driveStrategy:getAllowReversePathfinding()
+    -- Keep the vehicle's existing reversing permission for searched transfers as well as local turns.
+    -- Distance only disables the unchecked calculated fallback; it must not remove safe shunts
+    -- from the collision-checked search and force a large forward loop around the row entry.
+    local allowReverse = self.driveStrategy:getAllowReversePathfinding()
     local attempt = self.distantTurnPathAttempt or 0
     local joinDistance = self.isDistantPathfinderTurn and (4 * self.turningRadius + 20 * attempt) or nil
     if self.isDistantPathfinderTurn and attempt == 4 then useHeadland = false end
@@ -1052,7 +1057,8 @@ function CourseTurn:onPathfindingDone(path)
     end
     if self.isDistantPathfinderTurn then
         local boundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
-        if not self.turnCourse:isForwardOnly() or not self:turnCourseFitsField(boundary) then
+        if (not self.driveStrategy:getAllowReversePathfinding() and not self.turnCourse:isForwardOnly()) or
+                not self:turnCourseFitsField(boundary) then
             self:waitForDistantTurnPath()
             return
         end

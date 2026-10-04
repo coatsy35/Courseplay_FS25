@@ -13,6 +13,7 @@ FieldworkBoundary = {
     forVehicle = function() return nil end,
 }
 
+dofile('scripts/ai/UnloaderCoordinator.lua')
 dofile('scripts/ai/strategies/AIDriveStrategyCombineCourse.lua')
 
 local function makeCourse(points)
@@ -155,6 +156,7 @@ local switchStrategy = setmetatable({
     isWaitingForUnload = function() return false end,
     combineController = { getFillLevelPercentage = function() return 79 end },
     settings = { callUnloaderPercent = { getValue = function() return 80 end } },
+    unloader = {set = function() end},
 }, { __index = AIDriveStrategyCombineCourse })
 assert(not switchStrategy:shouldReconsiderAssignedUnloader(),
         'An assigned lead must remain stable before the configured call percentage')
@@ -218,13 +220,16 @@ local pocketCallStrategy = setmetatable({
         getDistanceBetweenWaypoints = function(_, a, b) return math.abs(a - b) end,
         getCurrentWaypointIx = function() return 100 end,
     },
-    waypointIxWhenCallUnloader = 200,
+    waypointIxWhenCallUnloader = 300,
     combineController = { getFillLevelPercentage = function() return 75 end },
     settings = { callUnloaderPercent = { getValue = function() return 80 end } },
     findUnloader = function() return pocketLead, 40 end,
 }, { __index = AIDriveStrategyCombineCourse })
 assert(not pocketCallStrategy:callLeadForPocketWhenNeeded() and not pocketCallAccepted,
-        'Combine staging must not promote the lead before the configured call percentage')
+        'A pocket lead must remain parked while travel and approach fit comfortably before its deadline')
+pocketCallStrategy.waypointIxWhenCallUnloader = 200
+assert(pocketCallStrategy:callLeadForPocketWhenNeeded() and pocketCallAccepted,
+        'A pocket lead must depart before the setting when its journey consumes the remaining time')
 pocketCallStrategy.combineController.getFillLevelPercentage = function() return 80 end
 assert(pocketCallStrategy:callLeadForPocketWhenNeeded() and pocketCallAccepted,
         'A first-headland restriction must still call the parked lead at the configured call percentage')
@@ -247,17 +252,22 @@ pocketLeadStrategy.callForPocket = function() pocketCalls = pocketCalls + 1; ret
 pocketCallStrategy:callUnloaderWhenNeeded()
 assert(directCalls == 1, 'A combine already waiting below the threshold must still call a trailer')
 waiting, fill = false, 79
+pocketCallStrategy.waypointIxWhenCallUnloader = 300
 pocketCallStrategy:callUnloaderWhenNeeded()
 assert(pocketCalls == 0, 'A working combine below its setting must leave its staged lead parked')
+pocketCallStrategy.waypointIxWhenCallUnloader = 200
+pocketCallStrategy:callUnloaderWhenNeeded()
+assert(pocketCalls == 1, 'A restricted worker must prepare its pocket lead before reaching the setting')
 fill = 80
 pocketCallStrategy:callUnloaderWhenNeeded()
-assert(pocketCalls == 1, 'At the call setting the first-headland pocket lead must be called')
+assert(pocketCalls == 2, 'At the call setting the first-headland pocket lead must be called')
 callPercent, fill = 65, 64
+pocketCallStrategy.waypointIxWhenCallUnloader = 300
 pocketCallStrategy:callUnloaderWhenNeeded()
-assert(pocketCalls == 1)
+assert(pocketCalls == 2)
 fill = 65
 pocketCallStrategy:callUnloaderWhenNeeded()
-assert(pocketCalls == 2, 'The trigger must follow the setting rather than a hard-coded 80 percent')
+assert(pocketCalls == 3, 'The trigger must follow the setting rather than a hard-coded 80 percent')
 
 -- Reproduce loading at 90.5% with no previous sample: never choose the last waypoint (2434).
 g_currentMission = {time = 1000}

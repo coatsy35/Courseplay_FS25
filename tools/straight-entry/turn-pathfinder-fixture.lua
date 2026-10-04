@@ -53,7 +53,7 @@ local outline = {
 
 -- Rotations and reflections use pathfinder XY coordinates. The same transform is applied to
 -- the static boundary, departure pose and target, so this does not assume one compass bearing.
-function recordedTurnSearch(degrees, mirror, kind, obstruction, completeTurn)
+function recordedTurnSearch(degrees, mirror, kind, obstruction, completeTurn, allowReverse)
     local angle = math.rad(degrees)
     local function transform(x, y)
         x = mirror * x
@@ -84,7 +84,7 @@ function recordedTurnSearch(degrees, mirror, kind, obstruction, completeTurn)
         driveStrategy = {
             callUnloader = kind ~= 'tractor' and function() end or nil,
             getFrontAndBackMarkers = function() return 5.5, 5 end,
-            getAllowReversePathfinding = function() return true end,
+            getAllowReversePathfinding = function() return allowReverse == true end,
             getWorkWidth = function() return 15.2 end,
             isTurnOnFieldActive = function() return true end,
             setPathfindingDoneCallback = function() end,
@@ -98,8 +98,8 @@ function recordedTurnSearch(degrees, mirror, kind, obstruction, completeTurn)
     g_currentMission.time = 0
     turn:generatePathfinderTurn(true)
     PathfinderUtil.findPathForTurn = findPath
-    assert(reference == goalNode and offset == -6 and not reverse,
-        'Corridor consistency must not move the row target or introduce reversing')
+    assert(reference == goalNode and offset == -6 and reverse == (allowReverse == true),
+        'The original target and vehicle reversing permission must reach the solver unchanged')
 
     local collisionChecks = 0
     local constraints = setmetatable({fieldworkBoundary = boundary, vehicle = vehicle,
@@ -129,16 +129,16 @@ function recordedTurnSearch(degrees, mirror, kind, obstruction, completeTurn)
         }
         local middle = {}
         for i = #headland, 1, -1 do middle[#middle + 1] = pose(headland[i][1], headland[i][2], 0) end
-        finder = HybridAStarWithPathInTheMiddle(vehicle, 200, middle, true, DubinsSolver())
+        finder = HybridAStarWithPathInTheMiddle(vehicle, 200, middle, true, reverse and ReedsSheppSolver(ReedsShepp.ForwardEndingPathWords) or DubinsSolver())
         finder.hybridRangeOverride = 4 * 4.7
         start = pose(6.83, 396.49, 260)
     end
     math.randomseed(2969)
-    local result = finder:start(start, goal, 4.7, false, constraints, 3)
+    local result = finder:start(start, goal, 4.7, reverse, constraints, 3)
     while not result.done do result = finder:resume() end
     if result.path then
         for _, point in ipairs(result.path) do
-            assert(point.gear ~= Gear.Backward, 'A distant turn must remain forward-only')
+            assert(reverse or point.gear ~= Gear.Backward, 'A vehicle forbidding reverse must remain forward-only')
             assert(constraints:isValidNode(point), 'The returned route must retain boundary and obstacle checks')
         end
         turn.turnCourse = Course(vehicle, CpMathUtil.pointsToGameInPlace(result.path), true)
@@ -173,10 +173,16 @@ function recordedTurnSearch(degrees, mirror, kind, obstruction, completeTurn)
             turn:onPathfindingDone(result.path)
             assert(turn.state == 'turning' and turn.ppc.initialised and turn.ppc.course == turn.turnCourse,
                 'The complete recorded turn must start instead of scheduling another path retry')
-            assert(turn.turnCourse:isForwardOnly(), 'The assembled turn must not introduce a reverse')
+            assert(reverse or turn.turnCourse:isForwardOnly(), 'A vehicle forbidding reverse must remain forward-only')
         end
     end
     local iterations = completeTurn and (finder.startHybridAStarPathfinder.iterations +
         finder.endHybridAStarPathfinder.iterations) or finder.iterations
-    return result.path and #result.path or 0, iterations, boundary.margin, collisionChecks
+    local reversePoints = 0
+    if result.path then
+        for _, point in ipairs(result.path) do
+            if point.gear == Gear.Backward then reversePoints = reversePoints + 1 end
+        end
+    end
+    return result.path and #result.path or 0, iterations, boundary.margin, collisionChecks, reversePoints
 end

@@ -58,6 +58,9 @@ function PathfinderConstraints:init(context)
     self.vehicle = context._vehicle
     self.fieldworkBoundary = context._fieldworkBoundary
     self.protectRigBoundary = context._protectRigBoundary
+    self.avoidStandingCrop = context._avoidStandingCrop
+    self.departureGoalDiagnostics = context._departureGoalDiagnostics
+    self.pathfindingSliceMs = context._pathfindingSliceMs
     self.preferFieldworkBoundary = context._preferFieldworkBoundary
     self.turnRadius = AIUtil.getTurningRadius(context._vehicle) or 10
     self.vehicleData = PathfinderUtil.VehicleData(context._vehicle, true, 0.25)
@@ -179,7 +182,7 @@ end
 function PathfinderConstraints:isValidAnalyticSolutionNode(node, log)
     -- Analytic shortcuts bypass node penalties. Let the normal search find the preferred in-field route first.
     if self.preferFieldworkBoundary and not FieldworkBoundary.contains(self.fieldworkBoundary, node.x, -node.y) then
-        return false
+        return self:rejectDepartureGoal(node,false,false,'analytic goal outside checked boundary',nil,log)
     end
     local hasFruit, fruitValue = PathfinderUtil.hasFruit(node.x, -node.y, 3, 3, self.areaToIgnoreFruit)
     local analyticLimit = self.maxFruitPercent * 2
@@ -188,11 +191,11 @@ function PathfinderConstraints:isValidAnalyticSolutionNode(node, log)
             self.logger:debug(self.vehicle, 'isValidAnalyticSolutionNode: fruitValue %.1f, max %.1f @ %.1f, %.1f',
                     fruitValue, analyticLimit, node.x, -node.y)
         end
-        return false
+        return self:rejectDepartureGoal(node,false,false,'standing crop in analytic goal sample',nil,log)
     end
     -- off field nodes are always valid (they have a penalty) as we may need to make bigger loops to
     -- align properly with our target and don't want to restrict ourselves too much
-    return self:isValidNode(node, false, true)
+    return self:isValidNode(node, false, true, nil, log)
 end
 
 -- A helper node to calculate world coordinates
@@ -202,20 +205,57 @@ local function ensureHelperNode()
     end
 end
 
+--- Retain a reason only for the requested departure endpoint, without extra probes.
+function PathfinderConstraints:rejectDepartureGoal(node, ignoreTrailer, coarse, reason, protrusion, checkDepartureGoal)
+    local diagnostics = self.departureGoalDiagnostics
+    if diagnostics and (ignoreTrailer or checkDepartureGoal) and not coarse and not node.pred and
+            math.abs(node.x-diagnostics.x)<0.01 and math.abs(-node.y-diagnostics.z)<0.01 then
+        diagnostics.reason=reason
+        diagnostics.protrusion=protrusion
+    end
+    return false
+end
+
 --- Check if node is valid: would we collide with another vehicle or shape here?
 ---@param node State3D
 ---@param ignoreTrailer boolean don't check the trailer
 ---@param offFieldValid boolean consider nodes well off the field valid even in strict mode
 ---@param coarse boolean|nil grid search without vehicle/trailer steering geometry
-function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid, coarse)
+---@param checkDepartureGoal boolean|nil explicit analytic endpoint check, not route samples
+function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid, coarse, checkDepartureGoal)
+    -- Deliberate waiting/departure routes cannot use crop as a soft-cost shortcut and then
+    -- be rejected after completion. Ordinary CP unloading approaches retain their policy.
+    if self.avoidStandingCrop then
+        if coarse then
+            if PathfinderUtil.hasFruit(node.x, -node.y, 3, 3) then return false end
+        else
+            local heading = CpMathUtil.angleToGame(node.t)
+            local rig = {{x = node.x, z = -node.y, heading = heading,
+                box = self.vehicleData:getVehicleOverlapBoxParams()}}
+            if self.vehicleData:getTowedImplement() then
+                local offset = self.vehicleData:getHitchOffset()
+                rig[2] = {x = node.x + math.sin(heading) * offset,
+                    z = -node.y + math.cos(heading) * offset,
+                    heading = CpMathUtil.angleToGame(node.tTrailer or node.t),
+                    box = self.vehicleData:getTowedImplementOverlapBoxParams()}
+            end
+            if UnloaderParkingPlanner.rigHasFruit(rig) then
+                return self:rejectDepartureGoal(node,ignoreTrailer,coarse,'standing crop under goal rig',nil,checkDepartureGoal)
+            end
+        end
+    end
     if self.protectRigBoundary and self.fieldworkBoundary and not coarse then
         -- Goal validity is checked before a trailer heading exists. Test its aligned footprint; the completed
         -- route subsequently checks the actual articulated heading at every pose.
         local outside = self:getRigBoundaryProtrusion(node, ignoreTrailer and node.t)
-        if ignoreTrailer and outside > 0 then return false end
+        if ignoreTrailer and outside > 0 then
+            return self:rejectDepartureGoal(node,ignoreTrailer,coarse,'goal rig outside checked boundary',outside)
+        end
         local previous = node.pred and self:getRigBoundaryProtrusion(node.pred) or
                 FieldworkBoundary.rigOutsideDistance(self.fieldworkBoundary, FieldworkBoundary.captureRig(self.vehicle))
-        if outside > previous + 0.0001 then return false end
+        if outside > previous + 0.0001 then
+            return self:rejectDepartureGoal(node,ignoreTrailer,coarse,'goal rig increases boundary protrusion',outside,checkDepartureGoal)
+        end
         -- Validate the swept segment, not just the two endpoint poses. This catches trailer corners cutting a
         -- concave field edge while the tractor's centreline remains inside.
         if node.pred then
@@ -265,7 +305,10 @@ function PathfinderConstraints:isValidNode(node, ignoreTrailer, offFieldValid, c
     if not isValid then
         self.collisionNodeCount = self.collisionNodeCount + 1
     end
-    return isValid
+    if not isValid then
+        return self:rejectDepartureGoal(node,ignoreTrailer,coarse,'physical shape at goal',nil,checkDepartureGoal)
+    end
+    return true
 end
 
 function PathfinderConstraints:getRigBoundaryProtrusion(node, trailerHeading)

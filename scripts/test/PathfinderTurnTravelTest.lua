@@ -146,7 +146,8 @@ turn.driveStrategy = {
 turn.generateCalculatedTurn = function() error('Never use a local analytical turn for this distant transfer') end
 PathfinderUtil = {findPathForTurn = function(_, _, goal, offset, _, reverse, headland, _, _, _, _, _, join)
     assert(goal == 'original-row-start' and offset == -13, 'Retries must not skip or move the original work start')
-    assert(not reverse, 'Every distant-transfer retry must be forward-only')
+    assert(reverse == turn.driveStrategy:getAllowReversePathfinding(),
+        'Distant transfers must preserve the vehicle reversing permission on every retry')
     table.insert(calls, {join = join, headland = headland})
     return {turnHeadlandCourse = intendedHeadland}, {done = true}
 end}
@@ -197,9 +198,8 @@ activeCall, available = nil, false
 turn:generatePathfinderTurn(true)
 assert(#calls == searches + 3, 'An unavailable rig must not cause an unsupported clearance hold')
 
--- A later valid candidate must retain the approach/lowering sequence, but neither a reverse path nor
+-- A later valid candidate must retain the approach/lowering sequence, but neither a forbidden reverse nor
 -- a fixed headland middle occupied by another vehicle may activate PPC.
-Course = function() return course end
 course.isForwardOnly = function() return true end
 turn.turnCourseFitsField = function() return true end
 turn.driveStrategy.isConnectingPathBlockedByWorker = function() return true, 'fieldWorker' end
@@ -211,8 +211,10 @@ turn:onPathfindingDone({{}, {}, {}})
 assert(not ppc.initialised, 'The combine must wait while an unloader clears its accepted route')
 turn.driveStrategy.isConnectingPathBlockedByWorker = function() return false end
 course.isForwardOnly = function() return false end
+turn.driveStrategy.getAllowReversePathfinding = function() return false end
+turn:generatePathfinderTurn(true)
 turn:onPathfindingDone({{}, {}, {}})
-assert(not ppc.initialised, 'Reject reverse segments even if a solver incorrectly returns them')
+assert(not ppc.initialised, 'Reject reverse segments when the vehicle forbids reversing')
 course.isForwardOnly = function() return true end
 turn.turnCourseFitsField = function() return false end
 turn:onPathfindingDone({{}, {}, {}})
@@ -221,6 +223,11 @@ turn.turnCourseFitsField = function() return true end
 turn:onPathfindingDone({{}, {}, {}})
 assert(turn.state == turn.states.TURNING and ppc.initialised == 1 and ppc.course == course and ppc.lookahead == 6,
         'Once clear, the distant turn resumes the checked forward course automatically')
+turn.driveStrategy.getAllowReversePathfinding = function() return true end
+course.isForwardOnly = function() return false end
+turn:onPathfindingDone({{}, {}, {}})
+assert(ppc.initialised == 2 and turn.state == turn.states.TURNING,
+        'A collision-checked reverse manoeuvre must be accepted when the vehicle permits it')
 
 -- Check that the shared pathfinder actually consumes a requested hand-off, retaining the default otherwise.
 PathfinderInterface = {}
