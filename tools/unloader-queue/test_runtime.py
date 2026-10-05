@@ -760,5 +760,78 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
         ''')
 
+    def ad_exit_network(self):
+        # AD 3.0.1.2 PathCalculation.lua reconstructs a non-trivial route from
+        # the destination back to (but excluding) the requested start node.
+        self.lua.execute('''
+            nodes={{id=1,x=0,z=0,out={2}},{id=2,x=0,z=10,out={3}},
+                {id=3,x=0,z=20,out={}}}
+            adPath={nodes[2],nodes[3]}; destination=3
+            FS25_AutoDrive={ADGraphManager={getWayPointById=function(_,i) return nodes[i] end,
+                getWayPointsInRange=function() return {1} end,
+                pathFromTo=function(_,start,goal) assert(start==1 and goal==destination); return adPath end}}
+            v.ad={stateModule={getMode=function() return 2 end,
+                getSecondWayPoint=function() return destination end}}
+            saved={width=20,row={{x=0,z=80},{x=0,z=100}},position={x=0,z=100},
+                headlands={{{x=0,z=-60,t=0},{x=0,z=60,t=0}}}}
+            CpUnloaderQueue.data(u).departure=saved
+        ''')
+
+    def test_ad_route_omitting_start_provides_exit_site_and_heading(self):
+        self.ad_exit_network()
+        self.lua.execute('''
+            local node,heading,site=CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved)
+            assert(node==nodes[1] and heading==0 and site.x==0 and site.z==0)
+            local target=assert(CpUnloaderQueue.exitTarget(u))
+            assert(target.x==0 and target.z==0 and target.t==0)
+            assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=math.pi},saved))
+        ''')
+
+    def test_ad_single_hop_and_start_included_are_both_supported(self):
+        self.ad_exit_network()
+        self.lua.execute('''
+            destination=2; adPath={nodes[2]}
+            assert(CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
+            adPath={nodes[1],nodes[2]}
+            assert(CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
+        ''')
+
+    def test_ad_route_must_connect_every_directed_edge_and_reach_destination(self):
+        self.ad_exit_network()
+        self.lua.execute('''
+            for _,path in ipairs({{}, {nodes[1]}, {nodes[2]}, {nodes[3]}, {nodes[2],nodes[1],nodes[3]}}) do
+                adPath=path
+                assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
+            end
+            adPath={nodes[2],nodes[3]}; nodes[2].out={}
+            assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
+        ''')
+
+    def test_ad_native_shape_allows_handover_only_after_whole_train_clears(self):
+        self.ad_exit_network()
+        self.lua.execute('''
+            local handedOver=0
+            u.onTrailerFull=function() handedOver=handedOver+1 end
+            assert(CpUnloaderQueue.canFinishExit(u))
+            CpUnloaderQueue.finishExit(u)
+            assert(handedOver==1)
+            -- The tractor is on this shorter band, but its trailer is not.
+            saved.headlands={{{x=0,z=-3,t=0},{x=0,z=60,t=0}}}
+            assert(not CpUnloaderQueue.canFinishExit(u))
+            CpUnloaderQueue.finishExit(u)
+            assert(handedOver==1)
+        ''')
+
+    def test_ad_connected_route_does_not_waive_crop_or_collision_checks(self):
+        self.ad_exit_network()
+        self.lua.execute('''
+            densityStates={[8]=100}
+            assert(not CpUnloaderQueue.canFinishExit(u))
+            densityStates={[10]=100}; collision=1
+            assert(not CpUnloaderQueue.canFinishExit(u))
+            collision=0
+            assert(CpUnloaderQueue.canFinishExit(u))
+        ''')
+
 
 if __name__=='__main__': unittest.main()

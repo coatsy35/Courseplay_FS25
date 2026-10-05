@@ -126,14 +126,19 @@ function Q.connectedNode(driver,position,saved,range)
         if i>16 then break end
             local node=candidate.node
             local path=graph:pathFromTo(node.id,destination)
-            if path and #path>=2 and path[1].id==node.id and path[#path].id==destination then
+            -- AD 3.0.1.2 omits the start node from non-trivial paths. Validate
+            -- the first outgoing edge too; also accept APIs that include it.
+            local first=path and path[1] and path[1].id==node.id and 2 or 1
+            if path and path[first] and path[#path].id==destination then
                 local valid=true
-                for j=1,#path-1 do
+                local previous=node
+                for j=first,#path do
                     local linked=false
-                    for _,out in pairs(path[j].out or {}) do if out==path[j+1].id then linked=true end end
+                    for _,out in pairs(previous.out or {}) do if out==path[j].id then linked=true end end
                     if not linked then valid=false; break end
+                    previous=path[j]
                 end
-                local heading=math.atan2(path[2].x-node.x,path[2].z-node.z)
+                local heading=math.atan2(path[first].x-node.x,path[first].z-node.z)
                 if valid and (not position.t or math.abs(H.math.delta(position.t,heading))<math.rad(15)) then
                     return node,heading,candidate.site
                 end

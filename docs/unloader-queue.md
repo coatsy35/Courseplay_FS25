@@ -302,7 +302,7 @@ native rear-call dispatch, failed/missing exits, ownership and generation
 changes, actual chain modelling, growing/cut/unknown crop states, obstacles,
 route confinement, reverse tracking-node conversion, clearance choice,
 shared scheduling, saved-course capture and AD/headland eligibility. Together
-with the previous suites these exercise 131 queue-related tests in source and
+with the previous suites these exercise 136 queue-related tests in source and
 the extracted ZIP. Build 2999 adds nine steering tests using real Course/PPC
 methods for straight/curved paths, angle wrap, tight bends, reversing, final
 entry, unchanged waypoints, native resets, state isolation and other implements.
@@ -316,8 +316,6 @@ and unload modes, and measured frame behaviour with the user's fleet. Unsupporte
 attachment geometry, missing course/boundary evidence or an unavailable AD
 connection causes a logged safe wait; it never permits a crop shortcut or a
 mid-field handover. Automated tests cannot establish those engine outcomes.
-
-## Packaging
 
 ### 5 October build 3000 incident trace
 
@@ -341,6 +339,35 @@ other preparation searches exhausted their budgets. Native CP called /322 from
 before its next row from 12:13:49.034 until approximately 12:14:59.403, with
 unloading completed at 12:14:54.239. This eventual recovery does not meet the
 requirement to have an eligible trailer staged behind before the row ends.
+
+### Build 3002: AD route-return contract
+
+The same build 3000 session left all four full trailers in `QUEUE_EXIT`:
+/322 from 12:31:51, /325 from 12:39:38, /324 from 12:45:48 and /323 from
+12:56:50. Repeated `no connected AD route at the headland` messages continued
+past 14:44 without a handover. AD 3.0.1.2's `pathFromTo` omits the starting
+waypoint on non-trivial routes; the queue wrongly required it, rejecting valid
+routes. The original test double incorrectly included the starting waypoint.
+
+Build 3002 accepts either representation, checks the edge from the candidate
+node to the first returned waypoint and every subsequent directed edge, and
+requires the selected delivery destination at the end. Single-hop routes are
+valid. Empty, disconnected and wrong-destination paths remain invalid. The
+first outgoing edge supplies the heading. Crop, collision, whole-train headland
+clearance and CP-owned departure checks are unchanged; no mid-field handover
+or modification of AD is introduced. Build 3001's scheduling fix is included.
+
+Five regression tests cover route shapes, target selection, directed links,
+heading, successful headland handover, a trailer still outside the headland,
+standing crop and obstacles. The old code was confirmed to fail the valid-route
+and handover cases. `tools/unloader-queue/verify_installed_ad.py PATH_TO_AD_ZIP`
+also executes the actual installed AD route calculator and graph wrapper on a
+small directed network, with engine dependencies mocked. It passed multi-hop,
+single-hop and disconnected checks against installed AD 3.0.1.2 (ZIP SHA-256
+`6a43ae41edc70f7d97cdaa3c4b7e8f1106128928d9807b6c3bdaed59fb3c7f39`).
+This establishes the interface contract, not successful driving in FS25.
+
+## Packaging
 
 Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and
 `CoursePlay - Unloader Coordinator Test` so existing settings and mod identity
