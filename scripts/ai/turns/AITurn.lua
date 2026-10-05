@@ -16,6 +16,17 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ]]
 
+-- BEGIN stock harvester turn boundary selection
+local function getTurnBoundary(vehicle, workWidth)
+    -- The implement-profile corridor is not a stock CP harvester constraint.
+    -- A header-width circle wrongly rejects valid edge approaches and turns.
+    -- Keep native turn-on-field, fruit and collision handling for self-propelled
+    -- harvesters; queue routes continue to use FieldworkBoundary directly.
+    if vehicle.spec_combine then return nil end
+    return FieldworkBoundary.forVehicle(vehicle, workWidth)
+end
+-- END stock harvester turn boundary selection
+
 --[[
 
 All turns have three phases:
@@ -785,7 +796,7 @@ end
 --- combination to CP's forward-only pathfinder. Every candidate must fit the
 --- same field corridor, including reverse and appended approach sections.
 function CourseTurn:fitCalculatedTurnToBoundary()
-    local boundary = FieldworkBoundary.forVehicle(self.vehicle, self.workWidth)
+    local boundary = getTurnBoundary(self.vehicle, self.workWidth)
     if FieldworkBoundary.containsCourse(boundary, self.turnCourse) then return true end
     local context = self.turnContext
     local requested = context.straightEntryDistance
@@ -904,7 +915,7 @@ function CourseTurn:generatePathfinderTurn(useHeadland)
             useHeadland and self.fieldWorkCourse or nil,
             self.driveStrategy:getWorkWidth(), backMarkerDistance,
             self.driveStrategy:isTurnOnFieldActive(), self.turnContext:getBoundaryId(),
-            FieldworkBoundary.forVehicle(self.vehicle, self.workWidth))
+            getTurnBoundary(self.vehicle, self.workWidth))
     if result.done then
         return self:onPathfindingDone(result.path)
     else
@@ -1248,7 +1259,7 @@ function StartRowOnly:init(vehicle, driveStrategy, ppc, turnContext, startRowCou
     TurnManeuver.setLowerImplements(self.turnCourse, endingTurnLength, true)
     self.turnCourse:adjustForReversing(2)
     self.entryOutsideBoundary = not FieldworkBoundary.containsCourse(
-            FieldworkBoundary.forVehicle(vehicle, turnContext.workWidth), self.turnCourse)
+            getTurnBoundary(vehicle, turnContext.workWidth), self.turnCourse)
     self.state = self.states.DRIVING_TO_ROW
 end
 

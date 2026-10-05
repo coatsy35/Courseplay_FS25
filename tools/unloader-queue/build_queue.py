@@ -11,13 +11,32 @@ MODULES = {f'scripts/ai/CpUnloaderQueue{s}.lua'
            for s in ('Policy', 'Geometry', 'World', 'Search', '', 'Manoeuvres', 'Hooks')}
 INTEGRATION = {'modDesc.xml'}
 STEERING = 'scripts/ai/strategies/AIDriveStrategyCombineCourse.lua'
+TURNS = 'scripts/ai/turns/AITurn.lua'
+
+
+def check_harvester_turns():
+    actual = (release.ROOT/TURNS).read_text(encoding='utf-8')
+    expected = subprocess.check_output(['git', 'show', f'{release.BASE}:{TURNS}'],
+                                       cwd=release.ROOT).decode().replace('\r\n', '\n')
+    pattern = r'-- BEGIN stock harvester turn boundary selection\n.*?-- END stock harvester turn boundary selection\n\n'
+    additions = re.findall(pattern, actual, re.S)
+    if len(additions) != 1 or hashlib.sha256(additions[0].encode()).hexdigest() != (
+            'fff3f29dfb84f3476fcce9a7e572e00ccef09576e3345e097d147e46ab715d86'):
+        raise RuntimeError('Unreviewed harvester turn boundary selection')
+    for args, count in [('self.vehicle, self.workWidth', 2), ('vehicle, turnContext.workWidth', 1)]:
+        original = f'FieldworkBoundary.forVehicle({args})'
+        if expected.count(original) != count:
+            raise RuntimeError('Unexpected native turn boundary call inventory')
+        expected = expected.replace(original, f'getTurnBoundary({args})')
+    if actual.replace(additions[0], '', 1) != expected:
+        raise RuntimeError('Turn behaviour changed outside reviewed harvester corridor correction')
 
 
 def check_steering():
     # The user's 5 October steering request is an explicit, isolated exception.
     # Require the reviewed addition AND byte-equivalent original method bodies;
     # do not exempt the combine strategy from baseline qualification wholesale.
-    actual = (release.ROOT/STEERING).read_text()
+    actual = (release.ROOT/STEERING).read_text(encoding='utf-8')
     expected = subprocess.check_output(['git', 'show', f'{release.BASE}:{STEERING}'],
                                        cwd=release.ROOT).decode().replace('\r\n', '\n')
     pattern = r'-- BEGIN authorised approach lookahead adjustment\n.*?-- END authorised approach lookahead adjustment\n\n'
@@ -42,9 +61,10 @@ def check_queue(packager):
     current = {p for p in tracked if p and packager.is_runtime_file(p)}
     if current != native | MODULES:
         raise RuntimeError('Unexpected runtime inventory change')
-    subprocess.run(['git', 'diff', '--exit-code', release.BASE, '--', *sorted(native-INTEGRATION-{STEERING})],
+    subprocess.run(['git', 'diff', '--exit-code', release.BASE, '--', *sorted(native-INTEGRATION-{STEERING,TURNS})],
                    cwd=release.ROOT, check=True)
     check_steering()
+    check_harvester_turns()
     for path in INTEGRATION:
         expected = ET.fromstring(subprocess.check_output(['git', 'show', f'{release.BASE}:{path}'], cwd=release.ROOT))
         actual = ET.parse(release.ROOT/path).getroot()
@@ -65,12 +85,13 @@ def check_queue(packager):
         'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine')} | {('C', 'findUnloader')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
-    print('PASS: native runtime matches main apart from reviewed approach steering addition; queue hooks and settings qualified', flush=True)
+    print('PASS: runtime matches pinned main apart from reviewed steering/corridor corrections and queue hooks; settings qualified', flush=True)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('build_number', type=int)
     release.build(parser.parse_args().build_number, qualification=check_queue,
-                  suites=SUITES+('unloader-queue/test_runtime.py', 'unloader-queue/test_lookahead.py'),
+                  suites=SUITES+('unloader-queue/test_runtime.py', 'unloader-queue/test_lookahead.py',
+                                'unloader-queue/test_harvester_turns.py'),
                   stage='queue-operational-candidate-requires-in-game-validation')

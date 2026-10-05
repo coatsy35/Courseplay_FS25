@@ -57,6 +57,21 @@ their original lookahead. Release qualification permits only this exact
 reviewed addition to the combine strategy; all original method bodies still
 have to match the pinned baseline.
 
+Build 3000 addresses the two combine stops in the 5 October build-2998 run.
+CR11/318 exhausted its native connector searches then immediately stopped on
+the installed fallback. CR11/319 found a turn, then the additional corridor
+validator rejected it. The pinned main includes implement-profile restrictions
+which are absent from stock CP: it is not itself a stock CP baseline.
+Self-propelled harvesters (`spec_combine` on the driving vehicle) now use native
+CP's turn acceptance without this extra work-width-circle corridor veto, for
+calculated turns, pathfinder turns and StartRowOnly connecting approaches.
+Native turn-on-field, fruit, collision, reverse and target arguments remain;
+the shared pathfinder and waypoint generators are not changed. Other implement
+turns and every queue world query still use the explicit corridor. Six regression
+tests exercise these boundaries, including successful path installation and the
+previously rejected fallback approach. The correction does not eliminate native
+search failures or promise a particular search time, and still needs live testing.
+
 Do not change shared pathfinding, collision masks, crop limits or combine
 manoeuvres. Queue routes require their own strict crop, field/island and full
 rig checks. Native CP's existing crop/readiness exceptions remain exactly as
