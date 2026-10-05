@@ -367,6 +367,50 @@ single-hop and disconnected checks against installed AD 3.0.1.2 (ZIP SHA-256
 `6a43ae41edc70f7d97cdaa3c4b7e8f1106128928d9807b6c3bdaed59fb3c7f39`).
 This establishes the interface contract, not successful driving in FS25.
 
+### Build 3003: final harvester connector clearance
+
+The build 3002 incident is separate from trailer preparation. CR11/318 accepted
+a 495.5 m connector at 16:00:45 on 5 October, extended to 504.5 m by StartRowOnly.
+At 16:02:12 its live sensor detected an obstacle 1.2 m away near temporary
+waypoint 173; it subsequently remained blocked at the boundary trees. The
+planner had detected tree collisions nearby, but the final smoothed and extended
+course had no complete clearance gate. The log does not identify the exact
+smoothing operation responsible. Although the native retry message says
+"disabled collisions", its four-argument detector call places the mask in the
+ignoreFruitHeaps argument; the detector retains its default collision mask.
+That message must not be treated as proof that obstacle detection was disabled.
+
+The user authorised this isolated harvester connector correction. A separate
+module intercepts completed connector searches and exhausted-search fallbacks.
+It prepares the real StartRowOnly course once, applies native fieldwork offsets,
+waits for the vehicle to stop, and checks the route before installing it. Checks
+include the current-pose approach, every edge, both endpoints, rotation and the
+appended work-entry section. Native mounted-body/header dimensions are expanded
+by 0.5 m on both axes; samples are at most 0.25 m of corner displacement apart.
+This is a physical obstacle check, not the discarded circular field-boundary
+veto. A towed body is rejected rather than approximated as a rigid attachment.
+
+Braking motion, pose changes or altered fieldwork offsets discard a partial
+scan. Cancellation, deletion and stale last-waypoint callbacks cannot install
+an unchecked course. A rejected candidate tries the original connector through
+the same gate; if that is also obstructed, CP stops with its no-path message.
+No unchecked fallback is driven. Validation uses native collision filtering
+and a shared maximum of 32 queries or 2 ms per frame, whichever is reached first;
+one engine query itself cannot be interrupted. It does not accumulate pathfinder
+debug boxes. Native route generation, crop costs, unloading, turns and tractor
+implement entry remain unchanged. This gate does not generate an alternative
+route, and moving obstacles or steering deviations remain the responsibility
+of live collision detection.
+
+Nineteen engine-boundary regressions exercise real Course/StartRowOnly code,
+native offset application and AI-marker footprint construction. They cover
+header-only collisions, obstacles between waypoints and in the appended entry,
+corner sweep, reversing, valid field-edge clearance, checked fallback, exhausted
+retries, frame budgets, braking, offset changes and cancellation. Release checks
+run them against source and the extracted ZIP, alongside native parity and the
+existing queue/implement suites. These checks establish the acceptance gate;
+the tree-edge journey and header tracking still require validation in FS25.
+
 ## Packaging
 
 Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and
