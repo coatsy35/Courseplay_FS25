@@ -17,12 +17,29 @@ def load_queue(lua, hooks=True):
         lua.execute((ROOT / f'scripts/ai/CpUnloaderQueue{suffix}.lua').read_text())
 
 
-class DisabledContractTests(native.NativeContractTests):
-    """Repeat every native contract through the installed wrappers, disabled."""
+class AutomaticContractTests(native.NativeContractTests):
+    """Run native contracts with automatic coordination and the authorised departure exception."""
     def setUp(self):
         super().setUp()
         self.lua.execute('HeadlandLoopGeometry={}; g_currentMission={time=0}')
         load_queue(self.lua)
+
+
+    def test_departure_returns_to_valid_start_before_handover(self):
+        self.lua.execute('u.combineToUnload=nil; u.invertedStartPositionMarkerNode=1; u:startUnloadingTrailers()')
+        self.assertTrue(self.lua.eval("CpUnloaderQueue.owns(u) and u.queueData.operation=='exit'"))
+        self.assertNotIn('handover', self.lua.eval('result()'))
+
+    def test_baseline_gap_missing_marker_currently_hands_over_midfield(self):
+        # Automatic integration must close this documented native gap without a setting.
+        self.lua.execute('u.combineToUnload=nil; u:startUnloadingTrailers(); u:onTrailerFull()')
+        self.assertNotIn('handover', self.lua.eval('result()'))
+        self.assertTrue(self.lua.eval('CpUnloaderQueue.owns(u)'))
+
+    def test_baseline_gap_failed_return_path_currently_hands_over_midfield(self):
+        self.lua.execute('u.combineToUnload=nil; u:onPathfindingDoneToInvertedGoalPositionMarker(nil,false,nil,false)')
+        self.assertNotIn('handover', self.lua.eval('result()'))
+        self.assertTrue(self.lua.eval('CpUnloaderQueue.owns(u)'))
 
 
 class OwnershipTests(unittest.TestCase):
@@ -30,10 +47,37 @@ class OwnershipTests(unittest.TestCase):
         native.NativeContractTests.setUp(self)
         self.lua.execute('HeadlandLoopGeometry={}; g_currentMission={time=0}')
         load_queue(self.lua)
-    def test_enabled_missing_marker_retains_cp(self):
+    def test_automatic_without_settings_or_with_obsolete_false_setting(self):
+        self.lua.execute("""
+            assert(CpUnloaderQueue.enabled(u))
+            u.settings={unloaderQueue={getValue=function() error('obsolete option read') end}}
+            assert(CpUnloaderQueue.enabled(u))
+        """)
+
+    def test_idle_unloader_joins_preparation_automatically(self):
+        self.lua.execute("""
+            u.settings={fullThreshold={getValue=function() return 85 end}}
+            u.isDriveUnloadNowRequested=function() return false end
+            u.getAllTrailersFull=function() return false end
+            -- Fleet/route discovery is an external boundary for this ownership test.
+            CpUnloaderQueue.refresh=function() end
+            CpUnloaderQueue.target=function() return nil end
+            CpUnloaderQueue.schedule=function() end
+            CpUnloaderQueue.tick(u)
+            assert(CpUnloaderQueue.members[u]==u.queueData)
+            assert(CpUnloaderQueue.owns(u) and u.queueData.operation=='prepare')
+        """)
+
+    def test_other_unloading_modes_keep_native_ownership(self):
+        for mode in ['augerWagon', 'fieldUnloadPositionNode', 'useGiantsUnload']:
+            with self.subTest(mode=mode):
+                self.lua.execute(f"u.{mode}=true; assert(not CpUnloaderQueue.enabled(u)); CpUnloaderQueue.tick(u)")
+                self.assertFalse(self.lua.eval('CpUnloaderQueue.owns(u) or CpUnloaderQueue.members[u]~=nil'))
+                self.lua.execute(f'u.{mode}=nil')
+
+    def test_automatic_missing_marker_retains_cp(self):
         self.lua.execute('''
             u.combineToUnload=nil
-            u.settings={unloaderQueue={getValue=function() return true end}}
             u:startUnloadingTrailers()
             assert(CpUnloaderQueue.owns(u))
             assert(u.queueData.operation=='exit')
@@ -41,10 +85,9 @@ class OwnershipTests(unittest.TestCase):
         ''')
         self.assertNotIn('handover', self.lua.eval('result()'))
 
-    def test_enabled_failed_return_never_grants_handover(self):
+    def test_automatic_failed_return_never_grants_handover(self):
         self.lua.execute('''
             u.combineToUnload=nil
-            u.settings={unloaderQueue={getValue=function() return true end}}
             u:onPathfindingDoneToInvertedGoalPositionMarker(nil,false,nil,false)
             assert(CpUnloaderQueue.owns(u) and u.queueData.operation=='exit')
         ''')
@@ -53,7 +96,6 @@ class OwnershipTests(unittest.TestCase):
     def test_queue_call_uses_native_rear_pathfinder(self):
         self.lua.execute('''
             u.combineToUnload=nil
-            u.settings={unloaderQueue={getValue=function() return true end}}
             u.getPipeOffset=function() return 8,2 end
             u.getCombinesMeasuredBackDistance=function() return 6 end
             u.isPathfindingNeeded=function(_,vehicle,waypoint,x,z,limit) assert(limit==25); return true end
@@ -71,7 +113,6 @@ class OwnershipTests(unittest.TestCase):
 
     def test_exit_is_not_available_to_a_new_native_call(self):
         self.lua.execute('''
-            u.settings={unloaderQueue={getValue=function() return true end}}
             CpUnloaderQueue.take(u,'exit')
             assert(not u:isAllowedToBeCalled())
             assert(u:call(c,{})==false)

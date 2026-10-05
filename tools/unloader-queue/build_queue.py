@@ -1,4 +1,4 @@
-"""Qualify the opt-in operational queue against pinned native CP and engine-boundary tests."""
+"""Qualify the automatic operational queue against pinned native CP and engine-boundary tests."""
 import argparse
 import re
 import subprocess
@@ -8,7 +8,7 @@ from build_foundation import SUITES
 
 MODULES = {f'scripts/ai/CpUnloaderQueue{s}.lua'
            for s in ('Policy', 'Geometry', 'World', 'Search', '', 'Manoeuvres', 'Hooks')}
-INTEGRATION = {'modDesc.xml', 'config/VehicleSettingsSetup.xml', 'translations/translation_en.xml'}
+INTEGRATION = {'modDesc.xml'}
 
 
 def canonical(element):
@@ -32,18 +32,13 @@ def check_queue(packager):
         removed = []
         for parent in actual.iter():
             for child in list(parent):
-                if (child.attrib.get('filename') in MODULES or child.attrib.get('name') in {
-                        'unloaderQueue', 'CP_vehicle_setting_unloaderQueue_title',
-                        'CP_vehicle_setting_unloaderQueue_tooltip'}):
+                if child.attrib.get('filename') in MODULES:
                     removed.append(child)
                     parent.remove(child)
         if canonical(actual) != canonical(expected):
             raise RuntimeError(f'Unexpected integration change in {path}')
         if path == 'modDesc.xml' and {e.attrib['filename'] for e in removed} != MODULES:
             raise RuntimeError('Queue module load inventory incomplete')
-        if path.endswith('VehicleSettingsSetup.xml') and (len(removed) != 1 or
-                removed[0].attrib.get('defaultBool') != 'false'):
-            raise RuntimeError('Queue must remain opt-in')
     hooks = (release.ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
     methods = set(re.findall(r'function ([UC]):([A-Za-z]+)\(', hooks))
     expected = {('U', name) for name in ('update', 'getDriveData', 'isAllowedToBeCalled', 'call',
@@ -51,7 +46,7 @@ def check_queue(packager):
         'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine')} | {('C', 'findUnloader')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
-    print('PASS: native runtime matches main; only reviewed opt-in hooks and settings added', flush=True)
+    print('PASS: native runtime matches main; only reviewed automatic queue hooks added; settings match main', flush=True)
 
 
 if __name__ == '__main__':

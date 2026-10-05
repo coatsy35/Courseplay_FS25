@@ -75,7 +75,7 @@ crop protection, combine turns, unloading entry or pipe alignment.
 
 1. Establish and qualify the clean main baseline.
 2. Define explicit idle queue ownership and native CP handover, initially with
-   coordination disabled by default. Add reservations before movement.
+   component qualification before movement. Add reservations before movement.
 3. Add harvested straight-line and headland parking, followed by deliberate
    lagged preparation with hysteresis and bounded route work.
 4. Add deadline-based preparation and successor coverage without replacing
@@ -89,7 +89,7 @@ crop protection, combine turns, unloading entry or pipe alignment.
 
 Use real decision and strategy code, mocking only the engine boundaries needed
 to control time, vehicle positions, field geometry and crop density. Compare
-native decisions with coordination disabled and enabled. Component tests alone
+native decisions against the automatically integrated queue. Component tests alone
 are not evidence of successful unloading.
 
 - Every actual CP unload setting (60–90%, step 5), every trailer departure
@@ -148,14 +148,16 @@ restriction. Report the constraint rather than forcing an unsafe approach.
 
 ## Operational candidates 2993–2995
 
-Enable **Prepare unloader queue** on each participating CP unloader. It is off
-by default, including existing saves. This is the first integrated candidate,
-not a claim of completed in-game acceptance.
+Build 2996 activates the queue automatically for tractors running the native
+CP combine-unloading job with ordinary trailers. There is no extra option.
+The setting introduced in builds 2993�2995 has been removed; previously saved
+values cannot disable preparation. Auger wagons, field unloading and GIANTS
+unloading retain their native ownership. In-game acceptance is still required.
 
 Seven queue modules are loaded through a small hook file. Existing runtime
 files, including both native strategies and every shared solver, remain
 byte-identical to pinned main. The only existing-file changes are the module
-manifest, one setting and its English text. Native crop/readiness checks,
+manifest; vehicle settings and translations match main again. Native crop/readiness checks,
 rear approach, pipe following, combine turns and native reverse clearance
 remain in their original methods.
 
@@ -195,12 +197,12 @@ searches take precedence. Moving rigs retain live body and stopping-horizon
 checks. Background overlap tests do not append to the shared debug-box array.
 Search elapsed time and measured advance cost are different; neither is FPS.
 
-`test_runtime.py` adds engine-boundary coverage for installed disabled hooks,
+`test_runtime.py` adds engine-boundary coverage for automatic membership without an option, excluded unloading modes,
 native rear-call dispatch, failed/missing exits, ownership and generation
 changes, actual chain modelling, growing/cut/unknown crop states, obstacles,
 route confinement, reverse tracking-node conversion, clearance choice,
 shared scheduling, saved-course capture and AD/headland eligibility. Together
-with the previous suites these exercise 101 queue-related tests in source and
+with the previous suites these exercise 104 queue-related tests in source and
 the extracted ZIP. The full release also runs existing implement-profile,
 headland, pocket, work-entry, double-pivot and packaging checks.
 

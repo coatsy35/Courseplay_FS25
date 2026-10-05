@@ -17,8 +17,8 @@ local function point(course,ix)
 end
 
 function Q.enabled(driver)
-    return driver.settings and driver.settings.unloaderQueue and driver.settings.unloaderQueue:getValue()
-        and not driver.augerWagon and not driver.fieldUnloadPositionNode and not driver.useGiantsUnload
+    -- The native combine-unloading strategy is the entry point: no separate opt-in.
+    return not driver.augerWagon and not driver.fieldUnloadPositionNode and not driver.useGiantsUnload
 end
 
 function Q.data(driver)
