@@ -12,25 +12,31 @@ local function distanceToSegment(p,a,b)
 end
 
 local function entryGate(strategy,model,boundary)
-    if not strategy.queueData or strategy.queueData.operation~='prepare'
-            or not strategy.invertedStartPositionMarkerNode then return end
+    if not strategy.queueData or strategy.queueData.operation~='prepare' then return nil,'not preparing' end
+    if not strategy.invertedStartPositionMarkerNode then return nil,'no saved start marker' end
     local start=model.root
     local outside=false
     local poses=W.poses(model)
     for i,body in ipairs(model.bodies) do
         if not G.within(W.rectangle(body,poses[i]),boundary.polygon,boundary.islands) then outside=true end
     end
-    if not outside then return end
+    if not outside then return nil,'whole train inside field' end
     local marker=W.pose(strategy.invertedStartPositionMarkerNode)
     local width=math.max(15,2*strategy.turningRadius)
     local length=AIUtil.getLength(strategy.vehicle)
-    if math.sqrt((start.x-marker.x)^2+(start.z-marker.z)^2)>width+length then return end
+    local markerDistance=math.sqrt((start.x-marker.x)^2+(start.z-marker.z)^2)
+    if markerDistance>width+length then
+        return nil,string.format('saved start marker %.1f m away (limit %.1f m)',markerDistance,width+length)
+    end
     local nearest,entry
     for i,a in ipairs(boundary.polygon) do
         local d,p=distanceToSegment(start,a,boundary.polygon[i%#boundary.polygon+1])
         if not nearest or d<nearest then nearest,entry=d,p end
     end
-    if nearest and nearest<=100 then return {start=start,entry=entry,width=width+length} end
+    if nearest and nearest<=100 then
+        return {start=start,entry=entry,width=width+length},'bounded entrance available'
+    end
+    return nil,nearest and string.format('field edge %.1f m away (limit 100 m)',nearest) or 'no field edge'
 end
 
 local function inEntrance(world,rectangle)
@@ -105,7 +111,7 @@ function W.new(strategy)
     local boundary = FieldworkBoundary.forVehicle(strategy.vehicle, 0)
     if not boundary then return nil, 'field boundary unavailable' end
     local world = {strategy=strategy, model=model, boundary=boundary, fruit={}, node=createTransformGroup('cpQueueProbe')}
-    world.entrance=entryGate(strategy,model,boundary)
+    world.entrance,world.entranceReason=entryGate(strategy,model,boundary)
     link(getRootNode(), world.node)
     world.collision = PathfinderCollisionDetector(strategy.vehicle, {}, {}, false, CpUtil.getDefaultCollisionFlags())
     for _, desc in pairs(g_fruitTypeManager:getFruitTypes()) do

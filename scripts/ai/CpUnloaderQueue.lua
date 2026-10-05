@@ -71,7 +71,9 @@ end
 
 function Q.remove(driver)
     Q.cancel(driver); Q.members[driver]=nil; driver.queueData=nil
-    if next(Q.members)==nil then Q.nextPlan=0; Q.plan=nil; Q.combines=nil; Q.nextDeparture=0 end
+    if next(Q.members)==nil then
+        Q.nextPlan=0; Q.plan=nil; Q.combines=nil; Q.nextDeparture=0; Q.schedulerTime=nil
+    end
 end
 
 function Q.owns(driver)
@@ -372,6 +374,7 @@ function Q.request(driver,goal,corridor)
     data.corridor=corridor
     if not data.search then Q.failed(data,reason,phase) end
     data.searchStarted=now()
+    data.searchActiveMs=0
 end
 
 function Q.startRoute(data,path)
@@ -397,6 +400,8 @@ end
 function Q.schedule()
     if Q.frame==g_updateLoopIndex then return end
     Q.frame=g_updateLoopIndex
+    local frameMs=Q.schedulerTime and math.max(0,now()-Q.schedulerTime) or 0
+    Q.schedulerTime=now()
     -- Foreground native calls keep their existing scheduling and take precedence.
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         local d=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
@@ -409,6 +414,9 @@ function Q.schedule()
     end
     if not selected then return end
     selected.lastAdvance=now()
+    -- Only charge the frame this search receives. Native searches and other
+    -- queue members can suspend it for minutes without doing any search work.
+    selected.searchActiveMs=(selected.searchActiveMs or 0)+math.min(frameMs,math.max(0,now()-selected.searchStarted))
     local timer=openIntervalTimer()
     local done,path,reason
     repeat done,path,reason=S.step(selected.search,1) until done or readIntervalTimerMs(timer)>=2
@@ -418,7 +426,7 @@ function Q.schedule()
         selected.search=nil
         if path then Q.startRoute(selected,path)
         else Q.failed(selected,reason or 'no safe route') end
-    elseif now()-selected.searchStarted>15000 then
+    elseif selected.searchActiveMs>15000 then
         selected.search=nil; Q.failed(selected,'search budget exhausted; retaining CP control')
     end
 end

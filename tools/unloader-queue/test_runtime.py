@@ -461,6 +461,71 @@ class EngineBoundaryTests(unittest.TestCase):
     def test_growing_crop_rejected(self):
         self.lua.execute('densityCount=20; assert(not CpUnloaderQueueWorld.clear(world,poses))')
 
+    def test_native_search_wait_does_not_consume_preparation_budget(self):
+        self.lua.execute('''
+            u.setMaxSpeed=function() end
+            local data=CpUnloaderQueue.take(u,'prepare')
+            data.world=world
+            data.search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))
+            data.searchGeneration=data.generation; data.searchStarted=0; data.searchActiveMs=0
+            local search=data.search
+            local native={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
+            g_currentMission.vehicleSystem.vehicles={native}
+            local ticks=0
+            openIntervalTimer=function() ticks=0; return 1 end
+            readIntervalTimerMs=function() ticks=ticks+1; return ticks end
+            closeIntervalTimer=function() end
+            for i=1,200 do
+                g_updateLoopIndex=i; g_currentMission.time=i*100
+                CpUnloaderQueue.schedule()
+            end
+            assert(data.search==search and data.searchActiveMs==0)
+            g_currentMission.vehicleSystem.vehicles={}
+            g_updateLoopIndex=201; g_currentMission.time=20100
+            CpUnloaderQueue.schedule()
+            assert(data.search==search and data.searchActiveMs==100)
+        ''')
+
+    def test_only_scheduled_search_uses_budget_and_active_exhaustion_still_stops(self):
+        self.lua.execute('''
+            u.setMaxSpeed=function() end
+            local data=CpUnloaderQueue.take(u,'prepare')
+            data.search={}; data.searchGeneration=data.generation
+            data.searchStarted=0; data.searchActiveMs=14900
+            local other={state={},debug=function() end}
+            local waiting={driver=other,state=other.state,search={},generation=1,searchGeneration=1,
+                searchStarted=0,searchActiveMs=100,lastAdvance=100000}
+            CpUnloaderQueue.members[other]=waiting
+            CpUnloaderQueueSearch.step=function() return false end
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 2 end
+            closeIntervalTimer=function() end
+            CpUnloaderQueue.schedulerTime=20000
+            g_updateLoopIndex=1; g_currentMission.time=20100
+            CpUnloaderQueue.schedule()
+            assert(data.search and data.searchActiveMs==15000 and waiting.searchActiveMs==100)
+            g_updateLoopIndex=2; g_currentMission.time=20200
+            CpUnloaderQueue.schedule()
+            assert(not data.search and data.reason=='search budget exhausted; retaining CP control')
+            assert(waiting.search and waiting.searchActiveMs==100)
+        ''')
+
+    def test_new_search_is_not_charged_for_idle_time_before_creation(self):
+        self.lua.execute('''
+            u.setMaxSpeed=function() end
+            local data=CpUnloaderQueue.take(u,'prepare')
+            data.search={}; data.searchGeneration=data.generation
+            data.searchStarted=20000; data.searchActiveMs=0
+            CpUnloaderQueueSearch.step=function() return false end
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 2 end
+            closeIntervalTimer=function() end
+            CpUnloaderQueue.schedulerTime=0
+            g_updateLoopIndex=1; g_currentMission.time=20000
+            CpUnloaderQueue.schedule()
+            assert(data.search and data.searchActiveMs==0)
+        ''')
+
     def test_ad_start_outside_field_has_a_bounded_entrance(self):
         self.lua.execute('''
             local boundary={{x=-40,z=10},{x=40,z=10},{x=40,z=150},{x=-40,z=150}}
@@ -488,6 +553,24 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(not CpUnloaderQueueWorld.cropFree(world,rect,false))
             world.fruit[1].grass=false
             assert(not CpUnloaderQueueWorld.cropFree(world,rect,true))
+        ''')
+
+    def test_rejected_start_reports_marker_distance_without_loosening_boundary(self):
+        self.lua.execute('''
+            v.cpGetFieldPolygon=function()
+                return {{x=-40,z=10},{x=40,z=10},{x=40,z=150},{x=-40,z=150}}
+            end
+            u.queueData={operation='prepare'}
+            u.invertedStartPositionMarkerNode={x=200,z=0,t=0}
+            AIUtil.getLength=function() return 18 end
+            local entry=assert(CpUnloaderQueueWorld.new(u))
+            assert(not entry.entrance)
+            local search,reason,phase=CpUnloaderQueueSearch.new(entry,{x=0,z=40,t=0})
+            assert(not search and phase=='start')
+            assert(reason:find('start: field boundary',1,true))
+            assert(reason:find('root 0.0, 0.0',1,true))
+            assert(reason:find('saved start marker 200.0 m away',1,true))
+            assert(not CpUnloaderQueueWorld.clear(entry,CpUnloaderQueueWorld.poses(entry.model)))
         ''')
 
     def test_cut_crop_permitted(self):

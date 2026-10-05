@@ -284,13 +284,25 @@ between geometry samples; a single engine query can exceed that target. Native
 searches take precedence. Moving rigs retain live body and stopping-horizon
 checks. Background overlap tests do not append to the shared debug-box array.
 Search elapsed time and measured advance cost are different; neither is FPS.
+Build 3001 charges the 15-second preparation budget only for update frames in
+which that search is advanced. Time paused behind native pathfinding, another
+queue member or before search creation does not consume it. The shared 2 ms
+per-frame allowance and native priority are unchanged. This corrects premature
+search expiry; it does not make rejected entry positions valid or guarantee a
+staging route can be found. The 5 October run had no successful preparation
+route before native calls, with both start-boundary rejections and expired
+searches; late native unloading is not evidence that preparation succeeded.
+Start-boundary failures now report the root position and why a bounded entrance
+was unavailable, including the distance from the saved start marker. The old
+log cannot establish that the rig was incorrectly parked; containment and crop
+checks are unchanged.
 
 `test_runtime.py` adds engine-boundary coverage for automatic membership without an option, excluded unloading modes,
 native rear-call dispatch, failed/missing exits, ownership and generation
 changes, actual chain modelling, growing/cut/unknown crop states, obstacles,
 route confinement, reverse tracking-node conversion, clearance choice,
 shared scheduling, saved-course capture and AD/headland eligibility. Together
-with the previous suites these exercise 127 queue-related tests in source and
+with the previous suites these exercise 131 queue-related tests in source and
 the extracted ZIP. Build 2999 adds nine steering tests using real Course/PPC
 methods for straight/curved paths, angle wrap, tight bends, reversing, final
 entry, unchanged waypoints, native resets, state isolation and other implements.
@@ -306,6 +318,29 @@ connection causes a logged safe wait; it never permits a crop shortcut or a
 mid-field handover. Automated tests cannot establish those engine outcomes.
 
 ## Packaging
+
+### 5 October build 3000 incident trace
+
+CR11/318 left original waypoint 695 at 12:08:56.642 and requested a route along
+its 709.1 m connector to waypoint 907. At 12:09:52.199 the first search exhausted
+40,000 iterations. Native CP retried with collision mask zero while retaining
+the preferred connector and maximum fruit percentage 50. At 12:10:10.952 it
+accepted a 494.3 m route, subsequently extended to 503.3 m for entry. The log
+does not prove that a crop-free route was separately tried and ruled out.
+The locally available stock revision uses soft crop and preferred-path costs;
+its analytic crop rejection threshold is twice the configured percentage.
+Build 3000 altered acceptance by removing the additional implement-profile
+harvester corridor veto, not these route-search rules. Build 3001 leaves that
+native route generation unchanged. A strict crop-free-first connector policy
+would be a separate combine-routing change, outside queue preparation.
+
+There was no successful `Queue: driving prepare` record in this run before the
+reported late arrivals. T7.300/322 was rejected at its start by field containment;
+other preparation searches exhausted their budgets. Native CP called /322 from
+560.1 m at 12:12:03.627 and /324 from 373.8 m at 12:13:15.157. CR11/318 waited
+before its next row from 12:13:49.034 until approximately 12:14:59.403, with
+unloading completed at 12:14:54.239. This eventual recovery does not meet the
+requirement to have an eligible trailer staged behind before the row ends.
 
 Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and
 `CoursePlay - Unloader Coordinator Test` so existing settings and mod identity

@@ -38,7 +38,13 @@ end
 function S.new(world,goal,corridor)
     local poses=W.poses(world.model)
     local clear,reason=W.clear(world,poses,corridor)
-    if not clear then return nil,'start: '..reason,'start' end
+    if not clear then
+        if reason=='field boundary' and world.entranceReason then
+            reason=string.format('%s (root %.1f, %.1f; %s)',reason,
+                poses[1].x,poses[1].z,world.entranceReason)
+        end
+        return nil,'start: '..reason,'start'
+    end
     local parked=W.settledPoses(world.model,goal)
     clear,reason=W.clear(world,parked,corridor)
     if not clear then return nil,'destination: '..reason,'destination' end
