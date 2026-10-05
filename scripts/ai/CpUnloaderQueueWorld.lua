@@ -116,7 +116,8 @@ function W.new(strategy)
                 grass=desc.name=='GRASS' or desc.name=='MEADOW'}
             for state, isCut in pairs(desc.cutStates or {}) do
                 if isCut == true and type(state) == 'number' and state >= 0 and state % 1 == 0 then
-                    item.cut[state+1] = true
+                    -- FruitTypeDesc.cutStates already uses density-map state values.
+                    item.cut[state] = true
                 end
             end
             world.fruit[#world.fruit+1] = item

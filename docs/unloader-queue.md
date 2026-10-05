@@ -214,6 +214,16 @@ forecast using measured intake and usable trailer capacity, output compatibility
 at the actual pipe node, and accepted-call ownership before registration.
 Tanked beet/vegetable machines use the same native tank deadline as combines.
 
+Build 2998 corrects queue crop probing: `FruitTypeDesc.cutStates` already contains
+the density state values, so adding one wrongly rejected harvested stubble and
+could permit a different, still harvestable state. Tests now evaluate the actual
+filter value against explicit wheat, canola, grass, potato, sugar-beet, carrot,
+parsnip and maize state fixtures, including mixed live/cut pixels and a completed
+preparation route over stubble. They no longer return a cut count for any equality
+filter. Start and destination failures are identified separately; a blocked
+start does not blacklist an untested destination. Native combine routes,
+route validation, crop protection and shared pathfinding are unchanged.
+
 The runtime takes fleet snapshots once per second, measures transfer progress,
 assigns preparation/successor slots and separates reserved parking targets.
 Build 2995 accounts for grain still being harvested during unloading by combining
@@ -255,7 +265,7 @@ native rear-call dispatch, failed/missing exits, ownership and generation
 changes, actual chain modelling, growing/cut/unknown crop states, obstacles,
 route confinement, reverse tracking-node conversion, clearance choice,
 shared scheduling, saved-course capture and AD/headland eligibility. Together
-with the previous suites these exercise 123 queue-related tests in source and
+with the previous suites these exercise 127 queue-related tests in source and
 the extracted ZIP. The full release also runs existing implement-profile,
 headland, pocket, work-entry, double-pivot and packaging checks.
 

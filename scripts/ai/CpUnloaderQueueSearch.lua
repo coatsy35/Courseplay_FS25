@@ -38,10 +38,10 @@ end
 function S.new(world,goal,corridor)
     local poses=W.poses(world.model)
     local clear,reason=W.clear(world,poses,corridor)
-    if not clear then return nil,reason end
+    if not clear then return nil,'start: '..reason,'start' end
     local parked=W.settledPoses(world.model,goal)
     clear,reason=W.clear(world,parked,corridor)
-    if not clear then return nil,reason end
+    if not clear then return nil,'destination: '..reason,'destination' end
     if goal.accept and not goal.accept(parked,world.model) then return nil,'whole train cannot occupy target' end
     local radius=H.minimumRadius(world.model,world.strategy.turningRadius)
     if not radius then return nil,'no supported turning radius' end

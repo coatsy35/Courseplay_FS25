@@ -59,8 +59,8 @@ function Q.targetAvailable(driver,p)
     return true
 end
 
-function Q.failed(data,reason)
-    if data.goal then
+function Q.failed(data,reason,phase)
+    if data.goal and phase~='start' and phase~='world' then
         data.failedGoals=data.failedGoals or {}
         for key,expiry in pairs(data.failedGoals) do if expiry<=now() then data.failedGoals[key]=nil end end
         data.failedGoals[goalKey(data.goal)]=now()+15000
@@ -363,13 +363,14 @@ function Q.request(driver,goal,corridor)
     Q.cancel(driver)
     data.goal=goal
     local world,reason=W.new(driver)
-    if not world then Q.failed(data,reason); return end
+    if not world then Q.failed(data,reason,'world'); return end
     data.world=world
+    local phase
     if goal.choices then data.search=S.choices(world,goal.choices)
-    else data.search,reason=S.new(world,goal,corridor) end
+    else data.search,reason,phase=S.new(world,goal,corridor) end
     data.searchGeneration=data.generation
     data.corridor=corridor
-    if not data.search then Q.failed(data,reason) end
+    if not data.search then Q.failed(data,reason,phase) end
     data.searchStarted=now()
 end
 

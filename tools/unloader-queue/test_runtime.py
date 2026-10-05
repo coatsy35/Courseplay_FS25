@@ -332,14 +332,23 @@ class EngineBoundaryTests(unittest.TestCase):
                 return {setParallelogramWorldCoords=function() end,
                     executeGet=function(_,filter)
                         queryCount=queryCount+1
-                        return 0,filter.mode==2 and cutCount or densityCount,densityTotal
+                        if densityStates then
+                            local count=0
+                            for state,pixels in pairs(densityStates) do
+                                if (filter.mode==1 and state>filter.value) or
+                                        (filter.mode==2 and state==filter.value) then count=count+pixels end
+                            end
+                            return 0,count,densityTotal
+                        end
+                        if filter.mode==2 then return 0,filter.value==10 and cutCount or 0,densityTotal end
+                        return 0,densityCount,densityTotal
                     end}
             end}
             DensityMapFilter={new=function()
                 return {setValueCompareParams=function(self,mode,value) self.mode=mode; self.value=value end}
             end}
             g_fruitTypeManager={getFruitTypes=function()
-                return {{terrainDataPlaneId=1,startStateChannel=0,numStateChannels=4,cutStates={[3]=true}}}
+                return {{terrainDataPlaneId=1,startStateChannel=0,numStateChannels=4,cutStates={[10]=true}}}
             end}
             PathfinderUtil.setWorldPositionAndRotationOnTerrain=function(node,x,z,t) node.x=x;node.z=z;node.t=t end
             collision=0
@@ -484,6 +493,78 @@ class EngineBoundaryTests(unittest.TestCase):
     def test_cut_crop_permitted(self):
         self.lua.execute('densityCount=20; cutCount=20; assert(CpUnloaderQueueWorld.clear(world,poses))')
 
+    def test_installed_foliage_state_numbers_preserve_crop_protection(self):
+        # Explicit one-based density values from FS25 foliage XML. In particular,
+        # potato/beet cutHaulm is still harvestable: cut state + 1 is NOT safe.
+        fixtures = [
+            ('wheat', (10,), (1, 7, 8, 9)),
+            ('canola', (11,), (1, 8, 9, 10)),
+            ('grass', (5,), (1, 3, 4, 6)),
+            ('potato', (8,), (1, 6, 7, 9)),
+            ('sugarBeet', (10,), (1, 8, 9, 11)),
+            ('carrot', (7,), (1, 5, 6, 8)),
+            ('parsnip', (7,), (1, 5, 6, 8)),
+            ('maize', (9, 10), (1, 5, 7, 8)),
+        ]
+        for crop, cut_states, blocked_states in fixtures:
+            cuts = ','.join(f'[{state}]=true' for state in cut_states)
+            self.lua.execute(f'''
+                CpUnloaderQueueWorld.delete(world)
+                g_fruitTypeManager.getFruitTypes=function()
+                    return {{{{name='{crop}',terrainDataPlaneId=1,startStateChannel=0,
+                        numStateChannels=4,cutStates={{{cuts}}}}}}}
+                end
+                world=assert(CpUnloaderQueueWorld.new(u))
+            ''')
+            for state in (*cut_states, *blocked_states):
+                with self.subTest(crop=crop, state=state):
+                    self.lua.execute(f'densityStates={{[{state}]=20}}')
+                    clear = self.lua.eval('(CpUnloaderQueueWorld.clear(world,poses))')
+                    self.assertEqual(clear, state in cut_states)
+            # Mixed harvested states are allowed, but one live pixel still blocks.
+            densities = ','.join(f'[{state}]=10' for state in cut_states)
+            self.lua.execute(f'densityStates={{{densities}}}; assert(CpUnloaderQueueWorld.clear(world,poses))')
+            self.lua.execute(f'densityStates[{blocked_states[0]}]=1; assert(not CpUnloaderQueueWorld.clear(world,poses))')
+
+    def test_preparation_route_completes_on_harvested_stubble(self):
+        self.lua.execute('''
+            densityStates={[10]=100}
+            local search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))
+            local done,path
+            for i=1,2000 do
+                done,path=CpUnloaderQueueSearch.step(search,4)
+                if done then break end
+            end
+            assert(done and path and math.abs(path[#path].z-30)<1.5)
+        ''')
+
+    def test_blocked_start_does_not_blacklist_clear_destination(self):
+        self.lua.execute('''
+            u.setMaxSpeed=function() end
+            local data=CpUnloaderQueue.take(u,'prepare')
+            densityStates={[8]=100}
+            local goal={x=0,z=30,t=0}
+            CpUnloaderQueue.request(u,goal)
+            assert(not data.search and data.reason=='start: standing crop')
+            assert(not data.failedGoals and data.nextAttempt==3000)
+            densityStates={[10]=100}
+            assert(CpUnloaderQueue.targetAvailable(u,goal))
+            CpUnloaderQueue.request(u,goal)
+            assert(data.search)
+        ''')
+
+    def test_invalid_destination_is_identified_and_temporarily_excluded(self):
+        self.lua.execute('''
+            u.setMaxSpeed=function() end
+            local data=CpUnloaderQueue.take(u,'prepare')
+            local goal={x=150,z=30,t=0}
+            CpUnloaderQueue.request(u,goal)
+            assert(not data.search and data.reason=='destination: field boundary')
+            assert(not CpUnloaderQueue.targetAvailable(u,goal))
+            g_currentMission.time=15000
+            assert(CpUnloaderQueue.targetAvailable(u,goal))
+        ''')
+
     def test_missing_density_rejected(self):
         self.lua.execute('densityCount=nil; assert(not CpUnloaderQueueWorld.clear(world,poses))')
 
@@ -519,7 +600,7 @@ class EngineBoundaryTests(unittest.TestCase):
                 return true
             end
             local search,reason=CpUnloaderQueueSearch.new(world,{x=20,z=30,t=0},corridor)
-            assert(not search and reason=='outside harvested exit corridor')
+            assert(not search and reason=='destination: outside harvested exit corridor')
         ''')
 
     def test_headland_handover_requires_tail_inside(self):
