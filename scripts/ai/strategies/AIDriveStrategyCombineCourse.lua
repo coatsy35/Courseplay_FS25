@@ -218,6 +218,38 @@ function AIDriveStrategyCombineCourse:getPipeOffsetReferenceNode()
     end
 end
 
+-- BEGIN authorised approach lookahead adjustment
+-- Steering only: follow the existing approach without rewriting its waypoints.
+function AIDriveStrategyCombineCourse:onWaypointChange(ix, course)
+    AIDriveStrategyFieldWorkCourse.onWaypointChange(self, ix, course)
+    if self.state ~= self.states.DRIVING_TO_WORK_START_WAYPOINT or course ~= self.course then
+        return
+    end
+    local lastIx = course:getNumberOfWaypoints()
+    local endIx = course:getNextWaypointIxWithinDistance(ix, 15)
+    local precise = endIx >= lastIx
+    local startAngle = math.rad(course:getWaypointAngleDeg(ix))
+    for i = ix, endIx do
+        if course:isReverseAt(i) then
+            precise = true
+            break
+        end
+        local angle = math.rad(course:getWaypointAngleDeg(i))
+        local previous = math.rad(course:getWaypointAngleDeg(math.max(ix, i - 1)))
+        if math.abs(CpMathUtil.getDeltaAngle(angle, startAngle)) > math.rad(28) or
+                math.abs(CpMathUtil.getDeltaAngle(angle, previous)) > math.rad(12) then
+            precise = true
+            break
+        end
+    end
+    if precise then
+        self.ppc:setShortLookaheadDistance()
+    else
+        self.ppc:setLookaheadDistance(8)
+    end
+end
+-- END authorised approach lookahead adjustment
+
 function AIDriveStrategyCombineCourse:update(dt)
     AIDriveStrategyFieldWorkCourse.update(self, dt)
     self:updateChopperFillType()

@@ -47,6 +47,16 @@ reverse options by time to clear the combine's corridor; head-on encounters
 must not automatically choose reverse. Resume or replan the interrupted task
 only after clearance, with exactly one controller owning the tractor.
 
+The user authorised a separate steering adjustment on 5 October (build 2999):
+harvesters following an existing forward work-start approach use an 8 m base
+lookahead on straight/gentle sections. Tight bends, reversing and the final
+15 m use native short lookahead. Native work/turn resets and temporary short
+overrides remain effective. This changes tracking only, not waypoint geometry,
+route generation, validation or unloading. Other fieldwork implements retain
+their original lookahead. Release qualification permits only this exact
+reviewed addition to the combine strategy; all original method bodies still
+have to match the pinned baseline.
+
 Do not change shared pathfinding, collision masks, crop limits or combine
 manoeuvres. Queue routes require their own strict crop, field/island and full
 rig checks. Native CP's existing crop/readiness exceptions remain exactly as
@@ -266,7 +276,11 @@ changes, actual chain modelling, growing/cut/unknown crop states, obstacles,
 route confinement, reverse tracking-node conversion, clearance choice,
 shared scheduling, saved-course capture and AD/headland eligibility. Together
 with the previous suites these exercise 127 queue-related tests in source and
-the extracted ZIP. The full release also runs existing implement-profile,
+the extracted ZIP. Build 2999 adds nine steering tests using real Course/PPC
+methods for straight/curved paths, angle wrap, tight bends, reversing, final
+entry, unchanged waypoints, native resets, state isolation and other implements.
+These do not simulate tyre physics or establish that live oscillation is cured.
+The full release also runs existing implement-profile,
 headland, pocket, work-entry, double-pivot and packaging checks.
 
 Remaining acceptance is in FS25: vehicle physics and PPC tracking, real crop
