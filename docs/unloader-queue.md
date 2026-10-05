@@ -71,6 +71,53 @@ failed search, removed marker or missing AD network never grants permission to
 hand over in the middle of the field. This exception does not change native
 crop protection, combine turns, unloading entry or pipe alignment.
 
+## Harvester coverage and automatic activation
+
+The CP combine-unloading job is the activation boundary for ordinary trailers;
+there is no queue option to enable. This includes grain combines, forage
+harvesters, beet harvesters, potato harvesters and vegetable harvesters served
+by that native job. Classification follows CP's `alwaysNeedsUnloader()` and
+actual controller capacity, never a vehicle name or a presumed crop type.
+
+- **Tanked harvesters:** use CP's existing call/unload percentage, capacity and
+  fill prediction. Include the native controller's processing/loading-delay
+  contents for root crops. Prepare a compatible trailer by that deadline;
+  preserve CP's pipe geometry, rear approach, pockets and row-end decisions.
+- **Continuous harvesters:** an unserved machine needs a lead immediately.
+  While its native owner collects crop, prepare one successor. Its deadline
+  comes from that owner's usable free capacity (including mass limits) divided
+  by measured intake. Unknown intake means prepare promptly, not wait. Close
+  the successor's gap as this time decreases, while keeping turning and native
+  rear-approach space. The idle trailer departure percentage is not a fictional
+  tank setpoint and must not force a native continuous transfer to finish early.
+- **Changeover:** native CP decides when collection ends, releases its owner
+  and performs reverse clearance. Only then may its next native call take the
+  prepared successor. Queue code never starts a second pipe follower or
+  displaces a serving trailer. A continuous owner cannot promise to finish an
+  imaginary tank and cover a different harvester at the same time.
+- **Compatibility:** use the actual discharge fill type and trailer fill units.
+  For an empty continuous harvester with unknown output, preparation may use
+  supported types from its actual pipe discharge unit. This does not grant a
+  new unloading permission; native output discovery and dispatch remain in
+  charge. Recheck when the output becomes known. Do not assume all forage is
+  chaff, all vegetables share a fill type, or part-filled trailers can mix loads.
+- **Shared rules:** every participating harvester gets the same compatible
+  fleet allocation, queue parking, full-train clearance, priority and harvested
+  row/headland departure before AD handover. Native following handles clearance
+  and turns beside the trailer's own continuous harvester; other trailers yield.
+  Auger self-unloading, field tipping and GIANTS delivery jobs retain their
+  existing native handling and are not converted into AD queue jobs.
+
+Test coverage must include tanked grain/beet/vegetable machines, continuous
+forage/vegetable machines, delayed root-crop processing, known/unknown and
+changing output types, partial/incompatible loads, mass-limited free capacity,
+unknown/paused intake, multiple distant harvesters and mixed fleets. Exercise
+preparation, native acceptance/ownership, collection, successor selection,
+release/reverse and exit; retain the existing geometry/crop/AD tests. Native
+controller classification, fixed and auto-aim pipe entry, and physical-fullness
+changeover are executable contracts. In-game physics and timing still require
+acceptance with representative machines; a mock must not be reported as that.
+
 ## Implementation order
 
 1. Establish and qualify the clean main baseline.
@@ -146,11 +193,11 @@ Where native crop or turn restrictions prevent unloading at the configured
 level, the queue must keep the trailer near the legal entry and preserve the
 restriction. Report the constraint rather than forcing an unsafe approach.
 
-## Operational candidates 2993â€“2995
+## Operational candidates 2993 onwards
 
 Build 2996 activates the queue automatically for tractors running the native
 CP combine-unloading job with ordinary trailers. There is no extra option.
-The setting introduced in builds 2993–2995 has been removed; previously saved
+The setting introduced in builds 2993 to 2995 has been removed; previously saved
 values cannot disable preparation. Auger wagons, field unloading and GIANTS
 unloading retain their native ownership. In-game acceptance is still required.
 
@@ -160,6 +207,12 @@ byte-identical to pinned main. The only existing-file changes are the module
 manifest; vehicle settings and translations match main again. Native crop/readiness checks,
 rear approach, pipe following, combine turns and native reverse clearance
 remain in their original methods.
+
+Build 2997 extends those snapshots to all native continuous-harvester types,
+including forage and conveyor-fed vegetable collection. It adds a successor
+forecast using measured intake and usable trailer capacity, output compatibility
+at the actual pipe node, and accepted-call ownership before registration.
+Tanked beet/vegetable machines use the same native tank deadline as combines.
 
 The runtime takes fleet snapshots once per second, measures transfer progress,
 assigns preparation/successor slots and separates reserved parking targets.
@@ -202,7 +255,7 @@ native rear-call dispatch, failed/missing exits, ownership and generation
 changes, actual chain modelling, growing/cut/unknown crop states, obstacles,
 route confinement, reverse tracking-node conversion, clearance choice,
 shared scheduling, saved-course capture and AD/headland eligibility. Together
-with the previous suites these exercise 104 queue-related tests in source and
+with the previous suites these exercise 123 queue-related tests in source and
 the extracted ZIP. The full release also runs existing implement-profile,
 headland, pocket, work-entry, double-pivot and packaging checks.
 

@@ -137,6 +137,53 @@ class OwnershipTests(unittest.TestCase):
             CpUnloaderQueue.startRoute(u.queueData,{{x=0,z=0},{x=0,z=10}})
         ''')
 
+    def test_chopper_native_rear_approach_takes_over_preparation(self):
+        for offset,expected,auto_aim in [(0,-12,True),(8,-6,True),(2,-11,False)]:
+            with self.subTest(offset=offset):
+                self.lua.execute(f"""
+                    u.combineToUnload=nil
+                    c.isWaitingForUnloadAfterPulledBack=function() return false end
+                    c.hasAutoAimPipe=function() return {str(auto_aim).lower()} end
+                    local harvester={{getCpDriveStrategy=function() return c end}}
+                    u.getPipeOffset=function() return {offset},0 end
+                    u.getAutoAimPipeOffsetX=function() return {offset} end
+                    u.getCombinesMeasuredBackDistance=function() return 6 end
+                    Markers={{getFrontMarkerNode=function() return nil,4 end}}
+                    u.isOkToStartUnloadingCombine=function() return false end
+                    u.isPathfindingNeeded=function() return true end
+                    u.getPipeOffsetReferenceNode=function() return 123 end
+                    u.setNewState=function(self,state) self.state=state end
+                    u.startPathfindingToWaitingCombine=function(_,x,z) assert(x=={offset} and z=={expected}) end
+                    CpUnloaderQueue.take(u,'prepare')
+                    assert(u:call(harvester,nil))
+                    assert(u.combineToUnload==harvester and not CpUnloaderQueue.owns(u))
+                    assert(u.state==u.states.WAITING_FOR_PATHFINDER)
+                """)
+
+    def test_chopper_keeps_native_fullness_and_reverse_changeover(self):
+        self.lua.execute("""
+            c.isTurning=function() return false end
+            c.isAboutToTurn=function() return false end
+            c.isAboutToReturnFromPocket=function() return false end
+            u.isDriveUnloadNowRequested=function() return false end
+            u.getAllTrailersFull=function(_,threshold) assert(threshold==nil); return false end
+            assert(not u:changeToUnloadWhenTrailerFull())
+            u.getAllTrailersFull=function(_,threshold) assert(threshold==nil); return true end
+            u.startMovingBackFromCombine=function(_,state) assert(state==u.states.MOVING_BACK_WITH_TRAILER_FULL); backed=true end
+            assert(u:changeToUnloadWhenTrailerFull() and backed)
+        """)
+
+    def test_native_chopper_following_is_not_replaced_by_queue_yield(self):
+        self.lua.execute("""
+            u.vehicle.getIsCpActive=function() return true end
+            c.alwaysNeedsUnloader=function() return true end
+            local h=u.combineToUnload
+            AIDriveStrategyCombineCourse.isActiveCpCombine=function() return true end
+            u.state=u.states.FOLLOW_CHOPPER_THROUGH_TURN
+            assert(not CpUnloaderQueue.priority(u,h))
+            assert(u.combineToUnload==h and u.state==u.states.FOLLOW_CHOPPER_THROUGH_TURN)
+        """)
+
     def test_transfer_balance_prevents_an_unavailable_future_reservation(self):
         self.lua.execute('''
             local combines={
@@ -162,6 +209,109 @@ class OwnershipTests(unittest.TestCase):
             CpUnloaderQueue.accountForTransfer({c},{t},{a={owner='old',fill=11000,sampleTime=0}})
             assert(not t.transferring)
         ''')
+
+
+class HarvesterSnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.lua=LuaRuntime(unpack_returned_tuples=True)
+        self.lua.execute((ROOT/'scripts/CpObject.lua').read_text())
+        self.lua.execute('HeadlandLoopGeometry={}; ImplementController={}')
+        self.lua.execute((ROOT/'scripts/ai/controllers/CombineController.lua').read_text())
+        load_queue(self.lua,hooks=False)
+        self.lua.execute("""
+            FillType={UNKNOWN=0}; output=1; supported={[1]=true,[2]=true}; contents=0; free=32000
+            rawCapacity=math.huge; tankLevel=0; accepted=1
+            local source={getFillUnitCapacity=function() return rawCapacity end,
+                getFillUnitFillLevel=function() return tankLevel end,
+                getCurrentDischargeNode=function() return {fillUnitIndex=7} end,
+                getFillUnitSupportedFillTypes=function() error('wrong implement/outlet') end}
+            local pipe={getFillUnitSupportedFillTypes=function(_,ix) assert(ix==2); return supported end}
+            local controller=setmetatable({implement=source,combineSpec={fillUnitIndex=1,loadingDelay=0}},CombineController)
+            c={combineController=controller,pipeController={implement=pipe},
+                getCurrentDischargeNode=function() return {fillUnitIndex=2} end,
+                alwaysNeedsUnloader=function() return controller:alwaysNeedsUnloader() end,
+                getFillType=function() return output end,
+                settings={callUnloaderPercent={getValue=function() return 80 end}},
+                isWaitingForUnload=function() return true end,unloader={get=function() return registered end}}
+            h={rootNode=1,getCpDriveStrategy=function() return c end,getAIDirectionNode=function() return 1 end}
+            c.vehicle=h
+            local trailer={getFillUnitCapacity=function() return 32000 end,
+                getFillUnitFillLevel=function() return contents end,getFillUnitFreeCapacity=function() return free end,
+                getFillUnitAllowsFillType=function(_,ix,ft) return ft==accepted end}
+            u={states={IDLE={}},vehicle={rootNode=2,getIsCpActive=function() return true end,
+                getAIDirectionNode=function() return 2 end},
+                trailerNodes={{trailer=trailer,fillUnitIx=1}},
+                settings={fullThreshold={getValue=function() return 85 end}},
+                isServingPosition=function() return true end,
+                getDistanceAndEteToVehicle=function() return 50,10 end}
+            u.state=u.states.IDLE
+            CpUnloaderQueueWorld.pose=function() return {x=0,z=0,t=0} end
+            AIDriveStrategyCombineCourse={isActiveCpCombine=function() return true end}
+            g_currentMission={time=0,vehicleSystem={vehicles={h}}}
+            CpUnloaderQueue.data(u)
+        """)
+
+    def test_native_controller_classifies_grain_beet_and_vegetable_tanks(self):
+        for label,volume,level,fill_type in [('grain',20000,12000,1),('beet',45000,30000,3),('vegetables',12000,8000,4)]:
+            with self.subTest(harvester=label):
+                self.lua.execute(f"""
+                    rawCapacity={volume}; tankLevel={level}; output={fill_type}; accepted={fill_type}
+                    CpUnloaderQueue.nextPlan=0; CpUnloaderQueue.refresh()
+                    local c=CpUnloaderQueue.combines['1']
+                    assert(not c.continuous and c.capacity=={volume} and c.fill=={level})
+                    assert(c.fillType=={fill_type} and CpUnloaderQueue.plan.leads['1'].trailer=='2')
+                """)
+
+    def test_native_controller_classifies_forage_and_continuous_vegetables(self):
+        for label,volume,fill_type in [('forage','math.huge',1),('vegetable conveyor','10000001',4)]:
+            with self.subTest(harvester=label):
+                self.lua.execute(f"""
+                    rawCapacity={volume}; output={fill_type}; accepted={fill_type}
+                    CpUnloaderQueue.nextPlan=0; CpUnloaderQueue.refresh()
+                    local c=CpUnloaderQueue.combines['1']
+                    assert(c.continuous and c.capacity==0 and c.fillType=={fill_type})
+                    assert(CpUnloaderQueue.plan.leads['1'].trailer=='2')
+                """)
+
+    def test_vegetable_loading_delay_is_included_in_tank_forecast(self):
+        self.lua.execute("""
+            rawCapacity=12000; tankLevel=7000
+            c.combineController.combineSpec.loadingDelay=5
+            c.combineController.combineSpec.loadingDelaySlots={{valid=true,fillLevelDelta=2000}}
+            CpUnloaderQueue.refresh()
+            assert(CpUnloaderQueue.combines['1'].fill==9000)
+        """)
+
+    def test_continuous_harvester_is_in_snapshot_and_has_lead(self):
+        self.lua.execute("""
+            CpUnloaderQueue.refresh()
+            local c=CpUnloaderQueue.combines['1']
+            assert(c.continuous and c.capacity==0 and c.fill==0)
+            assert(CpUnloaderQueue.plan.leads['1'].trailer=='2')
+        """)
+
+    def test_unknown_output_prepares_using_supported_discharge_types(self):
+        self.lua.execute("""
+            output=0; CpUnloaderQueue.refresh()
+            assert(CpUnloaderQueue.plan.leads['1'].trailer=='2')
+            assert(not CpUnloaderQueue.findUnloader(c,h,nil))
+            g_currentMission.time=1000; output=2; CpUnloaderQueue.refresh()
+            assert(CpUnloaderQueue.plan.leads['1']==nil)
+        """)
+
+    def test_unknown_output_without_compatible_supported_type_only_parks(self):
+        self.lua.execute("""
+            output=0; supported={[2]=true}; CpUnloaderQueue.refresh()
+            assert(CpUnloaderQueue.plan.leads['1']==nil)
+            assert(CpUnloaderQueue.plan.trailers['2'].pool)
+        """)
+
+    def test_native_accepted_call_prevents_duplicate_lead_before_registration(self):
+        self.lua.execute("""
+            u.combineToUnload=h; u.state={}; CpUnloaderQueue.refresh()
+            assert(CpUnloaderQueue.combines['1'].owner=='2')
+            assert(CpUnloaderQueue.plan.leads['1']==nil)
+        """)
 
 
 class EngineBoundaryTests(unittest.TestCase):

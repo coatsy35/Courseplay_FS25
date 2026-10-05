@@ -37,6 +37,73 @@ class PolicyTests(unittest.TestCase):
         return self.policy.plan(self.table(combines), self.table(trailers),
                                 lambda t, c: etas.get((t.id, c.id), 20))
 
+    def chopper(self, ident='c1', **kw):
+        return dict(dict(id=ident,continuous=True,capacity=0,fill=0,rate=0,callPercent=80),**kw)
+
+    def test_unserved_chopper_has_immediate_lead(self):
+        c=self.chopper()
+        self.assertEqual(self.policy.deadline(self.table(c)),0)
+        self.assertEqual(self.plan([c],[self.trailer()]).leads.c1.trailer,'t1')
+
+    def test_chopper_always_prepares_one_successor_while_owner_loads(self):
+        p=self.plan([self.chopper(owner='t1')],[
+            self.trailer(owner='c1',available=False,fill=1000,transferring=True,transferRate=100),
+            self.trailer('t2'),self.trailer('t3')])
+        self.assertIsNone(p.leads.c1)
+        self.assertEqual(p.successors.c1.trailer,'t2')
+        self.assertTrue(p.trailers.t3.pool)
+        self.assertEqual(p.successors.c1.deadline,310)
+
+    def test_chopper_deadline_uses_mass_limited_free_space_not_depart_setting(self):
+        for threshold in [40,85,100]:
+            p=self.plan([self.chopper(owner='t1')],[
+                self.trailer(owner='c1',available=False,fill=28000,freeCapacity=500,
+                             departPercent=threshold,transferring=True,transferRate=100),self.trailer('t2')])
+            self.assertEqual(p.successors.c1.deadline,5)
+
+    def test_unknown_chopper_intake_prepares_successor_now(self):
+        p=self.plan([self.chopper(owner='t1')],[self.trailer(owner='c1',available=False),self.trailer('t2')])
+        self.assertEqual(p.successors.c1.deadline,0)
+
+    def test_serving_chopper_cannot_promise_to_empty_a_tank_and_serve_another(self):
+        owner=self.trailer(owner='c1',available=False,fill=1000,transferring=True,transferRate=100)
+        c=self.chopper(owner='t1')
+        self.assertIsNone(self.policy.remainingAfterTransfer(self.table(owner),self.table({'c1':c})))
+        p=self.plan([c,self.combine('c2')],[owner,self.trailer('t2'),self.trailer('t3')])
+        self.assertNotEqual(p.leads.c2.trailer,'t1')
+
+    def test_two_choppers_receive_distinct_local_coverage(self):
+        p=self.plan([self.chopper(),self.chopper('c2')],[self.trailer(),self.trailer('t2')],
+                    {('t1','c1'):10,('t2','c1'):100,('t1','c2'):100,('t2','c2'):10})
+        self.assertEqual(p.leads.c1.trailer,'t1')
+        self.assertEqual(p.leads.c2.trailer,'t2')
+
+    def test_chopper_successor_becomes_lead_only_after_native_release(self):
+        owner=self.trailer(owner='c1',available=False,fill=31900,transferring=True,transferRate=100)
+        c=self.chopper(owner='t1'); other=self.trailer('t2',fill=1000)
+        before=self.plan([c],[owner,other])
+        self.assertEqual(before.successors.c1.trailer,'t2')
+        del c['owner']; del owner['owner']; owner['fill']=32000
+        after=self.plan([c],[owner,other])
+        self.assertEqual(after.leads.c1.trailer,'t2')
+        self.assertIsNone(after.trailers.t1)
+
+    def test_mixed_grain_root_crop_and_forage_fleet_keeps_compatible_coverage(self):
+        grain=self.combine('c1'); beet=self.combine('c2'); forage=self.chopper('c3')
+        trailers=[self.trailer('grain',compatible={'c1':True}),
+                  self.trailer('beet',fill=5000,compatible={'c2':True}),
+                  self.trailer('forage',compatible={'c3':True})]
+        p=self.plan([grain,beet,forage],trailers)
+        self.assertEqual(p.leads.c1.trailer,'grain')
+        self.assertEqual(p.leads.c2.trailer,'beet')
+        self.assertEqual(p.leads.c3.trailer,'forage')
+
+    def test_chopper_successor_gap_closes_with_remaining_service_time(self):
+        c=self.table(self.chopper())
+        gaps=[self.policy.lag(c,20,12,5,t) for t in [200,60,20,0]]
+        self.assertEqual(gaps,sorted(gaps,reverse=True))
+        self.assertEqual(gaps[-1],35)
+
     def test_partial_trailer_preferred_when_both_timely(self):
         p = self.plan([self.combine()], [self.trailer(), self.trailer('t2', fill=9000)])
         self.assertEqual(p.leads.c1.trailer, 't2')

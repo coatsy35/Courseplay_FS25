@@ -167,7 +167,7 @@ function Q.recoverDeparture(driver)
 end
 
 local function capacity(driver,fillType)
-    local total,fill,seen=0,0,{}
+    local total,fill,free,seen=0,0,0,{}
     for _, target in pairs(driver.trailerNodes or {}) do
         local object,ix=target.trailer,target.fillUnitIx
         seen[object]=seen[object] or {}
@@ -176,10 +176,34 @@ local function capacity(driver,fillType)
             if fillType==nil or (fillType~=FillType.UNKNOWN and object:getFillUnitAllowsFillType(ix,fillType)) then
                 total=total+object:getFillUnitCapacity(ix)
                 fill=fill+object:getFillUnitFillLevel(ix)
+                free=free+object:getFillUnitFreeCapacity(ix)
             end
         end
     end
-    return total,fill
+    return total,fill,free
+end
+
+-- Empty forage harvesters may not know their output yet. Preparation can use
+-- their actual discharge unit's supported types, but native dispatch stays in
+-- charge until the output is known. Never assume forage always means chaff.
+function Q.compatibleCapacity(driver,harvester)
+    if harvester.fillType and harvester.fillType~=FillType.UNKNOWN then
+        return capacity(driver,harvester.fillType)
+    end
+    if harvester.continuous then
+        local source=harvester.driver.pipeController and harvester.driver.pipeController.implement
+        local node=source and harvester.driver:getCurrentDischargeNode()
+        local types=node and source:getFillUnitSupportedFillTypes(node.fillUnitIndex)
+        local best,loaded,free=0,0,0
+        for fillType,supported in pairs(types or {}) do
+            if supported and fillType~=FillType.UNKNOWN then
+                local c,f,a=capacity(driver,fillType)
+                if c>best or (c==best and a>free) then best,loaded,free=c,f,a end
+            end
+        end
+        return best,loaded,free
+    end
+    return 0,0,0
 end
 
 function Q.refresh()
@@ -189,12 +213,14 @@ function Q.refresh()
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         if AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
             local driver=vehicle:getCpDriveStrategy()
-            if driver.combineController and not driver:isChopper() then
-                local total=driver.combineController:getCapacity()
-                if total>0 then
+            if driver.combineController then
+                local continuous=driver:alwaysNeedsUnloader()
+                local total=continuous and 0 or driver.combineController:getCapacity()
+                if continuous or total>0 then
                     local owner=driver.unloader:get()
-                    local c={id=id(vehicle),driver=driver,vehicle=vehicle,capacity=total,
-                        fill=driver.combineController:getFillLevel(),rate=math.max(0,driver.litersPerSecond or 0),
+                    local c={id=id(vehicle),driver=driver,vehicle=vehicle,capacity=total,continuous=continuous,
+                        fillType=driver:getFillType(),
+                        fill=continuous and 0 or driver.combineController:getFillLevel(),rate=math.max(0,driver.litersPerSecond or 0),
                         callPercent=driver.settings.callUnloaderPercent:getValue(),waiting=driver:isWaitingForUnload(),
                         owner=owner and owner.vehicle and id(owner.vehicle),position=W.pose(vehicle:getAIDirectionNode()),
                         sampleTime=now()}
@@ -205,25 +231,28 @@ function Q.refresh()
     end
     for driver,data in pairs(Q.members) do
         if Q.enabled(driver) and driver.vehicle:getIsCpActive() then
-            local total,fill=capacity(driver)
+            local total,fill,free=capacity(driver)
             local elapsed=data.sampleTime and (now()-data.sampleTime)/1000 or 0
             local transfer=elapsed>0 and math.max(0,(fill-(data.lastFill or fill))/elapsed) or 0
             local owner=driver.combineToUnload and id(driver.combineToUnload)
             local stableOwner=owner~=nil and data.lastOwner==owner and elapsed>0 and elapsed<=3
             data.sampleTime=now(); data.lastFill=fill
             data.lastOwner=owner
-            local t={id=id(driver.vehicle),driver=driver,capacity=total,fill=fill,enabled=true,
+            local t={id=id(driver.vehicle),driver=driver,capacity=total,fill=fill,freeCapacity=free,enabled=true,
                 departPercent=driver.settings.fullThreshold:getValue(),compatible={},
                 available=driver.state==driver.states.IDLE or (Q.owns(driver) and data.operation=='prepare'),
                 owner=owner,transferring=stableOwner and transfer>0,
                 transferRate=transfer,reservedFor=data.assignment and data.assignment.combine,
                 position=W.pose(driver.vehicle:getAIDirectionNode())}
             for _, c in ipairs(combines) do
-                local compatible,loaded=capacity(driver,c.driver:getFillType())
-                t.compatible[c.id]=compatible-loaded>0 and driver:isServingPosition(c.position.x,c.position.z,10)
+                local compatible,loaded,available=Q.compatibleCapacity(driver,c)
+                t.compatible[c.id]=available>0 and driver:isServingPosition(c.position.x,c.position.z,10)
                 -- Mixed-capacity trains must not reserve more than the compatible units can hold.
                 if compatible~=total then t.compatible[c.id]=false end
             end
+            -- A native accepted call owns the trailer immediately, before the
+            -- harvester's next registration update. Do not prepare a duplicate.
+            if owner and byId[owner] and not byId[owner].owner then byId[owner].owner=t.id end
             trailers[#trailers+1]=t
         end
     end
@@ -243,7 +272,7 @@ function Q.accountForTransfer(combines,trailers,previous)
     for _,combine in ipairs(combines) do
         local trailer=unloaders[combine.owner]
         local before=previous[combine.id]
-        if trailer and trailer.transferring then
+        if trailer and trailer.transferring and not combine.continuous then
             local elapsed=before and (combine.sampleTime-before.sampleTime)/1000 or 0
             if before and before.owner==combine.owner and elapsed>0 and elapsed<=3 then
                 -- Native litres/second may reset when the tank falls. Conservation
@@ -259,6 +288,10 @@ end
 
 function Q.findUnloader(combine,stopped,waypoint)
     Q.refresh()
+    local snapshot=Q.combines and Q.combines[id(combine.vehicle)]
+    if snapshot and snapshot.continuous and (not snapshot.fillType or snapshot.fillType==FillType.UNKNOWN) then
+        return false -- native output discovery/call rules remain authoritative
+    end
     local lead=Q.plan and Q.plan.leads[id(combine.vehicle)]
     if not lead then return false end
     for driver,data in pairs(Q.members) do
@@ -284,7 +317,8 @@ function Q.target(driver)
         if not combine then return end
         local course,ix=Q.coursePosition(combine.driver)
         if not course then return end
-        local lag=P.lag(combine,AIUtil.getLength(driver.vehicle),12,driver:getFieldSpeed()/3.6)
+        local lag=P.lag(combine,AIUtil.getLength(driver.vehicle),12,driver:getFieldSpeed()/3.6,
+            assignment.successor and assignment.deadline or nil)
         if assignment.successor then lag=lag+AIUtil.getLength(driver.vehicle)+20 end
         for extra=0,40,10 do
             local targetIx=course:getPreviousWaypointIxWithinDistance(ix,lag+extra)

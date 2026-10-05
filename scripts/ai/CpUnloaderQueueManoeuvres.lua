@@ -193,6 +193,11 @@ end
 function Q.priority(driver,combine)
     if not Q.enabled(driver) or not combine or not driver.vehicle:getIsCpActive()
             or not AIDriveStrategyCombineCourse.isActiveCpCombine(combine) then return false end
+    -- Native continuous-harvester following already handles its own harvester's proximity
+    -- and turns. Other queued/approaching trailers still yield to it normally.
+    if driver.combineToUnload==combine and combine:getCpDriveStrategy():alwaysNeedsUnloader() and not Q.owns(driver) then
+        return false
+    end
     local data=Q.data(driver)
     if data.operation=='yield' and Q.owns(driver) then return true end
     data.resumeExit=Q.owns(driver) and data.operation=='exit'

@@ -7,6 +7,7 @@ local function finite(value)
 end
 
 function CpUnloaderQueuePolicy.deadline(combine)
+    if combine.continuous then return 0 end
     if combine.waiting or combine.fill >= combine.capacity * combine.callPercent / 100 then
         return 0
     end
@@ -21,7 +22,7 @@ end
 -- applies after unloading; physical capacity can end the transfer earlier.
 function CpUnloaderQueuePolicy.remainingAfterTransfer(trailer, combines)
     local current = combines[trailer.owner]
-    if not current or not trailer.transferring or not finite(trailer.transferRate)
+    if not current or current.continuous or not trailer.transferring or not finite(trailer.transferRate)
             or trailer.transferRate <= (current.rate or 0) then
         return nil
     end
@@ -34,6 +35,14 @@ function CpUnloaderQueuePolicy.remainingAfterTransfer(trailer, combines)
 end
 
 local function preparationDeadline(combine, current)
+    if combine.continuous then
+        -- Native chopper service ends at physical/mass-limited fullness, not
+        -- the idle trailer departure setting. Unknown intake prepares now.
+        if current and current.transferring and finite(current.transferRate) and current.transferRate>0 then
+            return math.max(0,current.freeCapacity or (current.capacity-current.fill))/current.transferRate
+        end
+        return 0
+    end
     if current and current.transferring and finite(current.transferRate) and
             finite(combine.rate) and combine.rate > 0 and current.transferRate > combine.rate then
         local finish = combine.fill / (current.transferRate-combine.rate)
@@ -76,7 +85,7 @@ local function candidate(trailer, combine, combines, eta, targetDeadline)
         return nil
     end
     return {trailer = trailer.id, combine = combine.id, arrival = arrival,
-        future = future, free = free, expectedFill = expectedFill,
+        future = future, free = free, expectedFill = expectedFill, deadline = deadline,
         timely = arrival <= deadline, partial = expectedFill > 0,
         reserved = trailer.reservedFor == combine.id}
 end
@@ -104,7 +113,9 @@ function CpUnloaderQueuePolicy.plan(combines, trailers, eta)
         local da, db = preparationDeadline(a,byTrailerId[a.owner]), preparationDeadline(b,byTrailerId[b.owner])
         if da ~= db then return da < db end
         if not not a.waiting ~= not not b.waiting then return not not a.waiting end
-        if a.fill/a.capacity ~= b.fill/b.capacity then return a.fill/a.capacity > b.fill/b.capacity end
+        local af=a.continuous and 0 or a.fill/a.capacity
+        local bf=b.continuous and 0 or b.fill/b.capacity
+        if af~=bf then return af>bf end
         return tostring(a.id) < tostring(b.id)
     end)
     -- Current native owners are never reassigned. Each can reserve at most one
@@ -116,7 +127,7 @@ function CpUnloaderQueuePolicy.plan(combines, trailers, eta)
                 and current.transferRate>(combine.rate or 0) then
             projectedFill=current.fill+current.transferRate*combine.fill/(current.transferRate-(combine.rate or 0))
         end
-        local successor = current and (current.capacity-current.fill < combine.fill or
+        local successor = current and ((combine.continuous and combine.hasMoreWork~=false) or current.capacity-current.fill < combine.fill or
             (combine.hasMoreWork ~= false and
                 projectedFill >= current.capacity*current.departPercent/100))
         if not combine.owner or successor then
@@ -146,8 +157,8 @@ end
 
 -- Preparation closes progressively, but preserves space for native CP's 25 m
 -- moving-rendezvous admission check and the full tractor/trailer train.
-function CpUnloaderQueuePolicy.lag(combine, rigLength, approachSeconds, speed)
+function CpUnloaderQueuePolicy.lag(combine, rigLength, approachSeconds, speed, preparedBy)
     local minimum = math.max(35, rigLength + 12)
-    local spare = math.max(0, CpUnloaderQueuePolicy.deadline(combine) - approachSeconds)
+    local spare = math.max(0, (preparedBy or CpUnloaderQueuePolicy.deadline(combine)) - approachSeconds)
     return minimum + math.min(100, spare * math.max(0, speed) * 0.35)
 end
