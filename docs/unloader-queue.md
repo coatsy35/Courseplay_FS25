@@ -465,6 +465,43 @@ they do not simulate GIANTS driving physics. Source and extracted-ZIP checks
 include these and the existing suites. Build 3003's connector fix is retained.
 The actual four-trailer departure and AD delivery still require an FS25 retest.
 
+### Build 3005: correct the connector gate's traffic and footprint regression
+
+The 7 October session loaded 3004. At 09:50:12 CR11/319's native search
+succeeded, but the added 3003 clearance gate rejected waypoint 1 on T7.300/322.
+It then rejected the original connector at waypoint 22 on an FD250 header and
+stopped the worker. At 09:52:30 it also rejected CR11/318's fallback at waypoint
+1 on a header and stopped that worker. These records identify the added gate
+as the cause of the no-path stops; they do not establish a collision hazard.
+The 3004 trailer-departure changes were not the cause of these stops.
+
+The gate incorrectly treated current vehicle occupancy anywhere along a long
+route as a permanent obstruction. It also checked only a combined rectangle,
+filling the empty space beside the chassis out to the header's full width.
+The earlier tests exercised static obstacles but omitted other vehicles and
+treated this oversized rectangle as correct. That coverage was insufficient.
+
+The corrected gate leaves vehicle traffic to native live proximity and convoy
+control, which both execute in DRIVING_TO_WORK_START_WAYPOINT. Only this gate's
+detector discards a newly counted collision with an object whose root vehicle
+is confirmed. Native detectors remain unchanged. Unmapped shapes, trees,
+bales and grain heaps remain subject to scenery clearance. The chassis and
+mounted implements now have separate buffered rectangles, using direct extent
+differences so a header wholly ahead of the chassis is not stretched backwards.
+Every body is swept; one overlap query per step retains the shared 32-query /
+2 ms frame allowance. Static obstruction fallback and lifecycle guards remain.
+
+Seven additional regressions cover a nearby tractor, a distant combine header,
+unchanged native collision detection, mixed traffic/scenery callback ordering,
+own-header and trigger filtering, unknown objects, bales/heaps and bare terrain,
+and native driving's traffic/convoy stop-and-resume dispatch. Updated geometry
+and frame-budget tests cover separate bodies and the empty chassis-side space.
+The 26 connector tests use production Lua with mocked engine boundaries; they
+do not recreate GIANTS vehicle physics or prove the complete save's journey.
+Native route generation, crop fallback, convoy policy and unloading are not
+altered by this correction. The two-combine headland-to-centre transition still
+requires an in-game retest.
+
 ## Packaging
 
 Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and

@@ -16,6 +16,7 @@ class ConnectorClearanceTests(unittest.TestCase):
         self.lua.execute((SOURCE/'tools/straight-entry/preparation-fixture.lua').read_text())
         self.lua.execute((ROOT/'scripts/pathfinder/PathfinderCollisionDetector.lua').read_text(encoding='utf-8'))
         self.lua.execute('''
+            unpack=table.unpack
             CpUtil.getDefaultCollisionFlags=function() return 334339 end
             getRootNode=function() return 0 end
             deleted=0; calls=0; samples={}; obstacles={}; stopped=0; installed=0; oldLast=0
@@ -32,17 +33,32 @@ class ConnectorClearanceTests(unittest.TestCase):
             PathfinderUtil.VehicleData=function(v,implements,buffer)
                 assert(implements and buffer==0)
                 return {getTowedImplement=function() return towed end,
-                    getVehicleOverlapBoxParams=function() return box end}
+                    getRectangleForImplement=function()
+                        return {dLeft=box.xOffset+box.width,dRight=box.xOffset-box.width,
+                            dFront=box.zOffset+box.length,dRear=box.zOffset-box.length}
+                    end}
+            end
+            g_currentMission.nodeToObject={}
+            ClassIds={TERRAIN_TRANSFORM_GROUP=1}; Bale={}; FillType={UNKNOWN=0}
+            getHasClassId=function(id,class) return obstacles[id] and obstacles[id].terrain or false end
+            DensityMapHeightUtil={getFillTypeAtLine=function() return heapFill end}
+            g_fillTypeManager={getFillTypeByIndex=function() return {title='grain'} end}
+            CpUtil.getName=function(o) return o.name end
+            tree={name='fixture tree',isa=function() return false end}
+            function traffic(name)
+                local o={name=name,isa=function() return false end}
+                o.getRootVehicle=function() return o end
+                return o
             end
             overlapBox=function(x,y,z,rx,t,rz,w,h,l,callback,detector,mask)
                 assert(mask==334339 and detector.ignoreFruitHeaps==false)
                 calls=calls+1; samples[#samples+1]={x=x,z=z,t=t}
-                detector.collidingShapes=0
-                for _,p in ipairs(obstacles) do
+                for id,p in ipairs(obstacles) do
                     local dx,dz=p.x-x,p.z-z
                     if math.abs(dx*math.cos(t)-dz*math.sin(t))<=w and
                             math.abs(dx*math.sin(t)+dz*math.cos(t))<=l then
-                        detector.collidingShapes=1; detector.collidingShapesText='fixture tree'
+                        g_currentMission.nodeToObject[id]=not p.unmapped and (p.object or tree) or nil
+                        detector[callback](detector,id)
                     end
                 end
             end
@@ -58,11 +74,16 @@ class ConnectorClearanceTests(unittest.TestCase):
         combine=(ROOT/'scripts/ai/strategies/AIDriveStrategyCombineCourse.lua').read_text(encoding='utf-8')
         offset=combine.split('function AIDriveStrategyCombineCourse:updateFieldworkOffset(course)',1)[1].split('\nend',1)[0]
         self.lua.execute('function AIDriveStrategyCombineCourse:updateFieldworkOffset(course)'+offset+'\nend')
+        fieldwork=(ROOT/'scripts/ai/strategies/AIDriveStrategyFieldWorkCourse.lua').read_text(encoding='utf-8')
+        drive=fieldwork.split('function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)',1)[1].split('\nend',1)[0]
+        self.lua.execute('function nativeFieldworkDrive(self,dt,vX,vY,vZ)'+drive+'\nend')
         self.lua.execute((ROOT/'scripts/ai/CpHarvesterRouteClearance.lua').read_text(encoding='utf-8'))
         self.lua.execute('''
             R=CpHarvesterRouteClearance
             f=preparationFixture(20,false,false)
             v=f.vehicle; v.spec_combine={}; v.size={width=3.5}
+            v.getRootVehicle=function() return v end
+            v.getAttachedImplements=function() return {} end
             here={x=0,z=-43,t=0}
             speed=0; toolOffset=0
             v.getLastSpeed=function() return speed end
@@ -202,6 +223,8 @@ class ConnectorClearanceTests(unittest.TestCase):
 
     def test_shared_frame_budget_and_hold(self):
         self.lua.execute('''
+            v.getAttachedImplements=function() return {{object={}}} end
+            readIntervalTimerMs=function() return 0 end
             R.begin(u,route,nil); g_updateLoopIndex=1
             R.update(u); local first=calls
             assert(first<=32 and first>0 and u.connectorClearance and installed==0)
@@ -281,12 +304,106 @@ class ConnectorClearanceTests(unittest.TestCase):
             v.getRootVehicle=function() return v end
             v.getAttachedImplements=function() return {{object=header}} end
             local check=assert(R.new(v,route))
-            assert(math.abs(check.box.width-8.1)<0.001)
-            assert(math.abs(check.box.length-5.5)<0.001 and check.box.zOffset==1)
-            obstacles={{x=8,z=0}}; assert(not R.clear(check,here))
+            assert(#check.boxes==2)
+            assert(math.abs(check.boxes[1].width-2.25)<0.001)
+            assert(math.abs(check.boxes[2].width-8.1)<0.001)
+            assert(check.boxes[2].length==1.5 and check.boxes[2].zOffset==5)
+            -- Empty space alongside the chassis must not inherit header width.
+            obstacles={{x=8,z=0}}; assert(R.clear(check,here))
+            obstacles={{x=8,z=5}}; assert(not R.clear(check,here))
             obstacles={{x=0,z=6.4}}; assert(not R.clear(check,here))
-            obstacles={{x=8.2,z=0}}; assert(R.clear(check,here))
+            obstacles={{x=8.2,z=5}}; assert(R.clear(check,here))
+            obstacles={{x=2.2,z=-3}}; assert(not R.clear(check,here))
             R.delete(check)
+        ''')
+
+    def test_nearby_tractor_does_not_cancel_native_connector(self):
+        self.lua.execute('''
+            obstacles={{x=0,z=-43,object=traffic('T7.300/322')}}
+            R.begin(u,route,nil); local prepared=u.connectorClearance.starter:getCourse()
+            drain(); assert(installed==1 and stopped==0 and u.course==prepared)
+            assert(u.state==u.states.DRIVING_TO_WORK_START_WAYPOINT)
+        ''')
+
+    def test_other_combines_header_further_along_route_is_not_permanent_failure(self):
+        self.lua.execute('''
+            local other=traffic('CR11/318')
+            local header=traffic('FD250'); header.getRootVehicle=function() return other end
+            obstacles={{x=7,z=-5,object=header}}
+            R.begin(u,route,nil); drain()
+            assert(installed==1 and stopped==0)
+            -- The exemption belongs to this gate only. Native collision checks
+            -- must continue to see this very same header.
+            local detector=PathfinderCollisionDetector(v,{}, {},false,334339)
+            detector:_overlapBoxCallback(1)
+            assert(detector.collidingShapes==1 and detector.collidingShapesText=='FD250')
+        ''')
+
+    def test_vehicle_exemption_cannot_hide_scenery_in_either_callback_order(self):
+        self.lua.execute('''
+            local other=traffic('tractor')
+            for _,items in ipairs({
+                {{x=0,z=-43,object=other},{x=0,z=-43}},
+                {{x=0,z=-43},{x=0,z=-43,object=other}}
+            }) do
+                obstacles=items
+                local clear,why=checkCourse(route)
+                assert(not clear and why:find('fixture tree'))
+            end
+        ''')
+
+    def test_own_header_and_native_ignored_trigger_remain_ignored(self):
+        self.lua.execute('''
+            local own=traffic('own header'); own.getRootVehicle=function() return v end
+            obstacles={{x=0,z=-43,object=own},{x=0,z=-43}}
+            PathfinderCollisionDetector.NODES_TO_IGNORE[2]=true
+            assert(checkCourse(route))
+        ''')
+
+    def test_unmapped_shape_and_unconfirmed_root_are_not_treated_as_traffic(self):
+        self.lua.execute('''
+            obstacles={{x=0,z=-43,unmapped=true}}; assert(not checkCourse(route))
+            local invalid=traffic('unknown'); invalid.getRootVehicle=function() return nil end
+            obstacles={{x=0,z=-43,object=invalid}}; assert(not checkCourse(route))
+        ''')
+
+    def test_bales_and_grain_heaps_still_block_but_bare_terrain_does_not(self):
+        self.lua.execute('''
+            obstacles={{x=0,z=-43,object={id=8,isa=function(_,class) return class==Bale end}}}
+            local clear,why=checkCourse(route); assert(not clear and why:find('bale 8'))
+            obstacles={{x=0,z=-43,terrain=true,unmapped=true}}
+            heapFill=1; clear,why=checkCourse(route); assert(not clear and why:find('grain'))
+            heapFill=0; assert(checkCourse(route))
+        ''')
+
+    def test_native_connector_drive_still_applies_traffic_and_convoy_stops_then_resumes(self):
+        self.lua.execute('''
+            obstacles={{x=0,z=-43,object=traffic('tractor')}}
+            R.begin(u,route,nil); drain(); assert(installed==1 and stopped==0)
+            u.updateLowFrequencyImplementControllers=function() end
+            Markers={refreshMarkerNodes=function() end}
+            u.ppc.isReversing=function() return false end
+            u.ppc.getGoalPointPosition=function() return 0,0,10 end
+            u.settings.fieldSpeed={getValue=function() return 15 end}
+            u.workStarter.getDriveData=function() return nil,nil,nil,15 end
+            u.setMaxSpeed=function(self,speed) self.maxSpeed=math.min(self.maxSpeed,speed) end
+            u.setAITarget=function() end; u.limitSpeed=function() end
+            local trafficStop,convoyStop,proximityCalls,convoyCalls=true,false,0,0
+            u.checkProximitySensors=function(self,forwards)
+                assert(forwards); proximityCalls=proximityCalls+1
+                if trafficStop then self:setMaxSpeed(0) end
+            end
+            u.checkDistanceToOtherFieldWorkers=function(self)
+                convoyCalls=convoyCalls+1
+                if convoyStop then self:setMaxSpeed(0) end
+            end
+            for i=1,3 do
+                u.maxSpeed=math.huge
+                local _,_,_,speed=nativeFieldworkDrive(u,16,0,0,0)
+                assert(speed==(i==3 and 15 or 0))
+                trafficStop=false; convoyStop=i==1
+            end
+            assert(proximityCalls==3 and convoyCalls==3 and stopped==0)
         ''')
 
 

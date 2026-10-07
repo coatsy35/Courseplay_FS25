@@ -1,4 +1,4 @@
--- Final clearance gate for harvester connecting paths only. Native turns,
+-- Final scenery-clearance gate for harvester connecting paths only. Native turns,
 -- unloading, crop costs and tractor implement entry remain unchanged.
 CpHarvesterRouteClearance = {}
 local R = CpHarvesterRouteClearance
@@ -13,6 +13,22 @@ end
 local function delta(a,b) return (b-a+math.pi)%(2*math.pi)-math.pi end
 local function finite(n) return type(n)=='number' and n==n and math.abs(n)<math.huge end
 
+-- A full-route scan cannot predict where traffic will be when we reach it.
+-- Keep native filtering for physical scenery; native live proximity/convoy
+-- control owns vehicles, including their attached headers, when driving.
+local function staticOverlapCallback(detector,transformId,...)
+    local count,text=detector.collidingShapes,detector.collidingShapesText
+    local result=PathfinderCollisionDetector._overlapBoxCallback(detector,transformId,...)
+    if detector.collidingShapes>count then
+        local object=g_currentMission.nodeToObject[transformId]
+        local root=object and object.getRootVehicle and object:getRootVehicle()
+        if root and root.getRootVehicle and root:getRootVehicle()==root then
+            detector.collidingShapes=count; detector.collidingShapesText=text
+        end
+    end
+    return result
+end
+
 function R.delete(check)
     if check and check.node then delete(check.node); check.node=nil end
 end
@@ -23,28 +39,43 @@ function R.new(vehicle,course)
     -- This gate covers self-propelled harvesters with mounted headers. A towed
     -- body requires articulated swept-path validation, not a rigid approximation.
     if geometry:getTowedImplement() then return nil,'unsupported towed body on harvester connector' end
-    local raw=geometry:getVehicleOverlapBoxParams()
-    local box={width=raw.width,length=raw.length,xOffset=raw.xOffset,zOffset=raw.zOffset}
-    for _,key in ipairs({'width','length','xOffset','zOffset'}) do
-        if not finite(box[key]) then return nil,'invalid harvester footprint' end
+    local bodies={{object=vehicle}}
+    for _,implement in ipairs(vehicle:getAttachedImplements()) do bodies[#bodies+1]=implement end
+    local boxes,radius={},0
+    for _,body in ipairs(bodies) do
+        local r=geometry:getRectangleForImplement(body,vehicle:getAIDirectionNode(),0)
+        for _,key in ipairs({'dLeft','dRight','dFront','dRear'}) do
+            if not finite(r[key]) then return nil,'invalid harvester footprint' end
+        end
+        if r.dLeft<=r.dRight or r.dFront<=r.dRear then return nil,'empty harvester footprint' end
+        -- Keep the chassis and mounted header separate: the empty space beside
+        -- the chassis is not occupied by a full-length, header-width rectangle.
+        -- Direct differences also handle a header lying wholly ahead of the root.
+        local b={width=(r.dLeft-r.dRight)/2+0.5,length=(r.dFront-r.dRear)/2+0.5,
+            xOffset=(r.dLeft+r.dRight)/2,zOffset=(r.dFront+r.dRear)/2}
+        boxes[#boxes+1]=b
+        radius=math.max(radius,math.sqrt((b.width+math.abs(b.xOffset))^2+(b.length+math.abs(b.zOffset))^2))
     end
-    if box.width<=0 or box.length<=0 then return nil,'empty harvester footprint' end
-    -- VehicleData's AI-marker rectangles do not retain its buffer argument.
-    -- Expand both half-extents explicitly, without changing the native geometry.
-    box.width=box.width+0.5; box.length=box.length+0.5
     local node=createTransformGroup('cpHarvesterConnectorClearance')
     link(getRootNode(),node)
     local origin=pose(vehicle:getAIDirectionNode())
-    return {course=course,vehicle=vehicle,node=node,box=box,ix=1,step=0,
-        previous=origin,origin=origin,
-        radius=math.sqrt((box.width+math.abs(box.xOffset))^2+(box.length+math.abs(box.zOffset))^2),
-        detector=PathfinderCollisionDetector(vehicle,{}, {},false,CpUtil.getDefaultCollisionFlags())}
+    local detector=PathfinderCollisionDetector(vehicle,{}, {},false,CpUtil.getDefaultCollisionFlags())
+    detector._overlapBoxCallback=staticOverlapCallback
+    return {course=course,vehicle=vehicle,node=node,boxes=boxes,ix=1,step=0,body=1,
+        previous=origin,origin=origin,radius=radius,detector=detector}
 end
 
-function R.clear(check,p)
+function R.clear(check,p,body)
+    if not body then
+        for i=1,#check.boxes do
+            local clear,object=R.clear(check,p,i)
+            if not clear then return false,object end
+        end
+        return true
+    end
     PathfinderUtil.setWorldPositionAndRotationOnTerrain(check.node,p.x,p.z,p.t,0.5)
     local rx,ry,rz=getWorldRotation(check.node)
-    local b=check.box
+    local b=check.boxes[body]
     local x,y,z=localToWorld(check.node,b.xOffset,1,b.zOffset)
     local detector=check.detector
     detector.currentOverlapBoxPosition={pos={x,y,z},direction={math.sin(ry),math.cos(ry)},
@@ -76,11 +107,15 @@ function R.step(check)
     local a,b=check.previous,check.target
     local f=check.step/check.steps
     local p={x=a.x+(b.x-a.x)*f,z=a.z+(b.z-a.z)*f,t=a.t+check.angle*f}
-    local clear,object=R.clear(check,p)
+    -- One engine query per step, including multi-body harvesters, so the shared
+    -- 32-query/2 ms frame budget still applies to the complete footprint.
+    local clear,object=R.clear(check,p,check.body)
     if not clear then
         return true,false,string.format('waypoint %d at %.1f, %.1f: %s',check.ix,p.x,p.z,object)
     end
-    check.step=check.step+1
+    check.body=check.body+1
+    if check.body<=#check.boxes then return false end
+    check.body=1; check.step=check.step+1
     if check.step>check.steps then
         check.previous=b; check.target=nil; check.ix=check.ix+1
     end
@@ -115,7 +150,7 @@ function R.begin(driver,course,fallback)
     -- then validate and install exactly that same prepared course.
     local starter=StartRowOnly(driver.vehicle,driver,driver.ppc,driver.turnContext,course:copy())
     driver.connectorClearance={starter=starter,fallback=fallback,context=driver.turnContext}
-    driver:debug('Validating final connector with full harvester/header footprint')
+    driver:debug('Validating final connector scenery clearance for separate harvester/header bodies; native live control handles traffic')
 end
 
 function R.update(driver)
