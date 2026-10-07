@@ -10,8 +10,27 @@ local function nearSegment(p,a,b,width)
     return distance(p,{x=a.x+f*dx,z=a.z+f*dz})<=width
 end
 local function onHeadland(saved,p)
-    for _, band in ipairs(saved.headlands) do
-        for i=2,#band do if nearSegment(p,band[i-1],band[i],saved.width/2) then return true end end
+    local index=saved.headlandIndex
+    if not index or index.source~=saved.headlands or index.width~=saved.width then
+        index={source=saved.headlands,width=saved.width,cells={}}
+        local w=saved.width
+        for _,band in ipairs(saved.headlands) do
+            for i=2,#band do
+                local a,b=band[i-1],band[i]
+                for x=math.floor((math.min(a.x,b.x)-w/2)/w),math.floor((math.max(a.x,b.x)+w/2)/w) do
+                    for z=math.floor((math.min(a.z,b.z)-w/2)/w),math.floor((math.max(a.z,b.z)+w/2)/w) do
+                        local key=x..':'..z
+                        index.cells[key]=index.cells[key] or {}
+                        table.insert(index.cells[key],{a,b})
+                    end
+                end
+            end
+        end
+        saved.headlandIndex=index
+    end
+    local segments=index.cells[math.floor(p.x/saved.width)..':'..math.floor(p.z/saved.width)]
+    for _,segment in ipairs(segments or {}) do
+        if nearSegment(p,segment[1],segment[2],saved.width/2) then return true end
     end
     return false
 end
@@ -55,54 +74,275 @@ function Q.beginExit(driver)
     Q.reason(data,'CP owns departure until the whole train reaches a connected headland')
 end
 
-function Q.exitTarget(driver)
-    local data=Q.data(driver)
-    if not data.departure then Q.recoverDeparture(driver) end
-    local saved=data.departure
-    if not saved then Q.reason(data,'no saved harvested row; retaining CP control'); return end
-    local start=saved.row[1]
-    local radius=0
-    for _, band in ipairs(saved.headlands) do
-        for _,p in ipairs(band) do radius=math.max(radius,distance(start,p)) end
+-- Geometric guidance only. Every short leg is still searched and checked with
+-- the live articulated rig, crop density, boundary and collision detector.
+local function project(line,p)
+    local best,total= nil,0
+    for i=2,#line do
+        local a,b=line[i-1],line[i]
+        local length=distance(a,b)
+        if length>0.001 then
+            local f=math.max(0,math.min(1,((p.x-a.x)*(b.x-a.x)+(p.z-a.z)*(b.z-a.z))/(length*length)))
+            local q={x=a.x+f*(b.x-a.x),z=a.z+f*(b.z-a.z)}
+            local d=distance(p,q)
+            if not best or d<best.distance then best={s=total+f*length,distance=d} end
+            total=total+length
+        end
     end
-    local node,heading,site=Q.connectedNode(driver,{x=start.x,z=start.z},saved,radius+21)
-    local best
-    if node then best={x=site.x,z=site.z,t=heading}
-    else
-        Q.reason(data,heading)
-        local score
-        for _,band in ipairs(saved.headlands) do
-            for _,p in ipairs(band) do
-                local d=distance(start,p)
-                if d>AIUtil.getLength(driver.vehicle)+5 and (not score or d<score) then
-                    best={x=p.x,z=p.z,t=p.t}; score=d
+    return best,total
+end
+
+local function along(line,s,direction)
+    for i=2,#line do
+        local a,b=line[i-1],line[i]
+        local length=distance(a,b)
+        if length>0.001 then
+            if s<=length or i==#line then
+                local f=math.max(0,math.min(1,s/length))
+                local heading=math.atan2(b.x-a.x,b.z-a.z)
+                local entryBend,exitBend=0,0
+                if i>2 then
+                    local previous=line[i-2]
+                    entryBend=math.abs(H.math.delta(heading,math.atan2(a.x-previous.x,a.z-previous.z)))
+                end
+                if i<#line then
+                    local nextPoint=line[i+1]
+                    exitBend=math.abs(H.math.delta(heading,math.atan2(nextPoint.x-b.x,nextPoint.z-b.z)))
+                end
+                return {x=a.x+f*(b.x-a.x),z=a.z+f*(b.z-a.z),
+                    t=heading+(direction<0 and math.pi or 0),
+                    entryDistance=direction>0 and s or length-s,
+                    exitDistance=direction>0 and length-s or s,segment=i,
+                    entryBend=direction>0 and entryBend or exitBend,
+                    exitBend=direction>0 and exitBend or entryBend}
+            end
+            s=s-length
+        end
+    end
+end
+
+-- A small junction graph links adjoining headland bands. Long curved sections
+-- remain polylines, not straight shortcuts between graph vertices.
+local function headlandRoute(saved,from,to)
+    local graph=saved.exitGraph
+    if not graph or graph.source~=saved.headlands then
+        graph={source=saved.headlands,bands={},nodes={},links={}}
+        local function add(b,s)
+            for _,id in ipairs(b.marks) do if math.abs(graph.nodes[id].s-s)<0.01 then return id end end
+            local p=along(b.line,s,1)
+            p.s=s; graph.nodes[#graph.nodes+1]=p
+            local id=#graph.nodes; b.marks[#b.marks+1]=id; return id
+        end
+        for _,line in ipairs(saved.headlands) do
+            local _,length=project(line,from)
+            if length>0 then
+                local b={line=line,length=length,marks={}}
+                graph.bands[#graph.bands+1]=b
+                b.first=add(b,0); b.last=add(b,length)
+                if distance(line[1],line[#line])<=saved.width then
+                    graph.links[#graph.links+1]={b.first,b.last}
                 end
             end
         end
-        if not best then return end
-    end
-    best.accept=function(poses,model)
-        for i,pose in ipairs(poses) do
-            if not wholeHeadland(saved,W.rectangle(model.bodies[i],pose)) then return false end
+        for _,b in ipairs(graph.bands) do
+            for _,endpoint in ipairs({b.first,b.last}) do
+                for _,other in ipairs(graph.bands) do
+                    if other~=b then
+                        local p=project(other.line,graph.nodes[endpoint])
+                        if p.distance<=saved.width+0.01 then
+                            graph.links[#graph.links+1]={endpoint,add(other,p.s)}
+                        end
+                    end
+                end
+            end
         end
-        return true
+        saved.exitGraph=graph
     end
-    local function corridor(rectangle)
+    local nodes,edges={},{}
+    for i,p in ipairs(graph.nodes) do nodes[i]=p; edges[i]={} end
+    local function add(p) nodes[#nodes+1]=p; edges[#nodes]={}; return #nodes end
+    local start,finish=add(from),add(to)
+    local function link(a,b,line)
+        local cost=line and math.abs(nodes[b].s-nodes[a].s) or distance(nodes[a],nodes[b])
+        edges[a][#edges[a]+1]={to=b,cost=cost,line=line}
+        edges[b][#edges[b]+1]={to=a,cost=cost,line=line}
+    end
+    for _,pair in ipairs(graph.links) do link(pair[1],pair[2]) end
+    for _,band in ipairs(graph.bands) do
+        local marks={}
+        for _,id in ipairs(band.marks) do marks[#marks+1]=id end
+        for _,id in ipairs({start,finish}) do
+            local q=project(band.line,nodes[id])
+            if q.distance<=saved.width then
+                local p=along(band.line,q.s,1); p.s=q.s
+                local mark=add(p); marks[#marks+1]=mark; link(id,mark)
+            end
+        end
+        table.sort(marks,function(a,b) return nodes[a].s<nodes[b].s end)
+        for i=2,#marks do link(marks[i-1],marks[i],band.line) end
+    end
+    local cost,previous,visited={[start]=0},{},{}
+    while true do
+        local best
+        for id,value in pairs(cost) do
+            if not visited[id] and (not best or value<cost[best]) then best=id end
+        end
+        if not best then return end
+        if best==finish then break end
+        visited[best]=true
+        for _,edge in ipairs(edges[best]) do
+            local nextCost=cost[best]+edge.cost
+            if not cost[edge.to] or nextCost<cost[edge.to] then
+                cost[edge.to]=nextCost; previous[edge.to]={from=best,line=edge.line}
+            end
+        end
+    end
+    local chain,id={},finish
+    while id~=start do
+        local edge=previous[id]
+        table.insert(chain,1,{a=nodes[edge.from],b=nodes[id],line=edge.line})
+        id=edge.from
+    end
+    local route={from}
+    local function append(p)
+        if distance(route[#route],p)>0.01 then route[#route+1]={x=p.x,z=p.z} end
+    end
+    for _,edge in ipairs(chain) do
+        if edge.line then
+            local points,s={},0
+            for i=2,#edge.line do
+                s=s+distance(edge.line[i-1],edge.line[i])
+                if s>math.min(edge.a.s,edge.b.s) and s<math.max(edge.a.s,edge.b.s) then
+                    points[#points+1]=edge.line[i]
+                end
+            end
+            if edge.b.s>=edge.a.s then for _,p in ipairs(points) do append(p) end
+            else for i=#points,1,-1 do append(points[i]) end end
+        end
+        append(edge.b)
+    end
+    return route,cost[finish]
+end
+
+local function wholeTrain(saved,model,poses)
+    for i,p in ipairs(poses) do
+        if not wholeHeadland(saved,W.rectangle(model.bodies[i],p)) then return false end
+    end
+    return true
+end
+
+local function exitCorridor(driver,saved)
+    return function(rectangle)
         for _,p in ipairs(rectangle) do
             local allowed=onHeadland(saved,p)
             for i=2,#saved.row do
                 if nearSegment(p,saved.row[i-1],saved.row[i],saved.width) then allowed=true; break end
             end
-            -- Room to turn back into the harvested row, never a field-wide shortcut.
             if distance(p,saved.position)<2*driver.turningRadius then allowed=true end
             if not allowed then return false end
         end
         return true
     end
-    return best,corridor
 end
 
-function Q.connectedNode(driver,position,saved,range)
+function Q.exitTarget(driver)
+    local data=Q.data(driver)
+    if not data.departure then Q.recoverDeparture(driver) end
+    local saved=data.departure
+    if not saved then Q.reason(data,'no saved harvested row; retaining CP control'); return end
+    local model,why=W.model(driver.vehicle)
+    if not model then Q.reason(data,why); return end
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    local runIn=0
+    for _,link in ipairs(model.links) do runIn=runIn+link.length end
+    runIn=math.max(10,3*runIn)
+    local legLength=math.max(50,runIn+driver.turningRadius)
+    local corridor=exitCorridor(driver,saved)
+    local headland=wholeTrain(saved,model,W.poses(model))
+    local accept=function(poses,m) return wholeTrain(saved,m,poses) end
+    local function available(goal,onHeadlandRequired)
+        if not goal or not Q.targetAvailable(driver,goal) then return false end
+        if onHeadlandRequired and not accept(W.settledPoses(model,goal),model) then return false end
+        goal.accept=onHeadlandRequired and accept or nil
+        return true
+    end
+    if not headland then
+        -- Return down the row in short legs before selecting a perimeter exit.
+        local row=project(saved.row,here)
+        if row and row.s>50 then
+            for _,length in ipairs({50,35,65}) do
+                local goal=along(saved.row,math.max(0,row.s-length),-1)
+                if available(goal,false) then
+                    goal.exitIntermediate=true; goal.exitStage='row return'
+                    return goal,corridor
+                end
+            end
+            Q.reason(data,'row return targets occupied or temporarily rejected'); return
+        end
+        -- Turn onto a headland tangent with room for the tail. Do not demand
+        -- the road's outgoing heading while the trailer is still in the row.
+        local best,score
+        local start=saved.row[1] or here
+        for _,band in ipairs(saved.headlands) do
+            local join,total=project(band,start)
+            if join and join.distance<=2*saved.width then
+                for _,direction in ipairs({1,-1}) do
+                    local remaining=direction>0 and total-join.s or join.s
+                    for _,length in ipairs({legLength,legLength+15,legLength+30,
+                            math.max(0,math.min(legLength+30,remaining-5))}) do
+                        local s=join.s+direction*length
+                        if length>=runIn and s>=0 and s<=total then
+                            local goal=along(band,s,direction)
+                            local cost=distance(here,goal)+join.distance
+                            if available(goal,true) and (not score or cost<score) then best,score=goal,cost end
+                        end
+                    end
+                end
+            end
+        end
+        if best then best.exitIntermediate=true; best.exitStage='headland entry'; return best,corridor end
+        Q.reason(data,'no whole-train headland entry available'); return
+    end
+
+    local radius=0
+    for _,band in ipairs(saved.headlands) do
+        for _,p in ipairs(band) do radius=math.max(radius,distance(here,p)) end
+    end
+    local selected
+    local function selectStage(node,heading,site)
+        -- A node at the crop edge is not automatically a valid parking pose.
+        -- Try nearby poses along its direction, always within handover range.
+        for _,shift in ipairs({0,8,-8,16,-16}) do
+            local terminal={x=site.x+shift*math.sin(heading),z=site.z+shift*math.cos(heading),t=heading}
+            if distance(terminal,node)<=20 and available(terminal,true) then
+                local best
+                local guide,total=headlandRoute(saved,here,terminal)
+                if guide then
+                    for _,advance in ipairs({legLength,legLength+15,legLength+30,legLength-15}) do
+                        local goal=terminal
+                        local usable=true
+                        if total>advance then
+                            goal=along(guide,advance,1)
+                            -- Avoid stopping just past a bend: there would be
+                            -- insufficient straight distance to align the tail.
+                            usable=goal and (goal.entryBend<math.rad(30) or goal.entryDistance>=runIn+driver.turningRadius)
+                                and (goal.exitBend<math.rad(30) or goal.exitDistance>=driver.turningRadius)
+                            if goal then goal.exitIntermediate=true; goal.exitStage='headland transit' end
+                        end
+                        if usable and available(goal,true) then best=goal; break end
+                    end
+                end
+                if best then selected=best; return true end
+            end
+        end
+        return false
+    end
+    local node,reason=Q.connectedNode(driver,{x=here.x,z=here.z},saved,radius+21,selectStage)
+    if node then selected.exitStage=selected.exitStage or 'AD approach'; return selected,corridor end
+    Q.reason(data,reason)
+end
+
+function Q.connectedNode(driver,position,saved,range,selectStage)
     local ad=FS25_AutoDrive
     local graph=ad and ad.ADGraphManager
     local state=driver.vehicle.ad and driver.vehicle.ad.stateModule
@@ -119,7 +359,9 @@ function Q.connectedNode(driver,position,saved,range)
         local site=node and saved and connectionSite(driver,saved,node)
         local banned=node and driver.queueData and driver.queueData.failedConnections
             and (driver.queueData.failedConnections[node.id] or 0)>g_currentMission.time
-        if site and not banned and Q.targetAvailable(driver,site) then candidates[#candidates+1]={node=node,site=site} end
+        if site and not banned and (selectStage or Q.targetAvailable(driver,site)) then
+            candidates[#candidates+1]={node=node,site=site}
+        end
     end
     table.sort(candidates,function(a,b) return distance(a.site,position)<distance(b.site,position) end)
     for i,candidate in ipairs(candidates) do
@@ -139,7 +381,8 @@ function Q.connectedNode(driver,position,saved,range)
                     previous=path[j]
                 end
                 local heading=math.atan2(path[first].x-node.x,path[first].z-node.z)
-                if valid and (not position.t or math.abs(H.math.delta(position.t,heading))<math.rad(15)) then
+                if valid and (not position.t or math.abs(H.math.delta(position.t,heading))<math.rad(15))
+                        and (not selectStage or selectStage(node,heading,candidate.site)) then
                     return node,heading,candidate.site
                 end
             end

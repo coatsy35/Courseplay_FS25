@@ -411,6 +411,60 @@ run them against source and the extracted ZIP, alongside native parity and the
 existing queue/implement suites. These checks establish the acceptance gate;
 the tree-edge journey and header tracking still require validation in FS25.
 
+### Build 3004: staged departure and queue turn geometry
+
+The 5 October session still loaded build 3002. All four full trailers entered
+QUEUE_EXIT without a successful departure or AD handover through 17:29:59:
+/325 at 16:22:41, /322 at 16:34:16, /324 at 16:43:30 and /323 at 17:00:38.
+The repeated failures were invalid destinations (standing crop, field boundary
+or outside the exit corridor), missing connected targets and exhausted searches.
+There was no Lua error in that trace. This was not an AD delivery failure:
+CP had not released the trailers to AD.
+
+Code review and complete-journey regressions established several defects:
+
+- The queue interpolated heading changes with reversed arguments to the shared
+  angle-difference helper, rotating simulated bodies away from the desired
+  heading and falsely rejecting bends on articulation limits. Straight-only
+  route tests did not detect this. Only the queue caller is corrected.
+- A direct candidate aligned the tractor but did not reserve a straight run-in
+  to align its trailer. Queue direct searches now include a run-in based on the
+  towing chain; the same whole-train acceptance checks remain mandatory.
+- Departure targeted a distant AD point in one search, rather than returning
+  along the harvested row and travelling around the headland. Short searched
+  legs now provide row return, tangent headland entry, perimeter transit and
+  the final AD approach. A small cached junction graph links separate headland
+  bands while retaining their curved polylines. Every driven leg still passes
+  live crop, field, obstacle and articulation checks, including detours.
+- Multitool departure geometry omitted the other lanes' headlands. All lane
+  geometries are now available as candidates, preserving offsets even for
+  inactive, unenriched waypoints. Live crop checks must still prove those lanes
+  have been harvested; the combine courses are neither switched nor modified.
+- The original fallback ignored rejected and reserved targets. All stages now
+  honour them. Final AD approach poses must accommodate the complete train on
+  the headland, rather than placing the tractor at an arbitrary crop-edge node.
+- The build 3001 timeout still counted selected game-frame duration, so slower
+  frame rates reduced useful search work. Build 3004 charges measured advance
+  computation against the 15-second work budget instead. The shared 2 ms slice,
+  native-search priority and 6,000-expansion bound remain in force.
+
+Intermediate stages cannot trigger handover. CP retains control until the
+existing final gate verifies the whole train on harvested headland, a connected
+directed AD delivery route, compatible heading and clear local connection.
+Unsupported or obstructed departures still wait safely. No AD code, installed
+ZIP, native combine route or native unloading approach is changed. Exit logs
+now identify the stage, target coordinates and heading for future diagnosis.
+
+Fifteen added engine-boundary tests include complete row-to-AD journeys, the
+normal Q.tick lifecycle, a loaded rig turning back from the pipe side, turns in
+both directions, a vehicle detour, a cropped-interior perimeter journey across
+split bands, a short headland, rejected/reserved targets, multitool offsets and
+equal computation allowances at different frame intervals. They use production
+route and articulated geometry code with mocked crop/collision engine queries;
+they do not simulate GIANTS driving physics. Source and extracted-ZIP checks
+include these and the existing suites. Build 3003's connector fix is retained.
+The actual four-trailer departure and AD delivery still require an FS25 retest.
+
 ## Packaging
 
 Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and

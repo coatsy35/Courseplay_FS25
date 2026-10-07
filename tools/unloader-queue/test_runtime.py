@@ -467,7 +467,7 @@ class EngineBoundaryTests(unittest.TestCase):
             local data=CpUnloaderQueue.take(u,'prepare')
             data.world=world
             data.search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))
-            data.searchGeneration=data.generation; data.searchStarted=0; data.searchActiveMs=0
+            data.searchGeneration=data.generation; data.searchStarted=0; data.searchWorkMs=0
             local search=data.search
             local native={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
             g_currentMission.vehicleSystem.vehicles={native}
@@ -479,11 +479,11 @@ class EngineBoundaryTests(unittest.TestCase):
                 g_updateLoopIndex=i; g_currentMission.time=i*100
                 CpUnloaderQueue.schedule()
             end
-            assert(data.search==search and data.searchActiveMs==0)
+            assert(data.search==search and data.searchWorkMs==0)
             g_currentMission.vehicleSystem.vehicles={}
             g_updateLoopIndex=201; g_currentMission.time=20100
             CpUnloaderQueue.schedule()
-            assert(data.search==search and data.searchActiveMs==100)
+            assert(data.search==search and data.searchWorkMs==3)
         ''')
 
     def test_only_scheduled_search_uses_budget_and_active_exhaustion_still_stops(self):
@@ -491,10 +491,10 @@ class EngineBoundaryTests(unittest.TestCase):
             u.setMaxSpeed=function() end
             local data=CpUnloaderQueue.take(u,'prepare')
             data.search={}; data.searchGeneration=data.generation
-            data.searchStarted=0; data.searchActiveMs=14900
+            data.searchStarted=0; data.searchWorkMs=14998
             local other={state={},debug=function() end}
             local waiting={driver=other,state=other.state,search={},generation=1,searchGeneration=1,
-                searchStarted=0,searchActiveMs=100,lastAdvance=100000}
+                searchStarted=0,searchWorkMs=100,lastAdvance=100000}
             CpUnloaderQueue.members[other]=waiting
             CpUnloaderQueueSearch.step=function() return false end
             openIntervalTimer=function() return 1 end
@@ -503,11 +503,11 @@ class EngineBoundaryTests(unittest.TestCase):
             CpUnloaderQueue.schedulerTime=20000
             g_updateLoopIndex=1; g_currentMission.time=20100
             CpUnloaderQueue.schedule()
-            assert(data.search and data.searchActiveMs==15000 and waiting.searchActiveMs==100)
+            assert(data.search and data.searchWorkMs==15000 and waiting.searchWorkMs==100)
             g_updateLoopIndex=2; g_currentMission.time=20200
             CpUnloaderQueue.schedule()
             assert(not data.search and data.reason=='search budget exhausted; retaining CP control')
-            assert(waiting.search and waiting.searchActiveMs==100)
+            assert(waiting.search and waiting.searchWorkMs==100)
         ''')
 
     def test_new_search_is_not_charged_for_idle_time_before_creation(self):
@@ -515,7 +515,7 @@ class EngineBoundaryTests(unittest.TestCase):
             u.setMaxSpeed=function() end
             local data=CpUnloaderQueue.take(u,'prepare')
             data.search={}; data.searchGeneration=data.generation
-            data.searchStarted=20000; data.searchActiveMs=0
+            data.searchStarted=20000; data.searchWorkMs=0
             CpUnloaderQueueSearch.step=function() return false end
             openIntervalTimer=function() return 1 end
             readIntervalTimerMs=function() return 2 end
@@ -523,7 +523,7 @@ class EngineBoundaryTests(unittest.TestCase):
             CpUnloaderQueue.schedulerTime=0
             g_updateLoopIndex=1; g_currentMission.time=20000
             CpUnloaderQueue.schedule()
-            assert(data.search and data.searchActiveMs==0)
+            assert(data.search and data.searchWorkMs==2)
         ''')
 
     def test_ad_start_outside_field_has_a_bounded_entrance(self):

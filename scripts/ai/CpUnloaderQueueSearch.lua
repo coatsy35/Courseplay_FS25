@@ -55,7 +55,16 @@ function S.new(world,goal,corridor)
     local search={world=world,goal=goal,corridor=corridor,radius=radius,open={root},seen={},expanded=0,root=root}
     local start=State3D(poses[1].x,-poses[1].z,CpMathUtil.angleFromGame(poses[1].t))
     local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
-    local solution=not goal.reverse and DubinsSolver():solve(start,target,radius)
+    -- The tractor reaching the requested heading does not align its trailer.
+    -- Reserve a straight run-in so the direct candidate can settle the train.
+    local runIn=0
+    for _,link in ipairs(world.model.links) do runIn=runIn+link.length end
+    runIn=math.max(10,3*runIn)
+    local approach=target
+    if not goal.reverse and distance(poses[1],goal)>runIn+2 then
+        approach=State3D(goal.x-runIn*math.sin(goal.t),-(goal.z-runIn*math.cos(goal.t)),target.t)
+    end
+    local solution=not goal.reverse and DubinsSolver():solve(start,approach,radius)
     if goal.reverse then
         local reference=world.strategy.ppc:getReverserNode(true)
         for i,link in ipairs(world.model.links) do
@@ -71,6 +80,7 @@ function S.new(world,goal,corridor)
         search.directIx=2; search.directNode=root
     elseif solution and solution:getLength(radius)<math.max(100,3*distance(poses[1],goal)) then
         search.direct=solution:getWaypoints(start,radius)
+        if approach~=target then search.direct[#search.direct+1]=target end
         search.directIx=2
         search.directNode=root
     end
@@ -115,7 +125,7 @@ function S.step(search,budget)
             edge.step=edge.step+1
             local f=edge.step/edge.count
             local a,b=edge.parent.poses[1],edge.target
-            local root={x=a.x+(b.x-a.x)*f,z=a.z+(b.z-a.z)*f,t=a.t+H.math.delta(a.t,b.t)*f}
+            local root={x=a.x+(b.x-a.x)*f,z=a.z+(b.z-a.z)*f,t=a.t+H.math.delta(b.t,a.t)*f}
             local poses=H.advance(search.world.model,edge.poses,root)
             if search.reverse then
                 root.trackX=poses[search.trackingIndex].x; root.trackZ=poses[search.trackingIndex].z

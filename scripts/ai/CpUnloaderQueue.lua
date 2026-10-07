@@ -109,15 +109,38 @@ function Q.coursePosition(combine)
 end
 
 function Q.headlands(course)
-    local result,band,pass={}
-    for i=1,course:getNumberOfWaypoints() do
-        local wp=course:getWaypoint(i)
-        local currentPass=course:getHeadlandNumber(i)
-        if course:isOnHeadland(i) and wp:getBoundaryId()=='F' and not wp:isHeadlandTransition()
+    local result={}
+    -- Multitool courses split the perimeter between vehicles. Keep every lane
+    -- as candidate geometry; live density checks still prove it is harvested.
+    local lanes=course.multiVehicleData and course.multiVehicleData.waypoints or {course.waypoints}
+    for _,waypoints in pairs(lanes) do
+      local band,pass
+      for i,wp in ipairs(waypoints) do
+        local currentPass=wp.attributes:getHeadlandPassNumber()
+        if currentPass and wp:getBoundaryId()=='F' and not wp:isHeadlandTransition()
                 and not wp:isOnConnectingPath() and not wp.attributes:isIslandBypass() then
             if not band or currentPass~=pass then band={}; result[#result+1]=band end
-            band[#band+1]=point(course,i); pass=currentPass
+            local p
+            if waypoints==course.waypoints then p=point(course,i)
+            else
+                -- Inactive multitool lanes have not been enriched by
+                -- Course:setPosition, so their dx/dz can still be absent.
+                local dx,dz=wp.dx,wp.dz
+                if not dx or not dz then
+                    local neighbour=waypoints[i+1] or waypoints[i-1]
+                    local sign=i<#waypoints and 1 or -1
+                    dx,dz=neighbour and sign*(neighbour.x-wp.x) or 0,
+                        neighbour and sign*(neighbour.z-wp.z) or 0
+                    local length=math.sqrt(dx*dx+dz*dz)
+                    if length>0 then dx,dz=dx/length,dz/length end
+                end
+                local x,_,z=wp:getOffsetPosition(course.offsetX+course.temporaryOffsetX:get(),
+                    course.offsetZ+course.temporaryOffsetZ:get(),dx,dz)
+                p={x=x,z=z,t=math.atan2(dx,dz)}
+            end
+            band[#band+1]=p; pass=currentPass
         else band=nil end
+      end
     end
     return result
 end
@@ -364,6 +387,10 @@ function Q.request(driver,goal,corridor)
     local data=Q.data(driver)
     Q.cancel(driver)
     data.goal=goal
+    if data.operation=='exit' then
+        driver:debug('Queue: exit %s target %.1f, %.1f heading %.1f',
+            goal.exitStage or 'connection',goal.x,goal.z,math.deg(goal.t))
+    end
     local world,reason=W.new(driver)
     if not world then Q.failed(data,reason,'world'); return end
     data.world=world
@@ -374,7 +401,7 @@ function Q.request(driver,goal,corridor)
     data.corridor=corridor
     if not data.search then Q.failed(data,reason,phase) end
     data.searchStarted=now()
-    data.searchActiveMs=0
+    data.searchWorkMs=0
 end
 
 function Q.startRoute(data,path)
@@ -400,8 +427,6 @@ end
 function Q.schedule()
     if Q.frame==g_updateLoopIndex then return end
     Q.frame=g_updateLoopIndex
-    local frameMs=Q.schedulerTime and math.max(0,now()-Q.schedulerTime) or 0
-    Q.schedulerTime=now()
     -- Foreground native calls keep their existing scheduling and take precedence.
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         local d=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
@@ -414,19 +439,19 @@ function Q.schedule()
     end
     if not selected then return end
     selected.lastAdvance=now()
-    -- Only charge the frame this search receives. Native searches and other
-    -- queue members can suspend it for minutes without doing any search work.
-    selected.searchActiveMs=(selected.searchActiveMs or 0)+math.min(frameMs,math.max(0,now()-selected.searchStarted))
     local timer=openIntervalTimer()
     local done,path,reason
     repeat done,path,reason=S.step(selected.search,1) until done or readIntervalTimerMs(timer)>=2
     local elapsed=readIntervalTimerMs(timer); closeIntervalTimer(timer)
+    -- Charge measured computation, not the duration of a game frame. A low
+    -- frame rate or another worker must not reduce this search's work allowance.
+    selected.searchWorkMs=(selected.searchWorkMs or 0)+elapsed
     if elapsed>=8 then selected.driver:debug('Queue search advance %.1f ms',elapsed) end
     if done then
         selected.search=nil
         if path then Q.startRoute(selected,path)
         else Q.failed(selected,reason or 'no safe route') end
-    elseif selected.searchActiveMs>15000 then
+    elseif selected.searchWorkMs>15000 then
         selected.search=nil; Q.failed(selected,'search budget exhausted; retaining CP control')
     end
 end
@@ -491,7 +516,8 @@ function Q.tick(driver)
                     if now()>=Q.nextDeparture or data.operation~='prepare' then
                         Q.request(driver,goal,corridor); Q.nextDeparture=now()+3000
                     end
-                elseif data.operation=='exit' then Q.finishExit(driver)
+                elseif data.operation=='exit' and not goal.exitIntermediate then Q.finishExit(driver)
+                elseif data.operation=='exit' then data.nextAttempt=now()+1000
                 elseif data.operation=='yield' then Q.release(driver)
                 else data.parkedGoal=goal; data.nextAttempt=now()+2000 end
             else data.nextAttempt=now()+3000; Q.reason(data,'no verified '..data.operation..' destination') end

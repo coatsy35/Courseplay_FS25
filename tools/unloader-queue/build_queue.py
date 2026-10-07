@@ -101,5 +101,6 @@ if __name__ == '__main__':
     release.build(parser.parse_args().build_number, qualification=check_queue,
                   suites=SUITES+('unloader-queue/test_runtime.py', 'unloader-queue/test_lookahead.py',
                                 'unloader-queue/test_harvester_turns.py',
-                                'unloader-queue/test_connector_clearance.py'),
+                                'unloader-queue/test_connector_clearance.py',
+                                'unloader-queue/test_exit_stages.py'),
                   stage='queue-operational-candidate-requires-in-game-validation')
