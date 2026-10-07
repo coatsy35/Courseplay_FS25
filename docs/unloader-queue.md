@@ -626,3 +626,42 @@ Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and
 remain stable. Never replace the live `FS25_Courseplay.zip` or the installed mod
 as part of building. Keep numbered history and a receipt identifying the
 source revision, baseline, feature stage and checksum.
+
+
+### Build 3009: checked local entry onto a harvester connector
+
+The 7 October 20:26–20:28 build-3008 trace showed CR11/318 spending about
+76 seconds on two unsuccessful 40,000-iteration searches. The saved connector
+then started 14.7 m sideways from the combine, facing approximately the opposite
+direction. Native fallback followed that displaced connector without constructing
+an initial U-turn; the combine subsequently stopped near T7.300/322. This does
+not establish that the tractor had to move or that all alternative routes were blocked.
+
+This explicitly authorised connector-entry correction is separate from queue
+scheduling. Self-propelled harvesters without a trailing steering length first
+search for a forward local entry onto the first section of the existing connector.
+Up to three nearby targets use the native planner, collision mask, attached-header
+envelope, turning radius and crop preference, with 3,000 iterations per attempt.
+An exact analytic finish replaces the tolerant end of the local search. The local
+manoeuvre and join are checked at no more than 0.4 m or 2 degree intervals, with
+20 overlap checks per update. Local entries exceeding the configured fruit
+limit are rejected; native full-route search retains the decision about necessary
+crop travel. The original connector is copied; its remaining
+route, live traffic/convoy controls and native final straight-row entry remain in use.
+
+If local entries fail, the native full-destination search remains available once.
+If that also fails, the worker holds and retries local entries after a delay instead
+of starting an unchecked displaced connector. This path never disables collisions.
+Non-harvesters and harvesters towing steering-length implements retain their native
+connector dispatch. No AutoDrive or queue-yield behaviour changes are included.
+
+Regression coverage runs real native JPS/hybrid search, constraints, collision
+filtering, Course and StartRowOnly. It uses the recorded start pose and initial
+connector coordinates, a logged 16.6 by 13 m combined envelope and representative
+stationary verge tractor/trailer rectangles. Engine transforms and overlap queries
+are planar adapters; this is not a replay of all live map scenery or vehicle physics.
+Additional cases cover header-only obstruction, failed-search hold/retry, short
+connectors, heading wrap, the final join geometry and preserved straight entry.
+The release parity gate permits only the three reviewed connector-entry blocks;
+all other fieldwork strategy code must still match the pinned main baseline.
+Actual steering and timing still require the user's in-game validation.

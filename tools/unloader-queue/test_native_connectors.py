@@ -21,7 +21,9 @@ class NativeConnectorTests(unittest.TestCase):
         self.lua.execute('NativeFieldwork={}; NativeFieldwork.__index=NativeFieldwork')
         text=(ROOT/FIELDWORK).read_text(encoding='utf-8')
         for name in ('onPathfindingDoneToConnectingPathEnd', 'onPathfindingFailedToConnectingPathEnd',
-                     'startCourseToWorkStart', 'getDriveData'):
+                     'startCourseToWorkStart', 'getDriveData', 'startConnectingPath',
+                     'updateHarvesterConnectorEntry', 'onHarvesterConnectorEntryDone',
+                     'checkHarvesterConnectorEntry', 'advanceHarvesterConnectorValidation'):
             method=text.split('function AIDriveStrategyFieldWorkCourse:'+name,1)[1].split('\nend',1)[0]
             self.lua.execute('function NativeFieldwork:'+name+method+'\nend')
         self.lua.execute('''
@@ -55,7 +57,9 @@ class NativeConnectorTests(unittest.TestCase):
 
     def test_native_strategy_is_byte_equivalent_to_pinned_base(self):
         expected=subprocess.check_output(['git','show',f'{BASE}:{FIELDWORK}'],cwd=SOURCE).decode()
-        self.assertEqual((ROOT/FIELDWORK).read_text(encoding='utf-8'),expected.replace('\r\n','\n'))
+        actual=(ROOT/FIELDWORK).read_text(encoding='utf-8')
+        actual=re.sub(r' *-- BEGIN authorised harvester connector entry\n.*? *-- END authorised harvester connector entry\n', '', actual, flags=re.S)
+        self.assertEqual(actual,expected.replace('\r\n','\n'))
 
     def test_removed_gate_cannot_load_or_override_native_connectors(self):
         self.assertFalse((ROOT/'scripts/ai/CpHarvesterRouteClearance.lua').exists())
@@ -152,6 +156,221 @@ class NativeConnectorTests(unittest.TestCase):
             end
             assert(proximityCalls==3 and convoyCalls==3)
         ''')
+
+    def entry_fixture(self):
+        self.lua.execute("""
+            CpUtil.getDefaultCollisionFlags=function() return 334339 end
+            CollisionFlag={TERRAIN_DELTA=0}
+            require('HybridAStar'); require('PathfinderContext')
+            PathfinderUtil.hasFruit=function() return false,0 end
+            u.settings=v:getCpSettings()
+            u.settings.avoidFruit={getValue=function() return true end}
+            g_time=100
+            local points={}
+            for z=-40,120,2 do table.insert(points,{x=0,z=z}) end
+            saved=Course(v,points,true)
+            u.connectorEntry={course=saved,context=PathfinderContext(v),node={},zOffset=0,
+                nextAttempt=g_time,index=1,candidates={15,25,35}}
+            pc={active=false,calls=0,reset=function() end,isActive=function(self) return self.active end,
+                registerListeners=function(self,owner,callback) self.owner=owner; self.callback=callback end,
+                findPathToWaypoint=function(self,ctx,c,ix,x,z,retries)
+                    self.calls=self.calls+1; self.kind='local'; self.ctx=ctx; self.ix=ix; self.active=true
+                    assert(c==saved and x==0 and z==0 and retries==0)
+                end,
+                findPathToNode=function(self,ctx,node,x,z,retries)
+                    self.calls=self.calls+1; self.kind='full'; self.active=true; assert(retries==0)
+                end}
+            u.pathfinderController=pc
+            function finishSearch(ok,course)
+                pc.active=false
+                pc.callback(pc.owner,pc,ok,course)
+            end
+            function drainValidation()
+                local n=0
+                while u.connectorEntry and u.connectorEntry.validation do
+                    u:updateHarvesterConnectorEntry(); n=n+1; assert(n<500)
+                end
+                return n
+            end
+        """)
+
+    def test_local_join_precedes_full_search_and_keeps_collision_defaults(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            u:updateHarvesterConnectorEntry()
+            assert(pc.calls==1 and pc.kind=='local' and pc.ix==15)
+            assert(pc.ctx._allowReverse==false and pc.ctx._mustBeAccurate)
+            assert(pc.ctx._maxIterations==3000 and pc.ctx._collisionMask~=0)
+            u:updateHarvesterConnectorEntry(); assert(pc.calls==1 and installed==0)
+        """)
+
+    def test_failed_entries_then_full_failure_hold_without_raw_fallback(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            for i=1,4 do
+                u:updateHarvesterConnectorEntry(); assert(pc.calls==i)
+                assert(pc.kind==(i==4 and 'full' or 'local'))
+                finishSearch(false,nil)
+                u:updateHarvesterConnectorEntry(); assert(pc.calls==i and installed==0)
+                g_time=g_time+1000
+            end
+            u:updateHarvesterConnectorEntry()
+            assert(u.connectorEntry.nextAttempt==g_time+5000 and installed==0)
+            g_time=g_time+4999; u:updateHarvesterConnectorEntry(); assert(pc.calls==4)
+            g_time=g_time+1; u:updateHarvesterConnectorEntry(); assert(pc.calls==5 and pc.kind=='local')
+        """)
+
+    def test_validated_entry_preserves_suffix_and_native_straight_entry(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            checks=0
+            PathfinderConstraints=function() return {isValidNode=function() checks=checks+1; return true end} end
+            u:updateHarvesterConnectorEntry()
+            local goal=PathfinderUtil.getWaypointAsState3D(saved:getWaypoint(pc.ix),0,0)
+            local path=PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(),State3D(14.7,40,math.pi/2),goal,9)
+            finishSearch(true,Course.createFromAnalyticPath(v,path,true))
+            assert(installed==0 and u.connectorEntry.validation)
+            local before=checks; u:updateHarvesterConnectorEntry(); assert(checks-before<=20)
+            assert(drainValidation()>1)
+            assertStarted(); assert(not u.connectorEntry)
+            assert(saved:getNumberOfWaypoints()==81)
+            local found=false
+            for _,wp in ipairs(u.course:getAllWaypoints()) do if wp.x==0 and wp.z==120 then found=true end end
+            assert(found and checks>40)
+        """)
+
+    def test_header_collision_rejects_local_entry_without_starting_or_immediate_callback_retry(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            PathfinderConstraints=function() return {isValidNode=function() return false end} end
+            u:updateHarvesterConnectorEntry()
+            local goal=PathfinderUtil.getWaypointAsState3D(saved:getWaypoint(pc.ix),0,0)
+            local path=PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(),State3D(14.7,40,math.pi/2),goal,9)
+            finishSearch(true,Course.createFromAnalyticPath(v,path,true))
+            assert(pc.calls==1)
+            drainValidation()
+            assert(installed==0 and not u.connectorEntry.validation and pc.calls==1)
+            g_time=g_time+1000; u:updateHarvesterConnectorEntry(); assert(pc.calls==2)
+        """)
+
+    def test_full_search_success_retains_native_startrowonly(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            u.connectorEntry.index=4
+            u:updateHarvesterConnectorEntry(); assert(pc.kind=='full')
+            finishSearch(true,route)
+            assertStarted(); assert(not u.connectorEntry)
+        """)
+
+    def test_recorded_opposite_heading_search_uses_native_header_collision_checks(self):
+        self.entry_fixture()
+        self.lua.execute((SOURCE/'tools/unloader-queue/connector-search-fixture.lua').read_text())
+        self.lua.execute("""
+            local G=CpUnloaderQueueGeometry
+            -- Stationary verge tractor/trailer: positions are representative,
+            -- not a complete replay of GIANTS physics or the map's scenery.
+            obstacles={G.rectangle({x=-451,z=-329.2,heading=0},{width=3,length=6},0),
+                G.rectangle({x=-451,z=-337,heading=0},{width=3,length=9},0)}
+            local frames=driveEntrySearch()
+            assertStarted(); assert(probeCount>20 and frames<120)
+            assert(saved:getNumberOfWaypoints()==12)
+        """)
+
+    def test_short_connector_schedules_a_real_join_instead_of_empty_retries(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            local original=RowStartOrFinishContext
+            RowStartOrFinishContext=function() return {getTurnEndNodeAndOffsets=function() return {},0 end} end
+            u.getFrontAndBackMarkers=function() return 4,-6 end
+            u.getWorkWidth=function() return 15.2 end
+            u.getTurnEndSideOffset=function() return 0 end
+            u.getTurnEndForwardOffset=function() return 0 end
+            u.getAllowReversePathfinding=function() return true end
+            local points={{x=0,z=0},{x=0,z=2},{x=0,z=4},{x=0,z=6}}
+            u.fieldWorkCourse=Course(v,points,true)
+            u.fieldWorkCourse.isOnConnectingPath=function(_,ix) return ix<4 end
+            local started=0
+            u.updateHarvesterConnectorEntry=function(self)
+                started=started+1
+                assert(#self.connectorEntry.candidates==1 and self.connectorEntry.candidates[1]==2)
+            end
+            u:startConnectingPath(0)
+            assert(started==1 and u.state==u.states.WAITING_FOR_PATHFINDER)
+            RowStartOrFinishContext=original
+        """)
+
+    def test_validator_uses_short_angle_across_zero(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            local c=Course(v,{{x=0,z=0},{x=1,z=0},{x=2,z=0}},true)
+            c:getWaypoint(1).angle=89
+            c:getWaypoint(2).angle=91
+            local count=0
+            local entry={joinContext=PathfinderContext(v),validation={course=c,validationEnd=2,ix=1,sample=0,
+                constraints={isValidNode=function(_,node)
+                    count=count+1
+                    assert(math.abs(math.atan2(math.sin(node.t),math.cos(node.t)))<math.rad(2))
+                    return true
+                end}}}
+            local done,path=u:advanceHarvesterConnectorValidation(entry)
+            assert(done and path==c and count<=5)
+        """)
+
+    def test_header_only_obstacle_is_rejected_by_real_native_detector_at_entry_start(self):
+        self.entry_fixture()
+        self.lua.execute((SOURCE/'tools/unloader-queue/connector-search-fixture.lua').read_text())
+        self.lua.execute("""
+            local node=v:getAIDirectionNode()
+            local ox,_,oz=localToWorld(node,7,0,0)
+            obstacles={CpUnloaderQueueGeometry.rectangle({x=ox,z=oz,heading=0},{width=1,length=1},0)}
+            local entry=u.connectorEntry
+            entry.joinIx=10; entry.joinContext=PathfinderContext(v)
+            local start=PathfinderUtil.getVehiclePositionAsState3D(v)
+            local goal=PathfinderUtil.getWaypointAsState3D(saved:getWaypoint(10),0,0)
+            local path=PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(),start,goal,4.7)
+            entry.validation=u:checkHarvesterConnectorEntry(Course.createFromAnalyticPath(v,path,true),entry)
+            assert(entry.validation)
+            local done,result=u:advanceHarvesterConnectorValidation(entry)
+            assert(done and not result and installed==0 and probeCount>0)
+        """)
+
+    def test_seam_is_checked_with_the_final_bending_suffix_heading(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            local seen={}
+            PathfinderConstraints=function() return {isValidNode=function(_,n)
+                seen[#seen+1]={x=n.x,y=n.y,t=n.t}; return true end} end
+            saved:getWaypoint(17).x=2
+            saved:enrichWaypointData()
+            u:updateHarvesterConnectorEntry()
+            local entry=u.connectorEntry
+            local goal=PathfinderUtil.getWaypointAsState3D(saved:getWaypoint(pc.ix),0,0)
+            local path=PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(),State3D(14.7,40,math.pi/2),goal,9)
+            finishSearch(true,Course.createFromAnalyticPath(v,path,true))
+            local validation=entry.validation
+            assert(validation)
+            local expected=PathfinderUtil.getWaypointAsState3D(validation.course:getWaypoint(validation.validationEnd),0,0)
+            drainValidation()
+            local last=seen[#seen]
+            assert(math.abs(math.atan2(math.sin(last.t-expected.t),math.cos(last.t-expected.t)))<.0001)
+            assert(math.abs(last.x-expected.x)<.0001 and math.abs(last.y-expected.y)<.0001)
+        """)
+
+    def test_local_entry_does_not_cut_crop_and_preserves_avoid_fruit_setting(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            PathfinderUtil.hasFruit=function() return true,100 end
+            local c=Course(v,{{x=0,z=0},{x=0,z=2}},true)
+            local ctx=PathfinderContext(v):ignoreFruit(false)
+            local checks=0
+            local function entry() return {joinContext=ctx,validation={course=c,validationEnd=2,ix=1,sample=0,
+                constraints={isValidNode=function() checks=checks+1; return true end}}} end
+            local done,result=u:advanceHarvesterConnectorValidation(entry())
+            assert(done and not result and checks==0)
+            ctx:ignoreFruit(true)
+            done,result=u:advanceHarvesterConnectorValidation(entry())
+            assert(done and result==c and checks>0)
+        """)
 
 
 if __name__=='__main__': unittest.main()

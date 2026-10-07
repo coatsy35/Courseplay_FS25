@@ -187,6 +187,9 @@ function AIDriveStrategyFieldWorkCourse:getDriveData(dt, vX, vY, vZ)
         self:setMaxSpeed(0)
     elseif self.state == self.states.WAITING_FOR_PATHFINDER then
         self:setMaxSpeed(0)
+        -- BEGIN authorised harvester connector entry
+        self:updateHarvesterConnectorEntry()
+        -- END authorised harvester connector entry
     elseif self.state == self.states.WORKING then
         self:setMaxSpeed(self.settings.fieldWorkSpeed:getValue())
     elseif self.state == self.states.TURNING then
@@ -655,6 +658,25 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
         else
             self.workStarterCourse = Course(self.vehicle, connectingPath, true)
         end
+        -- BEGIN authorised harvester connector entry
+        if self.vehicle.spec_combine and steeringLength == 0 and #connectingPath >= 2 then
+            self.connectorEntry = {course=self.workStarterCourse, context=context, node=targetNode,
+                zOffset=zOffset, nextAttempt=g_time, index=1, candidates={}}
+            local spacing = math.max(15, 3 * AIUtil.getTurningRadius(self.vehicle))
+            for distance = spacing, spacing * 3, spacing do
+                local candidate = math.min(self.workStarterCourse:getNumberOfWaypoints() - 1,
+                    self.workStarterCourse:getNextWaypointIxWithinDistance(1, distance))
+                if candidate < self.workStarterCourse:getNumberOfWaypoints() and
+                        candidate ~= self.connectorEntry.candidates[#self.connectorEntry.candidates] then
+                    table.insert(self.connectorEntry.candidates, candidate)
+                end
+            end
+            self.state = self.states.WAITING_FOR_PATHFINDER
+            self:startCourse(self.workStarterCourse, 1)
+            self:updateHarvesterConnectorEntry()
+            return
+        end
+        -- END authorised harvester connector entry
         self.pathfinderController:registerListeners(self, self.onPathfindingDoneToConnectingPathEnd,
                 self.onPathfindingFailedToConnectingPathEnd)
         self:debug('Connecting path has %d waypoints, start pathfinding to target waypoint %d, zOffset %.1f',
@@ -688,6 +710,118 @@ function AIDriveStrategyFieldWorkCourse:onPathfindingDoneToConnectingPathEnd(con
     end
 end
 
+-- BEGIN authorised harvester connector entry
+-- Join the first section from the actual pose before following the saved connector.
+-- Searches and validation are asynchronous; no unchecked lateral jump is a fallback.
+function AIDriveStrategyFieldWorkCourse:updateHarvesterConnectorEntry()
+    local entry = self.connectorEntry
+    if not entry then return end
+    if entry.validation then
+        local done, course = self:advanceHarvesterConnectorValidation(entry)
+        if done then
+            entry.validation = nil
+            if course then
+                self.connectorEntry = nil
+                self:debug('Checked local connector entry ready')
+                self:startCourseToWorkStart(course)
+            else
+                entry.nextAttempt = g_time + 1000
+            end
+        end
+        return
+    end
+    if not entry.nextAttempt or g_time < entry.nextAttempt or self.pathfinderController:isActive() then return end
+    entry.nextAttempt = nil
+    self.pathfinderController:reset()
+    local candidate = entry.candidates[entry.index]
+    entry.index = entry.index + 1
+    if candidate then
+        entry.joinIx = candidate
+        local context = PathfinderContext(self.vehicle):allowReverse(false):mustBeAccurate(true)
+            :ignoreFruit(not self.settings.avoidFruit:getValue()):maxIterations(3000)
+        entry.joinContext = context
+        self:debug('Checking local connector entry at waypoint %d', candidate)
+        self.pathfinderController:registerListeners(self, self.onHarvesterConnectorEntryDone)
+        self.pathfinderController:findPathToWaypoint(context, entry.course, candidate, 0, 0, 0)
+    elseif not entry.triedFullRoute then
+        entry.triedFullRoute = true
+        entry.joinIx = nil
+        self:debug('Local connector entries unavailable; searching full route')
+        self.pathfinderController:registerListeners(self, self.onHarvesterConnectorEntryDone)
+        self.pathfinderController:findPathToNode(entry.context, entry.node, 0, entry.zOffset, 0)
+    else
+        entry.index = 1
+        entry.nextAttempt = g_time + 5000
+        self:debug('No checked connector entry; holding and retrying local manoeuvres')
+    end
+end
+
+function AIDriveStrategyFieldWorkCourse:onHarvesterConnectorEntryDone(controller, success, course)
+    local entry = self.connectorEntry
+    if not entry then return end
+    if success and not entry.joinIx then
+        self.connectorEntry = nil
+        self:startCourseToWorkStart(course)
+    elseif success then
+        -- Do not start another search inside a completion callback: the native
+        -- controller resets itself after returning from this callback.
+        entry.validation = self:checkHarvesterConnectorEntry(course, entry)
+        if not entry.validation then entry.nextAttempt = g_time + 1000 end
+    else
+        entry.nextAttempt = g_time + 1000
+    end
+end
+
+function AIDriveStrategyFieldWorkCourse:checkHarvesterConnectorEntry(course, entry)
+    local radius = AIUtil.getTurningRadius(self.vehicle)
+    local goal = PathfinderUtil.getWaypointAsState3D(entry.course:getWaypoint(entry.joinIx), 0, 0)
+    -- Native accurate search has a positional tolerance. Replace its last short
+    -- section with an exact analytic finish; never bridge that gap unchecked.
+    local cut = math.max(1, course:getPreviousWaypointIxWithinDistance(course:getNumberOfWaypoints(), 2 * radius) or 1)
+    local start = PathfinderUtil.getWaypointAsState3D(course:getWaypoint(cut), 0, 0)
+    local tail, length = PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(), start, goal, radius)
+    if not tail or length > 6 * radius + 5 then return nil end
+    local finish = Course.createFromAnalyticPath(self.vehicle, tail, true)
+    local joined = finish
+    if cut > 1 then
+        joined = course:copy(self.vehicle, 1, cut - 1)
+        joined:append(finish)
+    end
+    joined:append(entry.course:copy(self.vehicle, entry.joinIx + 1, entry.joinIx + 1))
+    local validationEnd = joined:getNumberOfWaypoints()
+    if entry.joinIx + 2 <= entry.course:getNumberOfWaypoints() then
+        joined:append(entry.course:copy(self.vehicle, entry.joinIx + 2))
+    end
+    return {course=joined, validationEnd=validationEnd,
+        constraints=PathfinderConstraints(entry.joinContext), ix=1, sample=0}
+end
+
+function AIDriveStrategyFieldWorkCourse:advanceHarvesterConnectorValidation(entry)
+    local v = entry.validation
+    -- FS25 has no Lua coroutines. Limit native header/vehicle overlap checks per
+    -- update explicitly, including the manoeuvre start and the exact join seam.
+    for checked = 1, 20 do
+        if v.ix >= v.validationEnd then return true, v.course end
+        if not v.a then
+            v.a = PathfinderUtil.getWaypointAsState3D(v.course:getWaypoint(v.ix), 0, 0)
+            v.b = PathfinderUtil.getWaypointAsState3D(v.course:getWaypoint(v.ix + 1), 0, 0)
+            v.delta = math.atan2(math.sin(v.b.t-v.a.t), math.cos(v.b.t-v.a.t))
+            local distance = math.sqrt((v.b.x-v.a.x)^2 + (v.b.y-v.a.y)^2)
+            v.count = math.max(1, math.ceil(distance / 0.4), math.ceil(math.abs(v.delta) / math.rad(2)))
+        end
+        local f = v.sample / v.count
+        local node = State3D(v.a.x+(v.b.x-v.a.x)*f, v.a.y+(v.b.y-v.a.y)*f, v.a.t+v.delta*f)
+        -- A local shortcut must not introduce standing-crop travel. If it cannot
+        -- avoid fruit, leave that decision to native full-route search/penalties.
+        local fruit, amount = PathfinderUtil.hasFruit(node.x, -node.y, 3, 3, entry.joinContext._areaToIgnoreFruit)
+        if fruit and amount > entry.joinContext._maxFruitPercent then return true, nil end
+        if not v.constraints:isValidNode(node, false, true) then return true, nil end
+        v.sample = v.sample + 1
+        if v.sample > v.count then v.ix=v.ix+1; v.sample=0; v.a=nil end
+    end
+    return false, nil
+end
+-- END authorised harvester connector entry
 function AIDriveStrategyFieldWorkCourse:startCourseToWorkStart(course)
     self.workStarter = StartRowOnly(self.vehicle, self, self.ppc, self.turnContext, course)
     self.state = self.states.DRIVING_TO_WORK_START_WAYPOINT

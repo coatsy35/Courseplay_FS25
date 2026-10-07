@@ -12,6 +12,7 @@ MODULES = {f'scripts/ai/CpUnloaderQueue{s}.lua'
 INTEGRATION = {'modDesc.xml'}
 STEERING = 'scripts/ai/strategies/AIDriveStrategyCombineCourse.lua'
 TURNS = 'scripts/ai/turns/AITurn.lua'
+CONNECTORS = 'scripts/ai/strategies/AIDriveStrategyFieldWorkCourse.lua'
 
 
 def check_harvester_turns():
@@ -48,6 +49,19 @@ def check_steering():
         raise RuntimeError('Native combine strategy changed outside authorised steering addition')
 
 
+def check_connector_entry():
+    actual = (release.ROOT/CONNECTORS).read_text(encoding='utf-8')
+    expected = subprocess.check_output(['git', 'show', f'{release.BASE}:{CONNECTORS}'],
+                                       cwd=release.ROOT).decode().replace('\r\n', '\n')
+    pattern = r' *-- BEGIN authorised harvester connector entry\n.*? *-- END authorised harvester connector entry\n'
+    additions = re.findall(pattern, actual, re.S)
+    if len(additions) != 3 or hashlib.sha256(''.join(additions).encode()).hexdigest() != (
+            '303787a683a82e01ce4eef9085a6cec33cabbf92efc5717ee881cfac58f25d90'):
+        raise RuntimeError('Unreviewed harvester connector entry change')
+    if re.sub(pattern, '', actual, flags=re.S) != expected:
+        raise RuntimeError('Native fieldwork changed outside authorised connector entry')
+
+
 def canonical(element):
     return (element.tag, tuple(sorted(element.attrib.items())), (element.text or '').strip(),
             tuple(canonical(child) for child in element))
@@ -61,10 +75,11 @@ def check_queue(packager):
     current = {p for p in tracked if p and packager.is_runtime_file(p)}
     if current != native | MODULES:
         raise RuntimeError('Unexpected runtime inventory change')
-    subprocess.run(['git', 'diff', '--exit-code', release.BASE, '--', *sorted(native-INTEGRATION-{STEERING,TURNS})],
+    subprocess.run(['git', 'diff', '--exit-code', release.BASE, '--', *sorted(native-INTEGRATION-{STEERING,TURNS,CONNECTORS})],
                    cwd=release.ROOT, check=True)
     check_steering()
     check_harvester_turns()
+    check_connector_entry()
     for path in INTEGRATION:
         expected = ET.fromstring(subprocess.check_output(['git', 'show', f'{release.BASE}:{path}'], cwd=release.ROOT))
         actual = ET.parse(release.ROOT/path).getroot()
@@ -85,7 +100,7 @@ def check_queue(packager):
         'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine')} | {('C', 'findUnloader')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
-    print('PASS: native connector handling restored; runtime matches pinned main apart from reviewed steering/corridor corrections and queue hooks; settings qualified', flush=True)
+    print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)
 
 
 if __name__ == '__main__':
