@@ -231,13 +231,40 @@ local function wholeTrain(saved,model,poses)
     return true
 end
 
-local function exitCorridor(driver,saved)
+local function exitCorridor(driver,saved,model)
+    -- Row-start waypoints stop short of the headland centreline. Join the two
+    -- guide bands explicitly; otherwise a narrow work width leaves an impassable
+    -- gap even on harvested ground. Live crop and collision checks still apply.
+    local joins={}
+    local start=saved.row[1]
+    if start then
+        for _,band in ipairs(saved.headlands) do
+            local join=project(band,start)
+            if join and join.distance<=2*saved.width then
+                joins[#joins+1]={start,along(band,join.s,1)}
+            end
+        end
+    end
+    -- Native reverse/traffic clearance can leave the rig outside the saved
+    -- combine-centred band. Admit a local re-entry from its actual position,
+    -- frozen for this search, rather than rejecting every retry at its start.
+    local origin=W.pose(driver.vehicle:getAIDirectionNode())
+    local reach=2*driver.turningRadius
+    for i,pose in ipairs(W.poses(model)) do
+        for _,p in ipairs(W.rectangle(model.bodies[i],pose)) do reach=math.max(reach,distance(origin,p)+0.5) end
+    end
+    local row=project(saved.row,origin)
+    local rejoin=row and row.distance<=reach+saved.width and along(saved.row,row.s,1)
     return function(rectangle)
         for _,p in ipairs(rectangle) do
             local allowed=onHeadland(saved,p)
             for i=2,#saved.row do
                 if nearSegment(p,saved.row[i-1],saved.row[i],saved.width) then allowed=true; break end
             end
+            for _,join in ipairs(joins) do
+                if nearSegment(p,join[1],join[2],saved.width) then allowed=true; break end
+            end
+            if rejoin and nearSegment(p,origin,rejoin,reach) then allowed=true end
             if distance(p,saved.position)<2*driver.turningRadius then allowed=true end
             if not allowed then return false end
         end
@@ -257,7 +284,7 @@ function Q.exitTarget(driver)
     for _,link in ipairs(model.links) do runIn=runIn+link.length end
     runIn=math.max(10,3*runIn)
     local legLength=math.max(50,runIn+driver.turningRadius)
-    local corridor=exitCorridor(driver,saved)
+    local corridor=exitCorridor(driver,saved,model)
     local headland=wholeTrain(saved,model,W.poses(model))
     local accept=function(poses,m) return wholeTrain(saved,m,poses) end
     local function available(goal,onHeadlandRequired)
@@ -269,11 +296,20 @@ function Q.exitTarget(driver)
     if not headland then
         -- Return down the row in short legs before selecting a perimeter exit.
         local row=project(saved.row,here)
-        if row and row.s>50 then
+        local nearestHeadland
+        for _,band in ipairs(saved.headlands) do
+            local join=project(band,saved.row[1] or here)
+            if join and (not nearestHeadland or join.distance<nearestHeadland) then nearestHeadland=join.distance end
+        end
+        -- A 50 m row leg is not permission to start a diagonal turn 50 m
+        -- before the headland. First reach a fixed approach on the saved row,
+        -- with the tractor's turning arc and front overhang near the join.
+        local approach=math.max(0,driver.turningRadius+math.max(0,model.bodies[1].front)+0.3-(nearestHeadland or 0))
+        if row and row.s>approach+1.5 then
             for _,length in ipairs({50,35,65}) do
-                local goal=along(saved.row,math.max(0,row.s-length),-1)
+                local goal=along(saved.row,math.max(approach,row.s-length),-1)
                 if available(goal,false) then
-                    goal.exitIntermediate=true; goal.exitStage='row return'
+                    goal.exitIntermediate=true; goal.exitStage=row.s>50 and 'row return' or 'row approach'
                     return goal,corridor
                 end
             end
@@ -282,6 +318,7 @@ function Q.exitTarget(driver)
         -- Turn onto a headland tangent with room for the tail. Do not demand
         -- the road's outgoing heading while the trailer is still in the row.
         local best,score
+        local entries={}
         local start=saved.row[1] or here
         for _,band in ipairs(saved.headlands) do
             local join,total=project(band,start)
@@ -294,11 +331,22 @@ function Q.exitTarget(driver)
                         if length>=runIn and s>=0 and s<=total then
                             local goal=along(band,s,direction)
                             local cost=distance(here,goal)+join.distance
-                            if available(goal,true) and (not score or cost<score) then best,score=goal,cost end
+                            if available(goal,true) then
+                                entries[#entries+1]={goal=goal,cost=cost}
+                                if not score or cost<score then best,score=goal,cost end
+                            end
                         end
                     end
                 end
             end
+        end
+        table.sort(entries,function(a,b) return a.cost<b.cost end)
+        -- Prefer entering the lane/direction that already connects to AD. The
+        -- nearest inner headland can otherwise leave the rig facing a needless
+        -- lane-change loop after it has completed the turn out of the row.
+        for i,entry in ipairs(entries) do
+            if i>8 then break end
+            if Q.connectedNode(driver,entry.goal,saved,20) then best=entry.goal; break end
         end
         if best then best.exitIntermediate=true; best.exitStage='headland entry'; return best,corridor end
         Q.reason(data,'no whole-train headland entry available'); return
@@ -429,6 +477,7 @@ end
 function Q.finishExit(driver)
     local ok,reason=Q.canFinishExit(driver)
     if ok then
+        driver:debug('Queue: validated headland departure; invoking native full-trailer handover')
         Q.data(driver).handover=true
         driver:onTrailerFull()
     else

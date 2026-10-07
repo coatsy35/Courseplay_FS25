@@ -1,5 +1,6 @@
 """Row -> headland -> AD journeys using the production articulated route code."""
 import sys
+import json
 import unittest
 from pathlib import Path
 
@@ -102,6 +103,166 @@ class ExitJourneyTests(unittest.TestCase):
             assert(handedOver==1 and stages['row return'] and stages['headland entry'] and stages['AD approach'])
         ''')
 
+    def test_narrow_work_width_keeps_row_join_connected_and_completes_handover(self):
+        self.lua.execute('''
+            data.departure.width=15.2
+            place(0,70,math.pi)
+            local stages={}
+            for leg=1,12 do
+                local goal,corridor=Q.exitTarget(u); assert(goal,data.reason)
+                stages[goal.exitStage]=true
+                for z=0,25 do assert(corridor({{x=0,z=z}}), 'gap between row and headland') end
+                driveLeg(goal,corridor)
+                if not goal.exitIntermediate then Q.finishExit(u); break end
+                assert(handedOver==0)
+            end
+            assert(handedOver==1 and stages['row approach'] and stages['headland entry'])
+        ''')
+
+    def test_complete_exit_invokes_native_full_job_handover_through_queue_hook(self):
+        self.lua.execute((ROOT/'scripts/CpObject.lua').read_text())
+        self.lua.execute('AIDriveStrategyCourse={}; AIDriveStrategyFieldWorkCourse={}')
+        for name in ('AIDriveStrategyUnloadCombine','AIDriveStrategyCombineCourse'):
+            self.lua.execute((ROOT/f'scripts/ai/strategies/{name}.lua').read_text())
+        self.lua.execute((ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text())
+        self.lua.execute('''
+            local fullMessage={}
+            AIMessageErrorIsFull={new=function() return fullMessage end}
+            v.stopCurrentAIJob=function(_,message)
+                assert(message==fullMessage and Q.canFinishExit(u))
+                handedOver=handedOver+1
+            end
+            u.onTrailerFull=AIDriveStrategyUnloadCombine.onTrailerFull
+            data.departure.width=15.2
+            place(0,70,math.pi)
+            for leg=1,12 do
+                local goal,corridor=Q.exitTarget(u); assert(goal,data.reason)
+                driveLeg(goal,corridor)
+                if not goal.exitIntermediate then Q.finishExit(u); break end
+                assert(handedOver==0)
+            end
+            assert(handedOver==1 and data.handover)
+        ''')
+
+    def test_traffic_clearance_rejoins_row_from_actual_rig_without_crop_waiver(self):
+        self.lua.execute('''
+            data.departure.width=15.2
+            place(22,175,math.pi)
+            -- An already harvested adjacent strip is available after native backup.
+            W.cropFree=function(_,rectangle)
+                for _,p in ipairs(rectangle) do
+                    if math.abs(p.x)>35 or p.z<0 or p.z>280 then return false end
+                end
+                return true
+            end
+            local goal,corridor=Q.exitTarget(u)
+            local world=assert(W.new(u))
+            assert(W.clear(world,W.poses(world.model),corridor))
+            assert(not corridor({{x=70,z=175}}), 'local re-entry must not allow a field shortcut')
+            driveLeg(goal,corridor)
+            assert(math.abs(v.rootNode.x)<1.5 and v.rootNode.z<140 and handedOver==0)
+            place(22,175,math.pi)
+            goal,corridor=Q.exitTarget(u)
+            W.cropFree=function() return false end
+            Q.request(u,goal,corridor)
+            assert(not data.search and data.reason=='start: standing crop')
+            W.cropFree=function() return true end; collision=1
+            Q.request(u,goal,corridor)
+            assert(not data.search and data.reason=='start: vehicle or obstacle')
+        ''')
+
+    def test_actual_two_harvester_headlands_use_row_approach_before_turning(self):
+        geometry=json.loads((SOURCE/'tools/unloader-queue/fixtures/two-harvester-headlands.json').read_text())
+        self.lua.globals().realbands=self.lua.table_from([
+            self.lua.table_from([self.lua.table_from(dict(x=x,z=z)) for x,z in band])
+            for band in geometry['bands']])
+        self.lua.execute('''
+            v.cpGetFieldPolygon=function()
+                return {{x=-1000,z=-2000},{x=1000,z=-2000},{x=1000,z=1000},{x=-1000,z=1000}}
+            end
+            -- Isolate the actual course corridor; separate tests enforce crop/obstacles.
+            W.cropFree=function() return true end
+            u.turningRadius=9
+            place(-92.4,-935.9,math.rad(171))
+            data.departure={width=15.2,headlands=realbands,
+                row={{x=-85.58,z=-979.08},{x=-180.7,z=-378.6}},position={x=-180.7,z=-378.6}}
+            local approach,corridor=Q.exitTarget(u)
+            assert(approach.exitStage=='row approach')
+            driveLeg(approach,corridor)
+            local goal,corridor=Q.exitTarget(u)
+            assert(goal.exitStage=='headland entry')
+            assert(math.abs(goal.x+38.3099)<0.1 and math.abs(goal.z+971.9073)<0.1)
+            -- Both stages must succeed as direct checked routes, avoiding the
+            -- former repeated exhaustive searches of a diagonal entry.
+            Q.request(u,goal,corridor); assert(data.search,data.reason)
+            data.search.directOnly=true
+            local done,path,reason
+            for i=1,3000 do done,path,reason=S.step(data.search,1); if done then break end end
+            assert(done and path,reason or 'entry used exhaustive search')
+            local poses=W.poses(data.world.model)
+            for i=2,#path do poses=H.advance(data.world.model,poses,path[i]) end
+            assert(goal.accept(poses,data.world.model) and handedOver==0)
+        ''')
+
+    def test_saved_field_and_ad_network_complete_onward_handover(self):
+        geometry=json.loads((SOURCE/'tools/unloader-queue/fixtures/two-harvester-headlands.json').read_text())
+        network=json.loads((SOURCE/'tools/unloader-queue/fixtures/two-harvester-ad-connections.json').read_text())
+        self.lua.globals().fieldEdge=self.lua.table_from([
+            self.lua.table_from(dict(x=x,z=z)) for x,z in geometry['fieldBoundaryEstimate']])
+        self.lua.globals().realbands=self.lua.table_from([
+            self.lua.table_from([self.lua.table_from(dict(x=x,z=z)) for x,z in band])
+            for band in geometry['bands']])
+        self.lua.globals().adnodes=self.lua.table_from({n['id']:self.lua.table_from(
+            dict(n,out=self.lua.table_from(n['out']))) for n in network['nodes']})
+        self.lua.globals().adpaths=self.lua.table_from({r['startId']:self.lua.table_from(
+            r['nodeIds'][1:]) for r in network['routes']})
+        self.lua.execute('''
+            v.cpGetFieldPolygon=function() return fieldEdge end
+            -- Recorded route geometry; live crop, scenery and GIANTS driving
+            -- remain external boundaries. Other tests exercise their rejection.
+            W.cropFree=function() return true end
+            FS25_AutoDrive.ADGraphManager={
+                getWayPointById=function(_,id) return adnodes[id] end,
+                getWayPointsInRange=function(_,p,minimum,maximum)
+                    local ids={}
+                    for id,n in pairs(adnodes) do
+                        local d=math.sqrt((p.x-n.x)^2+(p.z-n.z)^2)
+                        if d>minimum and d<maximum then ids[#ids+1]=id end
+                    end
+                    return ids
+                end,
+                pathFromTo=function(_,start,finish)
+                    assert(finish==10675)
+                    local path={}
+                    for _,id in ipairs(adpaths[start] or {}) do path[#path+1]=adnodes[id] end
+                    return path
+                end}
+            v.ad.stateModule.getSecondWayPoint=function() return 10675 end
+            u.turningRadius=9
+            Q.refresh=function() end; Q.schedule=function() end
+            u.states={IDLE={}}
+            local cases={
+                {x=-92.4,z=-935.9,t=171,row={{x=-85.58,z=-979.08},{x=-180.7,z=-378.6}}},
+                {x=-137.2,z=-264.5,t=351,row={{x=-144.34,z=-219.45},{x=-99.6,z=-502}}}
+            }
+            for _,case in ipairs(cases) do
+                place(case.x,case.z,math.rad(case.t))
+                data=Q.take(u,'exit'); handedOver=0
+                data.departure={width=15.2,headlands=realbands,row=case.row,position=case.row[2]}
+                local stages={}
+                for leg=1,12 do
+                    data.nextAttempt=0; Q.tick(u)
+                    if handedOver>0 then break end
+                    local goal,corridor=data.goal,data.corridor
+                    assert(goal and data.search,data.reason)
+                    stages[goal.exitStage]=true
+                    driveLeg(goal,corridor)
+                    assert(handedOver==0)
+                end
+                assert(handedOver==1 and stages['row approach'] and stages['headland entry'],data.reason)
+            end
+        ''')
+
     def test_row_target_is_local_and_points_back_to_headland(self):
         self.lua.execute('''
             place(0,240,0)
@@ -180,7 +341,7 @@ class ExitJourneyTests(unittest.TestCase):
 
     def test_short_headland_band_has_valid_entry_and_handover(self):
         self.lua.execute('''
-            place(0,40,math.pi)
+            place(0,25,math.pi)
             data.departure.headlands={{{x=-40,z=0},{x=40,z=0}}}
             nodes[1].x=35; nodes[2].x=45; nodes[3].x=55
             local goal,corridor=Q.exitTarget(u)
@@ -221,7 +382,7 @@ class ExitJourneyTests(unittest.TestCase):
 
     def test_headland_entry_does_not_require_outgoing_road_heading(self):
         self.lua.execute('''
-            place(0,40,math.pi)
+            place(0,25,math.pi)
             nodes[2].x=80; nodes[2].z=-20
             local goal=assert(Q.exitTarget(u))
             assert(goal.exitStage=='headland entry' and math.abs(math.sin(goal.t))>0.99)
@@ -231,7 +392,7 @@ class ExitJourneyTests(unittest.TestCase):
 
     def test_blocked_and_reserved_headland_entries_are_not_repeated(self):
         self.lua.execute('''
-            place(0,40,math.pi)
+            place(0,25,math.pi)
             local first=assert(Q.exitTarget(u)); data.goal=first
             Q.failed(data,'destination: standing crop','destination')
             local second=assert(Q.exitTarget(u))

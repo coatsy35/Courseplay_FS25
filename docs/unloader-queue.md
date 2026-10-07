@@ -569,6 +569,56 @@ another combine must block the headland. Candidate collision records do not
 prove the suggested alternative headland routes were blocked, and the log does
 not establish that this crop crossing was necessary.
 
+### Build 3008: complete row departure before attempting the headland turn
+
+The current 7 October log still loads build 3006. At 18:34 all four full
+trailers remain in QUEUE_EXIT, with no completed handover: /324 retries row
+return after native traffic backup displaced it outside the saved corridor;
+/323 also fails row return; /325 and /322 reached headland entry but repeatedly
+exhausted searches there. CR11/319 waits for an available unloader and /318 is
+held by native convoy spacing, 41.2 m behind against its 75 m requirement.
+Build 3007's preparation fixes did not address these departure failures.
+
+The exit planner switched from row return to a headland turn with up to 50 m
+of the row still ahead. With the actual saved 15.2 m course and both headland
+bands, the /325 target (-38.31, -971.91, heading 75.66 degrees) reproduces a
+direct route that turns diagonally out of the permitted corridor. Moving
+straight closer to the headland first produces a valid direct route. A new
+row-approach stage places that turn using the headland distance, tractor turn
+radius and front overhang, instead of treating the 50 m leg length as an entry
+threshold. CP's combine routes and unloading controller remain unchanged.
+
+The departure corridor also admits a bounded re-entry from the actual rig
+after native reverse/traffic clearance, provided it is still near its saved
+row. It is frozen for each search and checked with the same live crop,
+field-boundary, island, obstacle and articulated-body checks. Explicit links
+between row-start and headland bands close a separate narrow-width gap found
+in the generic regression; the actual two-band save does not have that gap.
+No crop or vehicle checks are waived and no midfield AD handover is enabled.
+
+Tests now include the recorded headland coordinates, the actual 9 m tractor
+turn-radius setting, a 15.2 m complete departure, traffic-clearance re-entry,
+crop/obstacle rejection, and a complete journey through the real queue hook
+to native onTrailerFull/stopCurrentAIJob. The saved AD graph has directed
+connections to the configured Old Mill Grain destination; its API and marker
+configuration are compatible. Reaching a headland entry still requires onward
+transit and heading alignment before handover, particularly where the closest
+AD node is outside 20 m or points the opposite way. Completion now logs the
+validated native handover explicitly. Headland entry now prefers a nearby
+connected lane/direction among eight geometrically suitable entry candidates.
+Once the actual rig passes the existing complete handover gate, Q.tick invokes
+native handover before requesting another parking pose.
+
+The complete tick-driven regression includes both ends of this saved field,
+recorded headland and AD network coordinates, and verified directed paths to
+the saved delivery waypoint. Its field edge is explicitly an estimate from
+the outer headland, and AD route results are derived from the saved directed
+graph; they are not a live AD simulation. Separate tests enforce crop and
+obstacle rejection and exercise the native full-job hook. Engine queries and
+driving physics remain mocked; the four-trailer FS25 departure still needs
+in-game validation. The route-search algorithm, its shared CPU allowance, AD
+code and native combine behaviour are unchanged by this build.
+
 ## Packaging
 
 Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and

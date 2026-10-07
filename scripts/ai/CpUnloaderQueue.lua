@@ -508,6 +508,10 @@ function Q.tick(driver)
             Q.release(driver); driver:startUnloadingTrailers(); return
         end
         if not data.search and not data.path and now()>=data.nextAttempt then
+            -- A validated connection may differ from the first candidate. Once
+            -- there, use the actual full-train handover gate before planning
+            -- another parking pose and inadvertently driving past the exit.
+            if data.operation=='exit' and Q.canFinishExit(driver) then Q.finishExit(driver); return end
             local goal,corridor
             if data.operation=='exit' then goal,corridor=Q.exitTarget(driver)
             elseif data.operation=='yield' then goal=Q.yieldTarget(driver)
