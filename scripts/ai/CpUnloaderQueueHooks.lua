@@ -18,18 +18,31 @@ end
 
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
+    if Q.enabled(self) and Q.atDepartureThreshold(self) then return false end
     if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' end
     return allowed(self)
 end
 
 local call = U.call
 function U:call(combine,waypoint)
+    if Q.enabled(self) and Q.atDepartureThreshold(self) then return false end
     if Q.enabled(self) and Q.owns(self) then
         if self.queueData.operation~='prepare' then return false end
         Q.release(self)
     end
     if Q.enabled(self) and self.queueData then self.queueData.departure=nil end
     return call(self,combine,waypoint)
+end
+
+-- The configured emptying percentage is a departure threshold, including
+-- during transfer. Native fullness handling still releases the harvester and
+-- performs its reverse-clearance manoeuvre before our row/headland departure.
+local fullTrailers = U.getAllTrailersFull
+function U:getAllTrailersFull(threshold)
+    if threshold==nil and Q.enabled(self) and self.settings and self.settings.fullThreshold then
+        threshold=self.settings.fullThreshold:getValue()
+    end
+    return fullTrailers(self,threshold)
 end
 
 local find = C.findUnloader

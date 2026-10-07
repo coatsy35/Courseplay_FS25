@@ -47,10 +47,11 @@ local function wholeHeadland(saved,rectangle)
 end
 
 local function connectionSite(driver,saved,node)
-    if onHeadland(saved,node) then return {x=node.x,z=node.z} end
     -- A perimeter connection may sit just outside the field. Interior nodes
     -- away from the headland never qualify, however close they are to a tractor.
-    if G.inside(driver.vehicle:cpGetFieldPolygon(),node) then return end
+    if not onHeadland(saved,node) and G.inside(driver.vehicle:cpGetFieldPolygon(),node) then return end
+    -- Stage on the harvested lane centre, not on an AD node at its crop edge.
+    -- The whole rig must fit here; the road node need only be within range.
     local best,nearest
     for _,band in ipairs(saved.headlands) do
         for i=2,#band do
@@ -306,12 +307,21 @@ function Q.exitTarget(driver)
         -- with the tractor's turning arc and front overhang near the join.
         local approach=math.max(0,driver.turningRadius+math.max(0,model.bodies[1].front)+0.3-(nearestHeadland or 0))
         if row and row.s>approach+1.5 then
+            local choices={}
             for _,length in ipairs({50,35,65}) do
                 local goal=along(saved.row,math.max(approach,row.s-length),-1)
                 if available(goal,false) then
                     goal.exitIntermediate=true; goal.exitStage=row.s>50 and 'row return' or 'row approach'
-                    return goal,corridor
+                    choices[#choices+1]=goal
                 end
+            end
+            if #choices>0 then
+                -- Try the simple route to each local row target before an
+                -- obstacle search for any single target. A failed first arc
+                -- must not hide an immediately usable shorter/longer leg.
+                local first=choices[1]
+                return {x=first.x,z=first.z,t=first.t,choices=choices,
+                    exitIntermediate=true,exitStage=first.exitStage},corridor
             end
             Q.reason(data,'row return targets occupied or temporarily rejected'); return
         end
@@ -391,6 +401,8 @@ function Q.exitTarget(driver)
 end
 
 function Q.connectedNode(driver,position,saved,range,selectStage)
+    local data=driver.queueData
+    if selectStage then data.exitConnectionPending=nil end
     local ad=FS25_AutoDrive
     local graph=ad and ad.ADGraphManager
     local state=driver.vehicle.ad and driver.vehicle.ad.stateModule
@@ -400,20 +412,39 @@ function Q.connectedNode(driver,position,saved,range,selectStage)
     local destination=state:getSecondWayPoint()
     if not destination or not graph:getWayPointById(destination) then return nil,'AD delivery destination unavailable' end
     -- AD's lower bound is exclusive; include a node directly under the tractor.
-    local nodes=graph:getWayPointsInRange(position,-0.01,range or 20)
-    local candidates={}
-    for _,node in pairs(nodes or {}) do
-        if type(node)=='number' then node=graph:getWayPointById(node) end
-        local site=node and saved and connectionSite(driver,saved,node)
-        local banned=node and driver.queueData and driver.queueData.failedConnections
-            and (driver.queueData.failedConnections[node.id] or 0)>g_currentMission.time
-        if site and not banned and (selectStage or Q.targetAvailable(driver,site)) then
-            candidates[#candidates+1]={node=node,site=site}
+    local scan=selectStage and data.exitConnectionScan
+    if scan and (scan.graph~=graph or scan.saved~=saved or scan.destination~=destination
+            or distance(scan.position,position)>1 or scan.range~=range) then scan=nil end
+    local candidates=scan and scan.candidates
+    if not candidates then
+        local nodes=graph:getWayPointsInRange(position,-0.01,range or 20)
+        candidates={}
+        for _,node in pairs(nodes or {}) do
+            if type(node)=='number' then node=graph:getWayPointById(node) end
+            local site=node and saved and connectionSite(driver,saved,node)
+            local banned=node and driver.queueData and driver.queueData.failedConnections
+                and (driver.queueData.failedConnections[node.id] or 0)>g_currentMission.time
+            if site and (selectStage or (not banned and Q.targetAvailable(driver,site))) then
+                candidates[#candidates+1]={node=node,site=site}
+            end
         end
+        table.sort(candidates,function(a,b) return distance(a.site,position)<distance(b.site,position) end)
     end
-    table.sort(candidates,function(a,b) return distance(a.site,position)<distance(b.site,position) end)
-    for i,candidate in ipairs(candidates) do
-        if i>16 then break end
+    if selectStage and not scan then
+        scan={graph=graph,saved=saved,destination=destination,range=range,
+            position={x=position.x,z=position.z},candidates=candidates,index=1}
+        data.exitConnectionScan=scan
+    end
+    -- Continue beyond rejected nearby nodes instead of retrying the same first
+    -- sixteen forever. Bound each batch; retain all live staging/safety gates.
+    local firstIndex=scan and scan.index or 1
+    local timer=scan and openIntervalTimer()
+    local function finish() if timer then closeIntervalTimer(timer) end end
+    for i=firstIndex,#candidates do
+        local candidate=candidates[i]
+        if scan then scan.index=i+1 end
+        local banned=data and data.failedConnections and (data.failedConnections[candidate.node.id] or 0)>g_currentMission.time
+        if not banned then
             local node=candidate.node
             local path=graph:pathFromTo(node.id,destination)
             -- AD 3.0.1.2 omits the start node from non-trivial paths. Validate
@@ -431,10 +462,20 @@ function Q.connectedNode(driver,position,saved,range,selectStage)
                 local heading=math.atan2(path[first].x-node.x,path[first].z-node.z)
                 if valid and (not position.t or math.abs(H.math.delta(position.t,heading))<math.rad(15))
                         and (not selectStage or selectStage(node,heading,candidate.site)) then
+                    if scan then data.exitConnectionScan=nil end
+                    finish()
                     return node,heading,candidate.site
                 end
             end
+        end
+        if scan and i<#candidates and (i-firstIndex>=7 or readIntervalTimerMs(timer)>=2) then
+            data.exitConnectionPending=true
+            finish()
+            return nil,'checking further connected headland exits'
+        end
     end
+    if scan then data.exitConnectionScan=nil end
+    finish()
     return nil,'no connected AD route at the headland'
 end
 
@@ -453,16 +494,17 @@ function Q.canFinishExit(driver)
     local here=W.pose(driver.vehicle:getAIDirectionNode())
     local node,why=Q.connectedNode(driver,here,data.departure,20)
     if node then
-        -- Conservative swept boxes cover the short connection and turning room.
+        -- Swept boxes cover the short connection with the actual body widths.
         -- They are validation only: CP stops on the headland, then native AD owns
-        -- the journey. No AD task is created or modified here.
+        -- steering and the journey. A blanket turning-radius margin would reject
+        -- ordinary narrow headlands despite a clear connection. No AD task is
+        -- created or modified here; these boxes do not predict AD's manoeuvre.
         local dx,dz=node.x-here.x,node.z-here.z
         for _,item in ipairs(bodies) do
             local x=dx*math.cos(item.pose.t)-dz*math.sin(item.pose.t)
             local z=dx*math.sin(item.pose.t)+dz*math.cos(item.pose.t)
-            local margin=distance(here,node)>3 and driver.turningRadius or 0
-            local body={left=item.body.left+math.max(0,x)+margin,right=item.body.right+math.min(0,x)-margin,
-                front=item.body.front+math.max(0,z)+margin,back=item.body.back+math.min(0,z)-margin}
+            local body={left=item.body.left+math.max(0,x),right=item.body.right+math.min(0,x),
+                front=item.body.front+math.max(0,z),back=item.body.back+math.min(0,z)}
             if not W.bodyClear(world,body,item.pose,nil,true) then
                 data.failedConnections=data.failedConnections or {}
                 data.failedConnections[node.id]=g_currentMission.time+15000

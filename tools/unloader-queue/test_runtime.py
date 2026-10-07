@@ -243,7 +243,8 @@ class HarvesterSnapshotTests(unittest.TestCase):
                 trailerNodes={{trailer=trailer,fillUnitIx=1}},
                 settings={fullThreshold={getValue=function() return 85 end}},
                 isServingPosition=function() return true end,
-                getDistanceAndEteToVehicle=function() return 50,10 end}
+                getDistanceAndEteToVehicle=function() return 50,10 end,
+                getAllTrailersFull=function(_,threshold) return free<=0 or 100*contents/32000>=threshold end}
             u.state=u.states.IDLE
             CpUnloaderQueueWorld.pose=function() return {x=0,z=0,t=0} end
             AIDriveStrategyCombineCourse={isActiveCpCombine=function() return true end}
@@ -323,6 +324,9 @@ class EngineBoundaryTests(unittest.TestCase):
         self.lua.execute('''
             g_currentMission.time=0
             g_currentMission.vehicleSystem={vehicles={}}
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 0 end
+            closeIntervalTimer=function() end
             getRootNode=function() return 0 end
             CpUtil.getDefaultCollisionFlags=function() return 255 end
             densityCount=0; densityTotal=100; cutCount=0; queryCount=0

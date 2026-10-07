@@ -97,7 +97,7 @@ def check_queue(packager):
     methods = set(re.findall(r'function ([UC]):([A-Za-z]+)\(', hooks))
     expected = {('U', name) for name in ('update', 'getDriveData', 'isAllowedToBeCalled', 'call',
         'releaseCombine', 'startUnloadingTrailers', 'onTrailerFull', 'onLastWaypointPassed',
-        'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine')} | {('C', 'findUnloader')}
+        'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine', 'getAllTrailersFull')} | {('C', 'findUnloader')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
     print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)
@@ -110,5 +110,6 @@ if __name__ == '__main__':
                   suites=SUITES+('unloader-queue/test_runtime.py', 'unloader-queue/test_lookahead.py',
                                 'unloader-queue/test_harvester_turns.py',
                                 'unloader-queue/test_native_connectors.py',
-                                'unloader-queue/test_exit_stages.py', 'unloader-queue/test_yield.py'),
+                                'unloader-queue/test_exit_stages.py', 'unloader-queue/test_yield.py',
+                                'unloader-queue/test_departure_threshold.py'),
                   stage='queue-operational-candidate-requires-in-game-validation')

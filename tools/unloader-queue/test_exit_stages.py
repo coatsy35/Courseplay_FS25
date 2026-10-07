@@ -1,6 +1,8 @@
 """Row -> headland -> AD journeys using the production articulated route code."""
 import sys
 import json
+import heapq
+import math
 import unittest
 from pathlib import Path
 
@@ -16,6 +18,9 @@ class ExitJourneyTests(unittest.TestCase):
         runtime.EngineBoundaryTests.setUp(self)
         self.lua.execute('''
             Q=CpUnloaderQueue; W=CpUnloaderQueueWorld; S=CpUnloaderQueueSearch; H=HeadlandLoopGeometry
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 0 end
+            closeIntervalTimer=function() end
             v.cpGetFieldPolygon=function()
                 return {{x=-120,z=-40},{x=120,z=-40},{x=120,z=350},{x=-120,z=350}}
             end
@@ -214,8 +219,32 @@ class ExitJourneyTests(unittest.TestCase):
             for band in geometry['bands']])
         self.lua.globals().adnodes=self.lua.table_from({n['id']:self.lua.table_from(
             dict(n,out=self.lua.table_from(n['out']))) for n in network['nodes']})
-        self.lua.globals().adpaths=self.lua.table_from({r['startId']:self.lua.table_from(
-            r['nodeIds'][1:]) for r in network['routes']})
+        # Route every retained node, not only the two older entry neighbourhoods.
+        # This is a directed-distance graph adapter, not AutoDrive turn policy.
+        by_id={node['id']:node for node in network['nodes']}
+        incoming={node_id:[] for node_id in by_id}
+        for node in by_id.values():
+            for other in node['out']:
+                if other in by_id:
+                    incoming[other].append((node['id'],math.hypot(
+                        node['x']-by_id[other]['x'],node['z']-by_id[other]['z'])))
+        destination=network['destination']['waypointId']
+        costs={destination:0}; next_hop={}; pending=[(0,destination)]
+        while pending:
+            cost,node_id=heapq.heappop(pending)
+            if cost!=costs[node_id]: continue
+            for previous,length in incoming[node_id]:
+                candidate=cost+length
+                if candidate<costs.get(previous,float('inf')):
+                    costs[previous]=candidate; next_hop[previous]=node_id
+                    heapq.heappush(pending,(candidate,previous))
+        routes={}
+        for start in by_id:
+            route=[]; node_id=start
+            while node_id in next_hop:
+                node_id=next_hop[node_id]; route.append(node_id)
+            if node_id==destination: routes[start]=self.lua.table_from(route)
+        self.lua.globals().adpaths=self.lua.table_from(routes)
         self.lua.execute('''
             v.cpGetFieldPolygon=function() return fieldEdge end
             -- Recorded route geometry; live crop, scenery and GIANTS driving
@@ -243,7 +272,12 @@ class ExitJourneyTests(unittest.TestCase):
             u.states={IDLE={}}
             local cases={
                 {x=-92.4,z=-935.9,t=171,row={{x=-85.58,z=-979.08},{x=-180.7,z=-378.6}}},
-                {x=-137.2,z=-264.5,t=351,row={{x=-144.34,z=-219.45},{x=-99.6,z=-502}}}
+                {x=-137.2,z=-264.5,t=351,row={{x=-144.34,z=-219.45},{x=-99.6,z=-502}}},
+                -- Logged /325 headland-entry target at 22:28:12 on 7 October.
+                -- Include its local AD nodes even outside older route snapshots.
+                -- Earlier row geometry is representative, not logged in full.
+                {x=-181.4,z=-1000.1,t=270,onHeadland=true,
+                    row={{x=-130,z=-990},{x=-200,z=-550}}}
             }
             for _,case in ipairs(cases) do
                 place(case.x,case.z,math.rad(case.t))
@@ -252,6 +286,11 @@ class ExitJourneyTests(unittest.TestCase):
                 local stages={}
                 for leg=1,12 do
                     data.nextAttempt=0; Q.tick(u)
+                    for attempt=1,400 do
+                        if not data.exitConnectionPending then break end
+                        g_currentMission.time=g_currentMission.time+200; Q.tick(u)
+                    end
+                    assert(not data.exitConnectionPending,'headland candidate scan did not finish')
                     if handedOver>0 then break end
                     local goal,corridor=data.goal,data.corridor
                     assert(goal and data.search,data.reason)
@@ -259,7 +298,8 @@ class ExitJourneyTests(unittest.TestCase):
                     driveLeg(goal,corridor)
                     assert(handedOver==0)
                 end
-                assert(handedOver==1 and stages['row approach'] and stages['headland entry'],data.reason)
+                assert(handedOver==1,data.reason)
+                if not case.onHeadland then assert(stages['row approach'] and stages['headland entry']) end
             end
         ''')
 
@@ -436,21 +476,143 @@ class ExitJourneyTests(unittest.TestCase):
             end
         ''')
 
+    def test_narrow_headland_connection_uses_actual_rig_width(self):
+        self.lua.execute('''
+            data.departure.width=15.2
+            data.departure.headlands={{{x=0,z=-100},{x=0,z=100}}}
+            data.departure.row={{x=0,z=0},{x=80,z=0}}
+            nodes={{id=1,x=5,z=0,out={2}},{id=2,x=5,z=20,out={3}},{id=3,x=5,z=40,out={}}}
+            place(0,0,0)
+            W.cropFree=function(_,rectangle)
+                for _,p in ipairs(rectangle) do if math.abs(p.x)>7.6 then return false end end
+                return true
+            end
+            local node,_,site=Q.connectedNode(u,{x=0,z=0,t=0},data.departure,20)
+            assert(node and site.x==0)
+            assert(Q.canFinishExit(u),'turning-radius margin falsely rejects a clear headland connection')
+            W.cropFree=function(_,rectangle)
+                for _,p in ipairs(rectangle) do if p.x>4 then return false end end
+                return true
+            end
+            local clear,reason=Q.canFinishExit(u)
+            assert(not clear and reason=='perimeter connection obstructed')
+        ''')
+
+    def test_headland_scan_reaches_later_connected_nodes_in_bounded_batches(self):
+        for elapsed, batch in ((0,8),(3,1)):
+            with self.subTest(measured_ms=elapsed):
+                self.setUp()
+                self.lua.globals().elapsed=elapsed
+                self.lua.globals().batch=batch
+                self.lua.execute('''
+                    nodes={}
+                    for id=1,40 do nodes[id]={id=id,x=-80+id*4,z=0,out={100}} end
+                    nodes[100]={id=100,x=1000,z=0,out={}}
+                    v.ad.stateModule.getSecondWayPoint=function() return 100 end
+                    FS25_AutoDrive.ADGraphManager.pathFromTo=function() return {nodes[100]} end
+                    readIntervalTimerMs=function() return elapsed end
+                    local visits=0; local node
+                    for attempt=1,40 do
+                        local before=visits
+                        node=Q.connectedNode(u,{x=-80,z=0},data.departure,200,function(candidate)
+                            visits=visits+1; return candidate.id==28
+                        end)
+                        assert(visits-before<=batch)
+                        if node then break end
+                        assert(data.exitConnectionPending)
+                    end
+                    assert(node and node.id==28 and visits==28)
+                    assert(not data.exitConnectionPending and not data.exitConnectionScan)
+                    Q.connectedNode(u,{x=-80,z=0},data.departure,200,function() return false end)
+                    assert(data.exitConnectionScan)
+                    Q.cancel(u)
+                    assert(not data.exitConnectionScan and not data.exitConnectionPending)
+                ''')
+
+    def test_exit_tries_other_direct_goals_before_hybrid_search(self):
+        self.lua.execute('''
+            place(10,240,0)
+            local goal,corridor=Q.exitTarget(u)
+            assert(#goal.choices==3)
+            -- This rig cannot settle its articulation in the 35 m option, but
+            -- can turn safely into the 50 m option using the real route code.
+            local short,long=goal.choices[2],goal.choices[1]
+            goal.choices={short,long}
+            Q.request(u,goal,corridor)
+            local search=data.search
+            assert(search and search.corridor==corridor and search.firstValid)
+            local done,path,reason
+            for i=1,20000 do
+                done,path,reason=S.step(search,1)
+                assert(not search.fallback, 'expanded hybrid search before trying another direct target')
+                if search.active then assert(search.active.expanded==0) end
+                if done then break end
+            end
+            assert(done and path,reason or 'direct alternatives did not complete')
+            assert(path.goal==long and search.index==2)
+            local poses=W.poses(data.world.model)
+            for i=2,#path do
+                poses=H.advance(data.world.model,poses,path[i])
+                assert(W.clear(data.world,poses,corridor))
+            end
+            Q.startRoute(data,path)
+            assert(data.goal==long)
+            Q.onLast(u)
+            assert(data.parkedGoal==long)
+        ''')
+
+    def test_choice_fallback_preserves_exit_corridor(self):
+        self.lua.execute('''
+            place(0,240,math.pi)
+            local goal,corridor=Q.exitTarget(u)
+            local search=assert(S.choices(assert(W.new(u)),goal.choices,corridor))
+            -- Bypass only direct candidates to exercise fallback construction.
+            search.index=#search.choices+1
+            S.step(search,1)
+            assert(search.fallback and search.fallback.corridor==corridor)
+            local invalid,reason=S.choices(assert(W.new(u)),goal.choices,function() return false end)
+            assert(not invalid and reason)
+        ''')
+
+    def test_exit_searches_precede_parking_and_rotate_within_priority(self):
+        self.lua.execute('''
+            data.search={}; data.searchGeneration=data.generation
+            local second=setmetatable({vehicle=v,queueData=false},{__index=u})
+            local exit2=Q.take(second,'exit')
+            exit2.search={}; exit2.searchGeneration=exit2.generation
+            local parking=setmetatable({vehicle=v,queueData=false},{__index=u})
+            local prepare=Q.take(parking,'prepare')
+            prepare.search={}; prepare.searchGeneration=prepare.generation
+            local advances={}
+            S.step=function(search) advances[#advances+1]=search; return false end
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 2 end
+            closeIntervalTimer=function() end
+            for i=1,2 do
+                g_updateLoopIndex=i; g_currentMission.time=i*16; Q.schedule(); Q.schedule()
+            end
+            assert(#advances==2 and advances[1]~=advances[2])
+            assert(advances[1]~=prepare.search and advances[2]~=prepare.search)
+            data.search=nil; exit2.search=nil
+            g_updateLoopIndex=3; g_currentMission.time=48; Q.schedule()
+            assert(#advances==3 and advances[3]==prepare.search)
+        ''')
+
     def test_search_work_allowance_is_independent_of_frame_interval(self):
         for interval in (16,50,100):
             with self.subTest(frame_ms=interval):
                 self.setUp()
                 self.lua.globals().interval=interval
                 self.lua.execute('''
-                    data.search={}; data.searchGeneration=data.generation; data.searchWorkMs=14998
+                    data.search={}; data.searchGeneration=data.generation; data.searchWorkMs=998
                     S.step=function() return false end
                     openIntervalTimer=function() return 1 end
                     readIntervalTimerMs=function() return 2 end
                     closeIntervalTimer=function() end
                     g_updateLoopIndex=1; g_currentMission.time=interval; Q.schedule()
-                    assert(data.search and data.searchWorkMs==15000)
+                    assert(data.search and data.searchWorkMs==1000)
                     g_updateLoopIndex=2; g_currentMission.time=2*interval; Q.schedule()
-                    assert(not data.search and data.searchWorkMs==15002)
+                    assert(not data.search and data.searchWorkMs==1002)
                 ''')
 
     def test_unenriched_multitool_lane_preserves_offsets_without_mutation(self):

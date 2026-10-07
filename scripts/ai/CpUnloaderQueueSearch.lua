@@ -35,7 +35,7 @@ local function key(poses)
     return table.concat(parts,':')
 end
 
-function S.new(world,goal,corridor)
+local function checkedStart(world,corridor)
     local poses=W.poses(world.model)
     local clear,reason=W.clear(world,poses,corridor)
     if not clear then
@@ -45,7 +45,14 @@ function S.new(world,goal,corridor)
         end
         return nil,'start: '..reason,'start'
     end
+    return poses
+end
+
+function S.new(world,goal,corridor)
+    local poses,reason,phase=checkedStart(world,corridor)
+    if not poses then return nil,reason,phase end
     local parked=W.settledPoses(world.model,goal)
+    local clear
     clear,reason=W.clear(world,parked,corridor)
     if not clear then return nil,'destination: '..reason,'destination' end
     if goal.accept and not goal.accept(parked,world.model) then return nil,'whole train cannot occupy target' end
@@ -211,8 +218,10 @@ function S.step(search,budget)
     return false
 end
 
-function S.choices(world,goals)
-    return {world=world,choices=goals,index=1}
+function S.choices(world,goals,corridor)
+    local poses,reason,phase=checkedStart(world,corridor)
+    if not poses then return nil,reason,phase end
+    return {world=world,choices=goals,corridor=corridor,index=1}
 end
 
 function S.stepChoices(search,budget)
@@ -224,22 +233,25 @@ function S.stepChoices(search,budget)
         while not search.fallback and search.fallbackIndex<=#search.choices do
             local goal=search.choices[search.fallbackIndex]
             search.fallbackIndex=search.fallbackIndex+1
-            if not goal.reverse then search.fallback,search.reason=S.new(search.world,goal) end
+            if not goal.reverse then search.fallback,search.reason=S.new(search.world,goal,search.corridor) end
             return false
         end
         if not search.fallback then return true,nil,search.reason end
         local done,path,reason=S.step(search.fallback,budget)
+        if path then path.goal=search.fallback.goal end
         if done and not path then search.fallback=nil; search.reason=reason; return false end
         return done,path,reason
     end
     if not search.active then
-        search.active,search.reason=S.new(search.world,search.choices[search.index])
+        search.active,search.reason=S.new(search.world,search.choices[search.index],search.corridor)
         if not search.active then search.index=search.index+1; return false end
         search.active.directOnly=true
     end
     local done,path,reason=S.step(search.active,budget)
     if done then
         if path then
+            path.goal=search.active.goal
+            if search.firstValid then return true,path end
             local d,clearDistance,previousBlocked=0,0,true
             for i=2,#path do
                 d=d+distance(path[i-1],path[i])

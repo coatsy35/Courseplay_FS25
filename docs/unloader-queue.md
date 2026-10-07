@@ -705,3 +705,74 @@ journey uses production search/geometry with planar engine transforms, crop
 queries and combine/header overlap adapters; it is not full FS25 physics or
 an exact replay of every object at the recorded position. Source and packaged
 runtime checks are required; in-game movement still needs validation.
+
+
+### Build 3011: configured departure cutoff and prompt local exit choices
+
+The 7 October build-3009 log records T7.300/323 entering QUEUE_EXIT at
+22:08:12.647 and receiving its first exit course at 22:13:09.371. T7.300/325
+and /324 each exhausted the first row-target search after about eleven
+minutes before trying another target. These are elapsed route-search delays,
+not measured frame times. The log also records /325 invoking the native full
+trailer handover at 21:49:36.575; it does not establish an accepted AD delivery,
+field departure or completed emptying trip.
+
+At the user's explicit request, the configured Empty when over percentage
+is enforced inclusively throughout this queue mode. At or above 85%, for
+example, a trailer cannot accept another combine call or remain preparing.
+Native transfer logic uses the same threshold and retains release and reverse
+clearance before row departure. Explicit fullness arguments are unchanged.
+Auger wagons, field unloading and GIANTS unloading retain native behaviour.
+This is a narrow authorised unloading-threshold hook; native method bodies,
+harvester routes, readiness, pipe following and crop protection remain intact.
+
+Row departure tries the existing 50, 35 and 65 metre local targets with direct
+validated paths before beginning an obstacle search. All candidates retain
+the harvested exit corridor and whole-train crop, collision and articulation
+checks. The actual chosen goal follows the path through completion. Searches
+prioritise yielding, then departure, then preparation, rotating within each
+priority and retaining the shared 2 ms per-update allowance and native
+foreground precedence. Active departure/yield attempts have a 1,000 ms
+accumulated computation ceiling; preparation retains 15,000 ms. Neither is a
+wall-clock deadline. Failed attempts hold under CP control and retry alternative
+targets; no unchecked route or midfield AD handover is introduced.
+
+Regressions cover below/exact/above cutoff, configurable percentages, native
+fullness calculation and reverse-clearance dispatch, idle timer bypass,
+preparation/yield transitions, call admission, capacity limits and other modes.
+Real articulated route tests cover a failed short direct arc followed by a
+safe longer option without hybrid expansion, corridor propagation, selected
+goal identity, departure scheduling and complete row/headland handover journeys.
+Engine queries remain test adapters, not a full FS25 physics replay. Actual
+field departure, AD delivery and frame-rate improvement require in-game
+validation. Departure logs now distinguish measured computation from elapsed
+search time and record the starting pose and candidate count.
+
+The later live log records T7.300/325 reaching its headland-entry target
+(-181.4, -1000.1), heading 270 degrees, at 22:28:56, then repeatedly reporting
+no connected route. The initial fixture reproduction exposed missing routes
+for nodes outside the two older fixture neighbourhoods; it is not proof that
+the live run rejected exactly the same candidates. The graph adapter now
+calculates a directed-distance route for every retained reachable node. It
+still does not simulate AutoDrive's turn restrictions or routing preferences.
+
+The selector's fixed nearest-16 limit can independently hide a valid later
+stage on every retry. It now resumes through successive candidate batches,
+capped at eight candidates or 2 ms between candidates, retrying after 200 ms
+while incomplete. Cached geometry is invalidated by movement, destination or
+departure changes and cancellation. Route connectivity, temporary bans and
+stage availability remain live checks. A separate regression verifies that
+a valid 28th candidate is reached with both count and time slicing.
+
+A second handover restriction staged the rig directly on an AD node at a
+headland edge, then added the complete turning radius to all four sides of
+the short connector envelope. On a 15.2 m harvested headland this can reject
+a clear actual-width connection. Eligible nodes now project to the harvested
+lane centre for CP staging. The handover gate retains whole-train harvested
+headland occupancy, live crop/collision checks, connected AD routing, range
+and heading, and actual-width translated body envelopes. It omits the blanket
+radius margin; AD owns subsequent steering and its manoeuvre is not simulated.
+A narrow-headland regression accepts the clear connection and rejects crop
+inside the actual swept corridor. The existing recorded-geometry journey also
+includes the newer logged headland-entry pose; live scenery/physics and AD's
+complete delivery still require in-game acceptance.

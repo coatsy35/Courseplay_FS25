@@ -21,6 +21,11 @@ function Q.enabled(driver)
     return not driver.augerWagon and not driver.fieldUnloadPositionNode and not driver.useGiantsUnload
 end
 
+function Q.atDepartureThreshold(driver)
+    local setting=driver.settings and driver.settings.fullThreshold
+    return setting and driver:getAllTrailersFull(setting:getValue()) or false
+end
+
 function Q.data(driver)
     if not driver.queueData then
         driver.queueData={generation=0,driver=driver,nextAttempt=0}
@@ -42,6 +47,7 @@ function Q.cancel(driver)
     data.generation=data.generation+1
     data.search=nil; data.path=nil; data.course=nil; data.goal=nil
     data.parkedGoal=nil
+    data.exitConnectionScan=nil; data.exitConnectionPending=nil
     data.liveChecked=nil; data.liveClear=nil
     W.delete(data.world); data.world=nil
 end
@@ -278,7 +284,8 @@ function Q.refresh()
             data.lastOwner=owner
             local t={id=id(driver.vehicle),driver=driver,capacity=total,fill=fill,freeCapacity=free,enabled=true,
                 departPercent=driver.settings.fullThreshold:getValue(),compatible={},
-                available=driver.state==driver.states.IDLE or (Q.owns(driver) and data.operation=='prepare'),
+                available=not Q.atDepartureThreshold(driver) and
+                    (driver.state==driver.states.IDLE or (Q.owns(driver) and data.operation=='prepare')),
                 owner=owner,transferring=stableOwner and transfer>0,
                 transferRate=transfer,reservedFor=data.assignment and data.assignment.combine,
                 position=W.pose(driver.vehicle:getAIDirectionNode())}
@@ -408,18 +415,25 @@ function Q.request(driver,goal,corridor)
     if not world then Q.failed(data,reason,'world'); return end
     data.world=world
     local phase
-    if goal.choices then data.search=S.choices(world,goal.choices)
+    if goal.choices then
+        data.search,reason,phase=S.choices(world,goal.choices,corridor)
+        if data.search then data.search.firstValid=data.operation=='exit' end
     else data.search,reason,phase=S.new(world,goal,corridor) end
     data.searchGeneration=data.generation
     data.corridor=corridor
     if not data.search then Q.failed(data,reason,phase) end
     data.searchStarted=now()
     data.searchWorkMs=0
+    if data.operation=='exit' then
+        driver:debug('Queue: departure search start %.1f, %.1f heading %.1f, %d local candidate(s)',
+            world.model.root.x,world.model.root.z,math.deg(world.model.root.t),goal.choices and #goal.choices or 1)
+    end
 end
 
 function Q.startRoute(data,path)
     if not Q.owns(data.driver) or data.searchGeneration~=data.generation then return end
     data.path=path; data.search=nil
+    data.goal=path.goal or data.goal
     data.progressPosition=W.pose(data.driver.vehicle:getAIDirectionNode())
     data.progressTime=now()
     local points,mapping={},{}
@@ -446,9 +460,12 @@ function Q.schedule()
         if d and d.pathfinderController and d.pathfinderController.pathfinder then return end
     end
     local selected
+    local priority={yield=0,exit=1,prepare=2}
     for _, data in pairs(Q.members) do
         if data.search and Q.owns(data.driver) and data.searchGeneration==data.generation
-                and (not selected or (data.lastAdvance or 0)<(selected.lastAdvance or 0)) then selected=data end
+                and (not selected or priority[data.operation]<priority[selected.operation]
+                    or (priority[data.operation]==priority[selected.operation]
+                        and (data.lastAdvance or 0)<(selected.lastAdvance or 0))) then selected=data end
     end
     if not selected then return end
     selected.lastAdvance=now()
@@ -462,9 +479,13 @@ function Q.schedule()
     if elapsed>=8 then selected.driver:debug('Queue search advance %.1f ms',elapsed) end
     if done then
         selected.search=nil
+        if selected.operation=='exit' then
+            selected.driver:debug('Queue: departure search %s, %.1f ms computation, %.1f s elapsed',
+                path and 'ready' or 'failed',selected.searchWorkMs,(now()-selected.searchStarted)/1000)
+        end
         if path then Q.startRoute(selected,path)
         else Q.failed(selected,reason or 'no safe route') end
-    elseif selected.searchWorkMs>15000 then
+    elseif selected.searchWorkMs>(selected.operation=='prepare' and 15000 or 1000) then
         selected.search=nil; Q.failed(selected,'search budget exhausted; retaining CP control')
     end
 end
@@ -488,8 +509,10 @@ function Q.tick(driver)
     local data=Q.data(driver)
     if data.operation and not Q.owns(driver) then Q.cancel(driver); data.operation=nil end
     Q.refresh()
-    if driver.state==driver.states.IDLE and not driver:isDriveUnloadNowRequested()
-            and not driver:getAllTrailersFull(driver.settings.fullThreshold:getValue()) then
+    if driver.state==driver.states.IDLE then
+        if driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
+            driver:startUnloadingTrailers(); return
+        end
         Q.take(driver,'prepare')
     end
     if Q.owns(driver) then
@@ -544,8 +567,8 @@ function Q.tick(driver)
                     Q.yieldTarget(driver,true); data.nextAttempt=now()+1000
                 else data.parkedGoal=goal; data.nextAttempt=now()+2000 end
             else
-                data.nextAttempt=now()+(data.operation=='yield' and 200 or 3000)
-                Q.reason(data,'no verified '..data.operation..' destination')
+                data.nextAttempt=now()+((data.operation=='yield' or data.exitConnectionPending) and 200 or 3000)
+                if not data.exitConnectionPending then Q.reason(data,'no verified '..data.operation..' destination') end
             end
         end
     end

@@ -262,12 +262,7 @@ class YieldTests(unittest.TestCase):
         self.lua.execute('''
             Q.take(u,'prepare'); nativeRequest(); densityCount=20
             Q.request(u,assert(Q.yieldTarget(u)))
-            local done,path,reason
-            for i=1,100 do
-                done,path,reason=CpUnloaderQueueSearch.step(u.queueData.search,1)
-                if done then break end
-            end
-            assert(done and not path and reason:find('standing crop',1,true))
+            assert(not u.queueData.search and u.queueData.reason:find('standing crop',1,true))
             assert(u.queueData.operation=='yield' and not u:isAllowedToBeCalled())
         ''')
 
