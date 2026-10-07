@@ -555,22 +555,80 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(not CpUnloaderQueueWorld.cropFree(world,rect,true))
         ''')
 
-    def test_rejected_start_reports_marker_distance_without_loosening_boundary(self):
+    def test_preparation_enters_from_actual_rig_with_distant_or_missing_marker(self):
         self.lua.execute('''
             v.cpGetFieldPolygon=function()
                 return {{x=-40,z=10},{x=40,z=10},{x=40,z=150},{x=-40,z=150}}
             end
             u.queueData={operation='prepare'}
-            u.invertedStartPositionMarkerNode={x=200,z=0,t=0}
+            AIUtil.getLength=function() return 18 end
+            for _,marker in ipairs({{x=39.2,z=0,t=0},{x=200,z=0,t=0},false}) do
+                u.invertedStartPositionMarkerNode=marker or nil
+                local entry=assert(CpUnloaderQueueWorld.new(u))
+                assert(entry.entrance and entry.entrance.start.x==0 and entry.entrance.start.z==0)
+                local search=assert(CpUnloaderQueueSearch.new(entry,{x=0,z=50,t=0}))
+                local done,path,reason
+                for i=1,20000 do
+                    done,path,reason=CpUnloaderQueueSearch.step(search,1)
+                    if done then break end
+                end
+                assert(done and path,reason or 'preparation entry did not complete')
+                local poses=CpUnloaderQueueWorld.poses(entry.model)
+                for i=2,#path do
+                    poses=HeadlandLoopGeometry.advance(entry.model,poses,path[i])
+                    assert(CpUnloaderQueueWorld.clear(entry,poses))
+                end
+                for i,body in ipairs(entry.model.bodies) do
+                    assert(CpUnloaderQueueGeometry.within(CpUnloaderQueueWorld.rectangle(body,poses[i]),
+                        entry.boundary.polygon,entry.boundary.islands))
+                end
+                CpUnloaderQueueWorld.delete(entry)
+            end
+        ''')
+
+    def test_preparation_far_from_field_stays_blocked_even_with_marker_at_rig(self):
+        self.lua.execute('''
+            v.cpGetFieldPolygon=function()
+                return {{x=-40,z=110},{x=40,z=110},{x=40,z=250},{x=-40,z=250}}
+            end
+            u.queueData={operation='prepare'}
+            u.invertedStartPositionMarkerNode={x=0,z=0,t=0}
             AIUtil.getLength=function() return 18 end
             local entry=assert(CpUnloaderQueueWorld.new(u))
             assert(not entry.entrance)
-            local search,reason,phase=CpUnloaderQueueSearch.new(entry,{x=0,z=40,t=0})
+            local search,reason,phase=CpUnloaderQueueSearch.new(entry,{x=0,z=150,t=0})
             assert(not search and phase=='start')
             assert(reason:find('start: field boundary',1,true))
             assert(reason:find('root 0.0, 0.0',1,true))
-            assert(reason:find('saved start marker 200.0 m away',1,true))
+            assert(reason:find('field edge 110.0 m away',1,true))
             assert(not CpUnloaderQueueWorld.clear(entry,CpUnloaderQueueWorld.poses(entry.model)))
+        ''')
+
+    def test_off_field_entry_cannot_waive_obstacles_islands_or_departure_rules(self):
+        self.lua.execute('''
+            v.cpGetFieldPolygon=function()
+                return {{x=-40,z=10},{x=40,z=10},{x=40,z=150},{x=-40,z=150}}
+            end
+            u.queueData={operation='prepare'}; u.invertedStartPositionMarkerNode=nil
+            AIUtil.getLength=function() return 18 end
+            local entry=assert(CpUnloaderQueueWorld.new(u))
+            local p=CpUnloaderQueueWorld.poses(entry.model)
+            local nativeOverlap=overlapBox
+            overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,detector) detector.collidingShapes=1 end
+            local clear,why=CpUnloaderQueueWorld.clear(entry,p)
+            assert(not clear and why=='vehicle or obstacle')
+            overlapBox=nativeOverlap
+            entry.boundary.islands={{{x=-5,z=-5},{x=5,z=-5},{x=5,z=5},{x=-5,z=5}}}
+            clear,why=CpUnloaderQueueWorld.clear(entry,p)
+            assert(not clear and why=='island')
+            CpUnloaderQueueWorld.delete(entry)
+            for _,operation in ipairs({'exit','yield'}) do
+                u.queueData.operation=operation
+                local restricted=assert(CpUnloaderQueueWorld.new(u))
+                assert(not restricted.entrance)
+                assert(not CpUnloaderQueueWorld.clear(restricted,CpUnloaderQueueWorld.poses(restricted.model)))
+                CpUnloaderQueueWorld.delete(restricted)
+            end
         ''')
 
     def test_cut_crop_permitted(self):
@@ -707,6 +765,59 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(data.progressTime==30000)
             assert(u.course:getNumberOfWaypoints()==21)
             assert(data.courseToPath[21]==81)
+        ''')
+
+    def test_connector_preparation_targets_upcoming_row_without_moving_native_course(self):
+        self.lua.execute('''
+            local points={}
+            for z=0,600,10 do points[#points+1]={x=0,z=z} end
+            local course=Course(v,points,false)
+            course.currentWaypoint=5
+            local temporary={temporary=true}
+            local states={DRIVING_TO_WORK_START_WAYPOINT={},WORKING={},TURNING={}}
+            local combine={fieldWorkCourse=course,course=temporary,states=states,
+                state=states.DRIVING_TO_WORK_START_WAYPOINT,turnContext={turnEndWpIx=51}}
+            u.getFieldSpeed=function() return 18 end
+            local data=CpUnloaderQueue.data(u)
+            data.assignment={combine='harvester'}
+            CpUnloaderQueue.combines={harvester={driver=combine,fill=14671,capacity=20000,
+                callPercent=80,rate=38}}
+            local goal=assert(CpUnloaderQueue.target(u))
+            assert(goal.z>400 and goal.z<500, 'must prepare behind upcoming centre row')
+            local _,actualIx=CpUnloaderQueue.coursePosition(combine)
+            assert(actualIx==5, 'departure capture must retain actual fieldwork position')
+            assert(combine.course==temporary and course:getCurrentWaypointIx()==5)
+            assert(combine.turnContext.turnEndWpIx==51 and combine.state==states.DRIVING_TO_WORK_START_WAYPOINT)
+            -- Starting work restores the current working position, even with old turn context.
+            combine.course=course; combine.state=states.WORKING
+            combine.getClosestFieldworkWaypointIx=function() return 56 end
+            local _,workingIx=CpUnloaderQueue.coursePosition(combine,true)
+            assert(workingIx==56)
+        ''')
+
+    def test_preparation_does_not_use_stale_or_invalid_row_entry_in_other_states(self):
+        self.lua.execute('''
+            local course=Course(v,{{x=0,z=0},{x=0,z=10},{x=0,z=20}},false)
+            course.currentWaypoint=2
+            local states={DRIVING_TO_WORK_START_WAYPOINT={},TURNING={},WAITING_FOR_PATHFINDER={}}
+            local combine={fieldWorkCourse=course,course={},states=states,turnContext={turnEndWpIx=3}}
+            for _,state in ipairs({states.TURNING,states.WAITING_FOR_PATHFINDER}) do
+                combine.state=state
+                local _,ix=CpUnloaderQueue.coursePosition(combine,true)
+                assert(ix==2)
+            end
+            combine.state=states.DRIVING_TO_WORK_START_WAYPOINT
+            for _,entry in ipairs({0,4,1.5,'3',false}) do
+                combine.turnContext.turnEndWpIx=entry
+                local _,ix=CpUnloaderQueue.coursePosition(combine,true)
+                assert(ix==2)
+            end
+            combine.turnContext=nil
+            local _,ix=CpUnloaderQueue.coursePosition(combine,true)
+            assert(ix==2)
+            combine.states=nil; combine.state=nil; combine.turnContext={turnEndWpIx=3}
+            _,ix=CpUnloaderQueue.coursePosition(combine,true)
+            assert(ix==2)
         ''')
 
     def test_capture_uses_saved_work_course_and_survives_second_release(self):

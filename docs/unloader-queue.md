@@ -531,6 +531,44 @@ retry dispatch, and live traffic/convoy stop-and-resume dispatch. All release
 checks still run for source and packaged ZIP. These engine-boundary tests do
 not prove vehicle movement in FS25; the two-combine transition needs retesting.
 
+### Build 3007: allow preparation from the waiting verge and ahead of connectors
+
+The 7 October 3006 run rejected T7.300/322's preparation at 16:43:30 because
+its saved start marker was 39.2 m away, beyond the 22.9 m entry allowance.
+It remained unprepared until the native call at 16:49:38, roughly 560 m from
+the rendezvous. CR11/318 passed its 80% trigger at 16:50:18. The trailer missed
+the first rendezvous, replanned and began unloading at 16:51:42. This was a
+late preparation failure with subsequent recovery, not a permanent unload stop.
+
+Preparation now admits a bounded connection from the actual rig to the nearest
+edge of its serving field, whether the saved start marker is distant or absent.
+The existing 100 m field-distance limit remains. Every swept tractor/trailer
+body must still pass crop, island, obstacle and articulation checks. The entry
+allowance remains exclusive to preparation; exit and yielding cannot use it.
+
+During native travel to the next work start, preparation now references CP's
+already selected row-entry waypoint instead of the last passed headland point.
+The normal lag and target validation still apply. Actual departure capture and
+other harvester states retain their original position reference. No combine
+course, unload trigger, readiness check or native approach is changed.
+
+New engine-boundary regressions drive the real articulated route search from
+the verge with distant and absent markers, reject remote entry, check crop,
+island and obstacle protection, and exclude exit/yield from the allowance.
+They also verify upcoming-row preparation, unchanged native course and actual
+departure position, and fallback for other states or invalid/missing context.
+The complete runtime suite has 76 tests. These tests mock GIANTS engine queries;
+timely physical arrival and the full save still require an in-game retest.
+
+The separate crop-crossing report was traced without another harvester route
+patch. CR11/318 exhausted its first 40,000-iteration search, then accepted a
+492.3 m native retry route at 16:47:24, before the 9 m straight entry extension.
+The connector search and crop-cost behaviour match local upstream/main
+150dcd51. Native crop avoidance is a cost preference, not a requirement that
+another combine must block the headland. Candidate collision records do not
+prove the suggested alternative headland routes were blocked, and the log does
+not establish that this crop crossing was necessary.
+
 ## Packaging
 
 Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and

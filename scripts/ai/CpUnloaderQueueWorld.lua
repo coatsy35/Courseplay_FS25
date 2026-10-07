@@ -13,7 +13,6 @@ end
 
 local function entryGate(strategy,model,boundary)
     if not strategy.queueData or strategy.queueData.operation~='prepare' then return nil,'not preparing' end
-    if not strategy.invertedStartPositionMarkerNode then return nil,'no saved start marker' end
     local start=model.root
     local outside=false
     local poses=W.poses(model)
@@ -21,13 +20,12 @@ local function entryGate(strategy,model,boundary)
         if not G.within(W.rectangle(body,poses[i]),boundary.polygon,boundary.islands) then outside=true end
     end
     if not outside then return nil,'whole train inside field' end
-    local marker=W.pose(strategy.invertedStartPositionMarkerNode)
+    -- Preparation starts from the actual rig, not the AD return marker. A
+    -- waiting queue may extend along the verge or arrive without that marker.
+    -- Only a bounded connection to this field is admitted; every swept body
+    -- still has to pass crop, island, obstacle and articulation checks.
     local width=math.max(15,2*strategy.turningRadius)
     local length=AIUtil.getLength(strategy.vehicle)
-    local markerDistance=math.sqrt((start.x-marker.x)^2+(start.z-marker.z)^2)
-    if markerDistance>width+length then
-        return nil,string.format('saved start marker %.1f m away (limit %.1f m)',markerDistance,width+length)
-    end
     local nearest,entry
     for i,a in ipairs(boundary.polygon) do
         local d,p=distanceToSegment(start,a,boundary.polygon[i%#boundary.polygon+1])

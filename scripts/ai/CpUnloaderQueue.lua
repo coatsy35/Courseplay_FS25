@@ -97,12 +97,22 @@ function Q.release(driver)
     driver.state=driver.states.IDLE
 end
 
-function Q.coursePosition(combine)
+function Q.coursePosition(combine, preparing)
     local course=combine.fieldWorkCourse
     if not course then return end
     local ix
     if combine.course==course then ix=combine:getClosestFieldworkWaypointIx()
-    else ix=course:getLastPassedWaypointIx() or course:getCurrentWaypointIx() end
+    else
+        -- A connector can take the harvester far from its last working waypoint.
+        -- Prepare near CP's chosen next row, without changing its route or the
+        -- saved departure position used after an actual unloading transfer.
+        local entry=combine.turnContext and combine.turnContext.turnEndWpIx
+        if preparing and combine.states and combine.states.DRIVING_TO_WORK_START_WAYPOINT
+                and combine.state==combine.states.DRIVING_TO_WORK_START_WAYPOINT
+                and type(entry)=='number' and entry%1==0 and entry>=1 and entry<=course:getNumberOfWaypoints() then
+            ix=entry
+        else ix=course:getLastPassedWaypointIx() or course:getCurrentWaypointIx() end
+    end
     if not ix then return end
     ix=math.max(1,math.min(course:getNumberOfWaypoints(),ix))
     return course,ix
@@ -340,7 +350,7 @@ function Q.target(driver)
     if assignment.combine then
         local combine=Q.combines[assignment.combine]
         if not combine then return end
-        local course,ix=Q.coursePosition(combine.driver)
+        local course,ix=Q.coursePosition(combine.driver,true)
         if not course then return end
         local lag=P.lag(combine,AIUtil.getLength(driver.vehicle),12,driver:getFieldSpeed()/3.6,
             assignment.successor and assignment.deadline or nil)
