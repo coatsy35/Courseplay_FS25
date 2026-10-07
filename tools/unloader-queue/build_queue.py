@@ -9,7 +9,6 @@ from build_foundation import SUITES
 
 MODULES = {f'scripts/ai/CpUnloaderQueue{s}.lua'
            for s in ('Policy', 'Geometry', 'World', 'Search', '', 'Manoeuvres', 'Hooks')}
-MODULES.add('scripts/ai/CpHarvesterRouteClearance.lua')
 INTEGRATION = {'modDesc.xml'}
 STEERING = 'scripts/ai/strategies/AIDriveStrategyCombineCourse.lua'
 TURNS = 'scripts/ai/turns/AITurn.lua'
@@ -86,13 +85,7 @@ def check_queue(packager):
         'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine')} | {('C', 'findUnloader')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
-    clearance = (release.ROOT/'scripts/ai/CpHarvesterRouteClearance.lua').read_text()
-    methods = set(re.findall(r'function ([UC]):([A-Za-z]+)\(', clearance))
-    expected = {('C', name) for name in ('onPathfindingDoneToConnectingPathEnd',
-        'onPathfindingFailedToConnectingPathEnd', 'update', 'delete', 'onLastWaypointPassed')}
-    if methods != expected:
-        raise RuntimeError('Harvester connector clearance hook surface changed')
-    print('PASS: runtime matches pinned main apart from reviewed steering/corridor/clearance corrections and queue hooks; settings qualified', flush=True)
+    print('PASS: native connector handling restored; runtime matches pinned main apart from reviewed steering/corridor corrections and queue hooks; settings qualified', flush=True)
 
 
 if __name__ == '__main__':
@@ -101,6 +94,6 @@ if __name__ == '__main__':
     release.build(parser.parse_args().build_number, qualification=check_queue,
                   suites=SUITES+('unloader-queue/test_runtime.py', 'unloader-queue/test_lookahead.py',
                                 'unloader-queue/test_harvester_turns.py',
-                                'unloader-queue/test_connector_clearance.py',
+                                'unloader-queue/test_native_connectors.py',
                                 'unloader-queue/test_exit_stages.py'),
                   stage='queue-operational-candidate-requires-in-game-validation')

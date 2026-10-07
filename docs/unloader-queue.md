@@ -502,6 +502,35 @@ Native route generation, crop fallback, convoy policy and unloading are not
 altered by this correction. The two-combine headland-to-centre transition still
 requires an in-game retest.
 
+### Build 3006: restore native harvester connector ownership
+
+The 7 October build 3005 run confirms the first combine (/319) passed the gate
+at 14:11:48. The second (/318) exhausted its native searches, then the added
+gate rejected the original connector at waypoint 84 (-250, -232) on static
+shape 123366 at 14:14:14. It stopped the worker before that connector was driven.
+Native CP would instead have started its original connecting-path fallback.
+This stop was caused by the branch's extra veto, not the trailer or the combine
+waiting for its partner.
+
+Following the user's requirement that the established native transition works
+in this save, the added CpHarvesterRouteClearance module is removed completely,
+including its load entry and release exemption. No replacement search or
+recovery system is introduced. Both successful searches and failed-search
+fallbacks now use the unchanged native fieldwork strategy and StartRowOnly.
+Native crop-aware route selection, necessary crop crossings, collision sensing
+and convoy handling retain ownership. The queue, earlier authorised lookahead
+adjustment and harvester turn-boundary correction are retained.
+
+This withdraws the extra static tree-clearance gate introduced in 3003 as well
+as its later corrections. Tree/edge handling therefore returns to native CP;
+this build does not claim to solve the earlier tree-edge incident with another
+custom route rule. The deleted gate's tests remain in Git history. Replacement
+regressions verify native strategy parity, absence of connector overrides,
+successful route handoff, exhausted-search and invalid-goal fallback, native
+retry dispatch, and live traffic/convoy stop-and-resume dispatch. All release
+checks still run for source and packaged ZIP. These engine-boundary tests do
+not prove vehicle movement in FS25; the two-combine transition needs retesting.
+
 ## Packaging
 
 Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and
