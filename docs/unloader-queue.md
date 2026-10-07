@@ -46,6 +46,9 @@ must consider the entire attached train. Compare safe forward, lateral and
 reverse options by time to clear the combine's corridor; head-on encounters
 must not automatically choose reverse. Resume or replan the interrupted task
 only after clearance, with exactly one controller owning the tractor.
+Priority does not require a tractor to move when the harvester's existing safe
+CP route already passes it. Queue yielding reads that route and responds to
+native blocking requests; it does not add mid-turn harvester rerouting.
 
 The user authorised a separate steering adjustment on 5 October (build 2999):
 harvesters following an existing forward work-start approach use an 8 m base
@@ -665,3 +668,40 @@ connectors, heading wrap, the final join geometry and preserved straight entry.
 The release parity gate permits only the three reviewed connector-entry blocks;
 all other fieldwork strategy code must still match the pinned main baseline.
 Actual steering and timing still require the user's in-game validation.
+
+
+### Build 3010: yielding from a queue position on the verge
+
+The 7 October build-3009 log records CR11/318 repeatedly blocked by T7.300/324
+at 1.3 m from 21:34. After the tractor restart, a later request from CR11/319
+produced `QUEUE_YIELD: start: field boundary (root 67.3, -732.7; not preparing)`
+at 21:38:09.562. Preparation admitted a bounded verge connection; yielding
+rejected the same starting position before searching. Yield now admits that
+same bounded connection, retaining standing-crop, island, obstacle and
+articulation checks. Exit/handover permissions are unchanged.
+
+Yield clearance now reads the current native PPC course and the actual
+combine/header envelope over a bounded 30 m horizon, instead of a fixed strip
+straight ahead. Sampling bounds corner travel, and unavailable geometry does
+not certify clearance. Native proximity and the whole tractor/trailer must
+both be clear for two seconds before resuming preparation or the interrupted
+departure. Requests from multiple harvesters remain active independently;
+repeated requests do not restart a valid escape search. A combine safely
+passing on its existing route can clear the request without a new tractor move.
+No combine route, crop permission, unloading trigger or AD API is changed.
+
+Like native move-away control, yield does not stop on a prospective traffic
+warning about the route it is clearing. Native proximity and live whole-train
+collision validation remain active. The choice set includes lateral quarter
+turns as well as forward passes and straight reversing, ranked by full-train
+clearance time. Queue transitions now preserve an interrupted departure and
+recheck live clearance after reaching a previously planned target.
+
+The new regression suite exercises native blocking-request dispatch, repeated
+requests, multiple harvesters, verge-start searches, header-only turn conflicts,
+reverse headings, whole-trailer clearance, safe harvester passes, failed escapes,
+departure resumption and forward clearance beating slower reverse travel. The
+journey uses production search/geometry with planar engine transforms, crop
+queries and combine/header overlap adapters; it is not full FS25 physics or
+an exact replay of every object at the recorded position. Source and packaged
+runtime checks are required; in-game movement still needs validation.

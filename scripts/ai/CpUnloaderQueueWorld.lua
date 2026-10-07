@@ -12,7 +12,8 @@ local function distanceToSegment(p,a,b)
 end
 
 local function entryGate(strategy,model,boundary)
-    if not strategy.queueData or strategy.queueData.operation~='prepare' then return nil,'not preparing' end
+    local operation=strategy.queueData and strategy.queueData.operation
+    if operation~='prepare' and operation~='yield' then return nil,'not preparing or yielding' end
     local start=model.root
     local outside=false
     local poses=W.poses(model)
@@ -20,7 +21,7 @@ local function entryGate(strategy,model,boundary)
         if not G.within(W.rectangle(body,poses[i]),boundary.polygon,boundary.islands) then outside=true end
     end
     if not outside then return nil,'whole train inside field' end
-    -- Preparation starts from the actual rig, not the AD return marker. A
+    -- Preparation and priority clearance start from the actual rig, not the AD return marker. A
     -- waiting queue may extend along the verge or arrive without that marker.
     -- Only a bounded connection to this field is admitted; every swept body
     -- still has to pass crop, island, obstacle and articulation checks.

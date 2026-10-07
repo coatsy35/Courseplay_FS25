@@ -133,7 +133,10 @@ function S.step(search,budget)
             root.clear=true
             if search.goal.clearance then
                 for i,body in ipairs(search.world.model.bodies) do
-                    if CpUnloaderQueueGeometry.overlap(W.rectangle(body,poses[i]),search.goal.clearance) then root.clear=false end
+                    local rectangle=W.rectangle(body,poses[i])
+                    local area=search.goal.clearance
+                    if (type(area)=='function' and area(rectangle))
+                            or (type(area)~='function' and CpUnloaderQueueGeometry.overlap(rectangle,area)) then root.clear=false end
                 end
             end
             local swept=false

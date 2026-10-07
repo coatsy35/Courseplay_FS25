@@ -487,6 +487,82 @@ function Q.finishExit(driver)
     end
 end
 
+-- Read CP's current route; never create or replace a harvester course here.
+-- The envelope includes the attached header, relative to the AI direction node.
+function Q.yieldArea(combine)
+    local strategy=combine:getCpDriveStrategy()
+    local origin=W.pose(combine:getAIDirectionNode())
+    local bodies=W.currentBodies(combine)
+    if not bodies then return end
+    local left,right,front,back=-math.huge,math.huge,-math.huge,math.huge
+    for _,item in ipairs(bodies) do
+        for _,p in ipairs(W.rectangle(item.body,item.pose,0)) do
+            local dx,dz=p.x-origin.x,p.z-origin.z
+            local x,z=dx*math.cos(origin.t)-dz*math.sin(origin.t),dx*math.sin(origin.t)+dz*math.cos(origin.t)
+            left=math.max(left,x); right=math.min(right,x)
+            front=math.max(front,z); back=math.min(back,z)
+        end
+    end
+    local box={width=left-right,length=front-back,xOffset=(left+right)/2,zOffset=(front+back)/2}
+    local rectangles={}
+    local function add(p)
+        local r=G.rectangle({x=p.x,z=p.z,heading=p.t},box,1)
+        r.minX=math.huge; r.maxX=-math.huge; r.minZ=math.huge; r.maxZ=-math.huge
+        for _,q in ipairs(r) do
+            r.minX=math.min(r.minX,q.x); r.maxX=math.max(r.maxX,q.x)
+            r.minZ=math.min(r.minZ,q.z); r.maxZ=math.max(r.maxZ,q.z)
+        end
+        rectangles[#rectangles+1]=r
+    end
+    add(origin)
+    local course=strategy.getCurrentCourse and strategy:getCurrentCourse()
+    local ix=strategy.ppc and strategy.ppc:getRelevantWaypointIx()
+    if course and ix and course:getNumberOfWaypoints()>1 then
+        local previous,travelled=origin,0
+        -- A local horizon covers the immediate turn without reserving an
+        -- entire fieldwork row. Bound both travel and sample count.
+        local cornerRadius=math.sqrt(math.max(left*left,right*right)+math.max(front*front,back*back))
+        for i=math.max(1,ix),course:getNumberOfWaypoints() do
+            local x,_,z=course:getWaypointPosition(i)
+            local t=course:getWaypointYRotation(i)+(course:isReverseAt(i) and math.pi or 0)
+            local d=distance(previous,{x=x,z=z})
+            local fraction=d>0 and math.min(1,(30-travelled)/d) or 1
+            local target={x=previous.x+(x-previous.x)*fraction,z=previous.z+(z-previous.z)*fraction,
+                t=previous.t+H.math.delta(t,previous.t)*fraction}
+            local steps=math.max(1,math.ceil(d*fraction+cornerRadius*math.abs(H.math.delta(target.t,previous.t))))
+            if #rectangles+steps>160 then return end -- incomplete envelope cannot certify clearance
+            for j=1,steps do
+                local f=j/steps
+                add({x=previous.x+(target.x-previous.x)*f,z=previous.z+(target.z-previous.z)*f,
+                    t=previous.t+H.math.delta(target.t,previous.t)*f})
+            end
+            previous=target; travelled=travelled+d*fraction
+            if travelled>=30 then break end
+        end
+    end
+    return function(rectangle)
+        local minX,maxX,minZ,maxZ=math.huge,-math.huge,math.huge,-math.huge
+        for _,p in ipairs(rectangle) do
+            minX=math.min(minX,p.x); maxX=math.max(maxX,p.x)
+            minZ=math.min(minZ,p.z); maxZ=math.max(maxZ,p.z)
+        end
+        for _,r in ipairs(rectangles) do
+            if minX<=r.maxX and maxX>=r.minX and minZ<=r.maxZ and maxZ>=r.minZ
+                    and G.overlap(rectangle,r) then return true end
+        end
+        return false
+    end
+end
+
+function Q.resumeAfterYield(driver)
+    local data=Q.data(driver)
+    local operation=data.resumeExit and 'exit' or 'prepare'
+    data.resumeExit=nil; data.priorityCombine=nil; data.yieldRequests=nil
+    Q.take(driver,operation)
+    data.nextAttempt=0
+    Q.reason(data,'clear of harvester manoeuvre; resuming '..operation)
+end
+
 function Q.priority(driver,combine)
     if not Q.enabled(driver) or not combine or not driver.vehicle:getIsCpActive()
             or not AIDriveStrategyCombineCourse.isActiveCpCombine(combine) then return false end
@@ -496,7 +572,11 @@ function Q.priority(driver,combine)
         return false
     end
     local data=Q.data(driver)
-    if data.operation=='yield' and Q.owns(driver) then return true end
+    if data.operation=='yield' and Q.owns(driver) then
+        data.yieldRequests[combine]=data.yieldRequests[combine] or {}
+        data.yieldRequests[combine].clearSince=nil
+        return true
+    end
     data.resumeExit=Q.owns(driver) and data.operation=='exit'
     -- Native searches are advanced synchronously by this controller; removing
     -- its runner prevents a superseded callback after clearance. The next native
@@ -506,35 +586,54 @@ function Q.priority(driver,combine)
     driver:releaseCombine()
     Q.take(driver,'yield')
     data.priorityCombine=combine
+    data.yieldRequests={[combine]={}}
     data.nextAttempt=0
-    data.yieldSide=nil
+    Q.reason(data,'yield requested by '..CpUtil.getName(combine))
     return true
 end
 
 function Q.yieldTarget(driver,checkOnly)
     local data=Q.data(driver)
-    local combine=data.priorityCombine
-    if not combine or not combine:getIsCpActive() then
-        if data.resumeExit then Q.take(driver,'exit') else Q.release(driver) end
-        return
+    local bodies=W.currentBodies(driver.vehicle)
+    local areas,combine,anyBlocked={},nil,false
+    local time=g_currentMission.time
+    for vehicle,request in pairs(data.yieldRequests or {}) do
+        if not AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+            data.yieldRequests[vehicle]=nil
+        else
+            local strategy=vehicle:getCpDriveStrategy()
+            if not request.checked or time-request.checked>=200 then
+                request.area=Q.yieldArea(vehicle); request.checked=time
+            end
+            local blocked=not bodies or not request.area or strategy:isVehicleInProximity(driver.vehicle)
+            for _,item in ipairs(bodies or {}) do
+                if request.area and request.area(W.rectangle(item.body,item.pose)) then blocked=true end
+            end
+            anyBlocked=anyBlocked or blocked
+            if blocked then request.clearSince=nil else request.clearSince=request.clearSince or time end
+            if request.clearSince and time-request.clearSince>=2000 then
+                data.yieldRequests[vehicle]=nil
+            else
+                combine=combine or vehicle
+                if not request.area then Q.reason(data,'harvester clearance unavailable'); return end
+                areas[#areas+1]=request.area
+            end
+        end
     end
+    if not combine then Q.resumeAfterYield(driver); return end
+    if checkOnly then return true end
+    if not anyBlocked then return end -- let the existing safe pass finish without starting another move
     local pose=W.pose(combine:getAIDirectionNode())
     local width=combine:getCpDriveStrategy():getWorkWidth()+4
-    local corridor=G.rectangle({x=pose.x,z=pose.z,heading=pose.t},
-        {width=width,length=50,zOffset=20},0)
-    local bodies=W.currentBodies(driver.vehicle)
-    local blocked=false
-    for _,item in ipairs(bodies or {}) do if G.overlap(W.rectangle(item.body,item.pose),corridor) then blocked=true end end
-    if bodies and not blocked then
-        if data.resumeExit then Q.take(driver,'exit') else Q.release(driver) end
-        return
+    local function corridor(rectangle)
+        for _,area in ipairs(areas) do if area(rectangle) then return true end end
+        return false
     end
-    if checkOnly then return true end
     local here=W.pose(driver.vehicle:getAIDirectionNode())
     local lateral=(here.x-pose.x)*math.cos(pose.t)-(here.z-pose.z)*math.sin(pose.t)
     local side=lateral>=0 and 1 or -1
     local function accepts(poses,model)
-        for i,p in ipairs(poses) do if G.overlap(W.rectangle(model.bodies[i],p),corridor) then return false end end
+        for i,p in ipairs(poses) do if corridor(W.rectangle(model.bodies[i],p)) then return false end end
         return true
     end
     local choices={}
@@ -543,6 +642,14 @@ function Q.yieldTarget(driver,checkOnly)
             math.max(40,3*driver.turningRadius))
         p.t=here.t; p.accept=accepts; p.clearance=corridor
         choices[#choices+1]=p
+        -- A quarter turn followed by a straight clearance leg can fit where
+        -- returning immediately to the original heading would swing the
+        -- trailer across the header. The search still validates the full rig.
+        local lateral=G.point({x=here.x,z=here.z,heading=here.t},
+            lateralSide*(2*driver.turningRadius+2*AIUtil.getLength(driver.vehicle)),driver.turningRadius)
+        lateral.t=here.t+lateralSide*math.pi/2
+        lateral.accept=accepts; lateral.clearance=corridor
+        choices[#choices+1]=lateral
     end
     for _,length in ipairs({10,20,40,60}) do
         local reverse=G.point({x=here.x,z=here.z,heading=here.t},0,-length)

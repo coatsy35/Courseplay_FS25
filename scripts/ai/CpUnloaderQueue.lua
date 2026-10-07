@@ -84,7 +84,10 @@ function Q.take(driver,operation)
     local data=Q.data(driver)
     Q.cancel(driver)
     data.operation=operation
-    data.state={name='QUEUE_'..string.upper(operation),properties={collisionAvoidanceEnabled=true}}
+    -- Like native MOVING_AWAY_FROM_OTHER_VEHICLE, yielding must not wait on
+    -- the future path conflict it is clearing. Live proximity and full-train
+    -- route/obstacle validation remain active.
+    data.state={name='QUEUE_'..string.upper(operation),properties={collisionAvoidanceEnabled=operation~='yield'}}
     driver.state=data.state
     driver:setMaxSpeed(0)
     return data
@@ -492,7 +495,7 @@ function Q.tick(driver)
     if Q.owns(driver) then
         if data.operation=='yield' and data.path then
             Q.yieldTarget(driver,true)
-            if not Q.owns(driver) then return end
+            if not Q.owns(driver) or data.operation~='yield' then return end
         end
         if data.path then
             local position=W.pose(driver.vehicle:getAIDirectionNode())
@@ -516,6 +519,9 @@ function Q.tick(driver)
             if data.operation=='exit' then goal,corridor=Q.exitTarget(driver)
             elseif data.operation=='yield' then goal=Q.yieldTarget(driver)
             else goal=Q.target(driver) end
+            -- A clearance check may resume a departure or release to native
+            -- idle. Do not use the old operation/goal after that transition.
+            if not Q.owns(driver) then return end
             if goal then
                 local here=W.pose(driver.vehicle:getAIDirectionNode())
                 local arrived=distance(here,goal)<(data.operation=='prepare' and 5 or 1.5)
@@ -532,9 +538,15 @@ function Q.tick(driver)
                     end
                 elseif data.operation=='exit' and not goal.exitIntermediate then Q.finishExit(driver)
                 elseif data.operation=='exit' then data.nextAttempt=now()+1000
-                elseif data.operation=='yield' then Q.release(driver)
+                elseif data.operation=='yield' then
+                    -- Recheck live clearance; reaching a frozen target is not
+                    -- proof that the combine's manoeuvre is still clear.
+                    Q.yieldTarget(driver,true); data.nextAttempt=now()+1000
                 else data.parkedGoal=goal; data.nextAttempt=now()+2000 end
-            else data.nextAttempt=now()+3000; Q.reason(data,'no verified '..data.operation..' destination') end
+            else
+                data.nextAttempt=now()+(data.operation=='yield' and 200 or 3000)
+                Q.reason(data,'no verified '..data.operation..' destination')
+            end
         end
     end
     Q.schedule()

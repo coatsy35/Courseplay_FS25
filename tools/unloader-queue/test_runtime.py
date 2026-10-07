@@ -622,7 +622,7 @@ class EngineBoundaryTests(unittest.TestCase):
             clear,why=CpUnloaderQueueWorld.clear(entry,p)
             assert(not clear and why=='island')
             CpUnloaderQueueWorld.delete(entry)
-            for _,operation in ipairs({'exit','yield'}) do
+            for _,operation in ipairs({'exit'}) do
                 u.queueData.operation=operation
                 local restricted=assert(CpUnloaderQueueWorld.new(u))
                 assert(not restricted.entrance)

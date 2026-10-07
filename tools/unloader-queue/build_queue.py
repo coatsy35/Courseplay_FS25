@@ -110,5 +110,5 @@ if __name__ == '__main__':
                   suites=SUITES+('unloader-queue/test_runtime.py', 'unloader-queue/test_lookahead.py',
                                 'unloader-queue/test_harvester_turns.py',
                                 'unloader-queue/test_native_connectors.py',
-                                'unloader-queue/test_exit_stages.py'),
+                                'unloader-queue/test_exit_stages.py', 'unloader-queue/test_yield.py'),
                   stage='queue-operational-candidate-requires-in-game-validation')
