@@ -535,7 +535,7 @@ function Q.yieldArea(combine)
     local strategy=combine:getCpDriveStrategy()
     local origin=W.pose(combine:getAIDirectionNode())
     local bodies=W.currentBodies(combine)
-    if not bodies then return end
+    if not bodies then return nil,'harvester body geometry unavailable' end
     local left,right,front,back=-math.huge,math.huge,-math.huge,math.huge
     for _,item in ipairs(bodies) do
         for _,p in ipairs(W.rectangle(item.body,item.pose,0)) do
@@ -560,26 +560,40 @@ function Q.yieldArea(combine)
     local course=strategy.getCurrentCourse and strategy:getCurrentCourse()
     local ix=strategy.ppc and strategy.ppc:getRelevantWaypointIx()
     if course and ix and course:getNumberOfWaypoints()>1 then
-        local previous,travelled=origin,0
+        local previous,travelled,sinceSample=origin,0,0
         -- A local horizon covers the immediate turn without reserving an
         -- entire fieldwork row. Bound both travel and sample count.
         local cornerRadius=math.sqrt(math.max(left*left,right*right)+math.max(front*front,back*back))
         for i=math.max(1,ix),course:getNumberOfWaypoints() do
             local x,_,z=course:getWaypointPosition(i)
-            local t=course:getWaypointYRotation(i)+(course:isReverseAt(i) and math.pi or 0)
+            -- Waypoint yaw describes the outgoing segment. At a gear change,
+            -- use the same physical heading convention as Course's offsets.
+            local reverse=(course:isReverseAt(i) and not course:switchingToForwardAt(i))
+                or course:switchingToReverseAt(i)
+            local t=course:getWaypointYRotation(i)+(reverse and math.pi or 0)
             local d=distance(previous,{x=x,z=z})
             local fraction=d>0 and math.min(1,(30-travelled)/d) or 1
             local target={x=previous.x+(x-previous.x)*fraction,z=previous.z+(z-previous.z)*fraction,
                 t=previous.t+H.math.delta(t,previous.t)*fraction}
-            local steps=math.max(1,math.ceil(d*fraction+cornerRadius*math.abs(H.math.delta(target.t,previous.t))))
-            if #rectangles+steps>160 then return end -- incomplete envelope cannot certify clearance
-            for j=1,steps do
-                local f=j/steps
+            local motion=d*fraction+cornerRadius*math.abs(H.math.delta(target.t,previous.t))
+            -- Carry the corner-travel allowance across waypoint boundaries.
+            -- One sample per tiny waypoint would exhaust the limit even on a
+            -- straight route. One metre of padding covers the unsampled sweep.
+            local sampleAt=1-sinceSample
+            while sampleAt<=motion and motion>0 do
+                if #rectangles>=160 then return nil,'harvester route envelope sample limit' end
+                local f=sampleAt/motion
                 add({x=previous.x+(target.x-previous.x)*f,z=previous.z+(target.z-previous.z)*f,
                     t=previous.t+H.math.delta(target.t,previous.t)*f})
+                sampleAt=sampleAt+1
             end
+            sinceSample=motion-(sampleAt-1)
             previous=target; travelled=travelled+d*fraction
             if travelled>=30 then break end
+        end
+        if sinceSample>0.000001 then
+            if #rectangles>=160 then return nil,'harvester route envelope sample limit' end
+            add(previous)
         end
     end
     return function(rectangle)
@@ -645,7 +659,7 @@ function Q.yieldTarget(driver,checkOnly)
         else
             local strategy=vehicle:getCpDriveStrategy()
             if not request.checked or time-request.checked>=200 then
-                request.area=Q.yieldArea(vehicle); request.checked=time
+                request.area,request.reason=Q.yieldArea(vehicle); request.checked=time
             end
             local blocked=not bodies or not request.area or strategy:isVehicleInProximity(driver.vehicle)
             for _,item in ipairs(bodies or {}) do
@@ -657,7 +671,10 @@ function Q.yieldTarget(driver,checkOnly)
                 data.yieldRequests[vehicle]=nil
             else
                 combine=combine or vehicle
-                if not request.area then Q.reason(data,'harvester clearance unavailable'); return end
+                if not request.area then
+                    Q.reason(data,'harvester clearance unavailable: '..(request.reason or 'unknown geometry'))
+                    return
+                end
                 areas[#areas+1]=request.area
             end
         end

@@ -568,7 +568,9 @@ function Q.tick(driver)
                 else data.parkedGoal=goal; data.nextAttempt=now()+2000 end
             else
                 data.nextAttempt=now()+((data.operation=='yield' or data.exitConnectionPending) and 200 or 3000)
-                if not data.exitConnectionPending then Q.reason(data,'no verified '..data.operation..' destination') end
+                if data.operation~='yield' and not data.exitConnectionPending then
+                    Q.reason(data,'no verified '..data.operation..' destination')
+                end
             end
         end
     end

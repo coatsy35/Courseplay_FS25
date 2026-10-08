@@ -776,3 +776,38 @@ A narrow-headland regression accepts the clear connection and rejects crop
 inside the actual swept corridor. The existing recorded-geometry journey also
 includes the newer logged headland-entry pose; live scenery/physics and AD's
 complete delivery still require in-game acceptance.
+
+
+### Build 3012: reversing-turn yield clearance and return to aligned parking
+
+The 8 October 3011 run shows CR11/318 blocked by T7.300/325 at 12:38:10.677.
+The tractor starts yielding at 12:38:21.647. T7.300/324 approaches CR11/319,
+then reverses away from /325 at 12:39:46.852 and becomes /318's blocker. Both
+tractors subsequently remain in QUEUE_YIELD with harvester clearance unavailable.
+The second combine waits 39.2 m behind the first under native 75 m convoy spacing.
+These are interrupted yield/approach positions, not completed queue parking.
+
+Three new real-Course regressions fail against 3011: forward/reverse cusps
+create phantom body rotations, multiple cusps exhaust the envelope limit, and
+a dense straight course exhausts that limit solely through waypoint count.
+Course waypoint yaw describes the outgoing segment, so the yielding adapter
+must use Course's direction-switch convention when deriving physical heading.
+Sampling now carries its accumulated corner-travel allowance across waypoints,
+rather than forcing a new sample for every point. One-metre corner-travel gaps
+remain covered by one-metre rectangle padding. The 30 m horizon and 160-sample
+fail-closed ceiling are unchanged; crop, collision and native proximity checks
+remain in force. No combine course or convoy spacing is modified.
+
+The old all-reverse test did not cover direction switches, and sparse route
+fixtures missed waypoint-density dependence. Coverage now includes both cusps,
+multiple direction changes, dense straight and curved courses, header corners
+between samples, genuine excessive-sweep rejection and a full validated yield
+journey followed by selection/driving of a straight headland parking slot, with
+both tractor and trailer aligned. Missing body geometry and exhausted sample
+limits now have separate reasons, and the generic no-destination message no
+longer alternates with the specific yield failure every 200 ms.
+
+The live log's old generic message cannot retrospectively distinguish a body
+geometry failure from sample exhaustion. These tests reproduce concrete code
+defects consistent with the observed reversing-turn deadlock, not every live
+vehicle transform or map collision. Full in-game recovery remains to be verified.

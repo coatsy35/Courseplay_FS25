@@ -68,6 +68,7 @@ class YieldTests(unittest.TestCase):
                 end
             end
             Q.refresh=function() end -- allocation is independent of this traffic regression
+            nativeQueueTarget=Q.target
             Q.target=function() return nil end
         ''')
 
@@ -191,6 +192,77 @@ class YieldTests(unittest.TestCase):
             assert(u.queueData.operation=='prepare')
         ''')
 
+    def test_native_direction_switches_do_not_sweep_a_phantom_half_turn(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(0,0,0)
+            c.course=Course(harvester,{{x=0,z=0},{x=0,z=10},
+                {x=0,z=9,rev=true},{x=0,z=3,rev=true},{x=0,z=4},{x=0,z=20}},true)
+            local area=assert(Q.yieldArea(harvester))
+            local tiny={left=.05,right=-.05,front=.05,back=-.05}
+            assert(area(W.rectangle(tiny,{x=7,z=8,t=0})))
+            assert(not area(W.rectangle(tiny,{x=9.5,z=8,t=0})), 'phantom rotation at a direction switch')
+        ''')
+
+    def test_dense_waypoints_preserve_the_same_bounded_swept_area(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(0,0,0)
+            local points={}
+            for i=0,400 do points[#points+1]={x=0,z=i/10} end
+            c.course=Course(harvester,points,true)
+            local area=assert(Q.yieldArea(harvester),'dense points exhausted the envelope')
+            local tiny={left=.05,right=-.05,front=.05,back=-.05}
+            assert(area(W.rectangle(tiny,{x=7,z=30,t=0})))
+            assert(not area(W.rectangle(tiny,{x=0,z=40,t=0})))
+        ''')
+
+    def test_dense_curve_covers_header_corners_between_samples(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(0,0,0)
+            local points={}
+            for i=0,320 do
+                local angle=i*math.pi/320
+                points[#points+1]={x=8*(1-math.cos(angle)),z=8*math.sin(angle)}
+            end
+            c.course=Course(harvester,points,true)
+            local area=assert(Q.yieldArea(harvester))
+            local tiny={left=.01,right=-.01,front=.01,back=-.01}
+            for i=1,320 do
+                local angle=(i-.5)*math.pi/320
+                local pose={x=8*(1-math.cos(angle)),z=8*math.sin(angle),t=angle}
+                for _,corner in ipairs(W.rectangle({left=7.6,right=-7.6,front=6,back=-4},pose,0)) do
+                    assert(area(W.rectangle(tiny,{x=corner.x,z=corner.z,t=0})))
+                end
+            end
+        ''')
+
+    def test_truly_excessive_sweep_keeps_explicit_fail_closed_limit(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(0,0,0)
+            local points={}
+            -- Forward gear throughout: these are real requested half-turns,
+            -- not reverse cusps that should preserve physical heading.
+            for i=0,25 do points[#points+1]={x=0,z=i%2} end
+            c.course=Course(harvester,points,true)
+            local area,reason=Q.yieldArea(harvester)
+            assert(not area and reason=='harvester route envelope sample limit')
+        ''')
+
+    def test_multiple_native_cusps_remain_available_for_yield_and_resume(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(0,0,0)
+            local points={{x=0,z=0},{x=0,z=8},{x=0,z=7,rev=true},
+                {x=0,z=3,rev=true},{x=0,z=4},{x=0,z=9},
+                {x=0,z=8,rev=true},{x=0,z=5,rev=true},{x=0,z=6},{x=0,z=20}}
+            c.course=Course(harvester,points,true)
+            place(0,20,0); c.near=true
+            Q.take(u,'prepare'); nativeRequest()
+            assert(Q.yieldTarget(u),'ordinary reversing turn must permit yielding')
+            place(35,0,0); c.near=false
+            g_currentMission.time=300; Q.yieldTarget(u,true)
+            g_currentMission.time=2400; Q.yieldTarget(u,true)
+            assert(u.queueData.operation=='prepare')
+        ''')
+
     def test_reverse_course_envelope_keeps_vehicle_heading(self):
         self.lua.execute('''
             harvester,c,header=makeHarvester(0,0,0)
@@ -218,6 +290,8 @@ class YieldTests(unittest.TestCase):
     def test_actual_search_moves_from_verge_and_resumes_queue(self):
         self.lua.execute('''
             includeHarvesterCollision()
+            c.course=Course(harvester,{{x=0,z=12},{x=0,z=4},{x=0,z=5,rev=true},
+                {x=0,z=9,rev=true},{x=0,z=8},{x=0,z=-10}},true)
             v.cpGetFieldPolygon=function() return {{x=-80,z=10},{x=80,z=10},{x=80,z=180},{x=-80,z=180}} end
             Q.take(u,'prepare'); nativeRequest()
             local goal=assert(Q.yieldTarget(u))
@@ -241,6 +315,43 @@ class YieldTests(unittest.TestCase):
             Q.startRoute(data,path); assert(Q.onLast(u)); c.near=false
             Q.yieldTarget(u,true); g_currentMission.time=2100; Q.yieldTarget(u,true)
             assert(data.operation=='prepare')
+            -- Complete recovery into a real straight headland slot, including
+            -- articulated route validation and final trailer alignment.
+            c.fieldWorkCourse=Course(harvester,{{x=50,z=20},{x=50,z=50},{x=50,z=80},
+                {x=50,z=110},{x=50,z=140},{x=50,z=170}},false)
+            for i=1,6 do c.fieldWorkCourse:getWaypoint(i).attributes:setHeadlandPassNumber(1) end
+            Q.combines={test={driver=c,position={x=0,z=12}}}
+            u.isServingPosition=function() return true end
+            u.invertedStartPositionMarkerNode={x=50,z=10,t=0}
+            data.assignment={}
+            local parking=assert(nativeQueueTarget(u))
+            assert(parking.x==50 and math.abs(H.math.delta(parking.t,0))<0.001)
+            Q.request(u,parking)
+            for i=1,100000 do
+                done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
+                if done then break end
+            end
+            assert(done and path,reason or 'return to aligned parking failed')
+            poses=W.poses(data.world.model)
+            for i=2,#path do
+                poses=H.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+            end
+            for _,p in ipairs(poses) do
+                assert(math.abs(H.math.delta(p.t,parking.t))<math.rad(5))
+            end
+            Q.startRoute(data,path); Q.onLast(u)
+            assert(data.operation=='prepare' and data.parkedGoal==parking)
+        ''')
+
+    def test_unavailable_geometry_holds_without_repeating_two_messages(self):
+        self.lua.execute('''
+            local messages={}
+            u.debug=function(_,format,reason) messages[#messages+1]=reason end
+            Q.take(u,'prepare'); nativeRequest(); messages={}
+            Q.yieldArea=function() return nil,'harvester body geometry unavailable' end
+            for i=1,20 do g_currentMission.time=i*250; Q.tick(u) end
+            assert(#messages==1 and messages[1]:find('body geometry unavailable',1,true))
+            assert(u.queueData.operation=='yield' and not u:isAllowedToBeCalled())
         ''')
 
     def test_forward_pass_can_win_over_slow_reverse(self):
