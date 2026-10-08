@@ -148,6 +148,7 @@ class OwnershipTests(unittest.TestCase):
     def test_native_chopper_following_is_not_replaced_by_queue_yield(self):
         self.lua.execute("""
             u.vehicle.getIsCpActive=function() return true end
+            u.driveUnloadNowRequested={get=function() return false end}
             c.alwaysNeedsUnloader=function() return true end
             local h=u.combineToUnload
             AIDriveStrategyCombineCourse.isActiveCpCombine=function() return true end
