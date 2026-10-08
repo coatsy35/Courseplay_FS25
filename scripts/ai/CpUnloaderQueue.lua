@@ -47,7 +47,7 @@ function Q.cancel(driver)
     data.generation=data.generation+1
     data.search=nil; data.path=nil; data.course=nil; data.goal=nil
     data.parkedGoal=nil
-    data.exitConnectionScan=nil; data.exitConnectionPending=nil
+    Q.clearHarvesterBypass(driver)
     data.liveChecked=nil; data.liveClear=nil
     W.delete(data.world); data.world=nil
 end
@@ -87,6 +87,7 @@ function Q.owns(driver)
 end
 
 function Q.take(driver,operation)
+    assert(operation=='prepare' or operation=='yield', 'Queue cannot own native departure')
     local data=Q.data(driver)
     Q.cancel(driver)
     data.operation=operation
@@ -114,7 +115,7 @@ function Q.coursePosition(combine, preparing)
     else
         -- A connector can take the harvester far from its last working waypoint.
         -- Prepare near CP's chosen next row, without changing its route or the
-        -- saved departure position used after an actual unloading transfer.
+        -- actual fieldwork position used by native CP.
         local entry=combine.turnContext and combine.turnContext.turnEndWpIx
         if preparing and combine.states and combine.states.DRIVING_TO_WORK_START_WAYPOINT
                 and combine.state==combine.states.DRIVING_TO_WORK_START_WAYPOINT
@@ -125,89 +126,6 @@ function Q.coursePosition(combine, preparing)
     if not ix then return end
     ix=math.max(1,math.min(course:getNumberOfWaypoints(),ix))
     return course,ix
-end
-
-function Q.headlands(course)
-    local result={}
-    -- Multitool courses split the perimeter between vehicles. Keep every lane
-    -- as candidate geometry; live density checks still prove it is harvested.
-    local lanes=course.multiVehicleData and course.multiVehicleData.waypoints or {course.waypoints}
-    for _,waypoints in pairs(lanes) do
-      local band,pass
-      for i,wp in ipairs(waypoints) do
-        local currentPass=wp.attributes:getHeadlandPassNumber()
-        if currentPass and wp:getBoundaryId()=='F' and not wp:isHeadlandTransition()
-                and not wp:isOnConnectingPath() and not wp.attributes:isIslandBypass() then
-            if not band or currentPass~=pass then band={}; result[#result+1]=band end
-            local p
-            if waypoints==course.waypoints then p=point(course,i)
-            else
-                -- Inactive multitool lanes have not been enriched by
-                -- Course:setPosition, so their dx/dz can still be absent.
-                local dx,dz=wp.dx,wp.dz
-                if not dx or not dz then
-                    local neighbour=waypoints[i+1] or waypoints[i-1]
-                    local sign=i<#waypoints and 1 or -1
-                    dx,dz=neighbour and sign*(neighbour.x-wp.x) or 0,
-                        neighbour and sign*(neighbour.z-wp.z) or 0
-                    local length=math.sqrt(dx*dx+dz*dz)
-                    if length>0 then dx,dz=dx/length,dz/length end
-                end
-                local x,_,z=wp:getOffsetPosition(course.offsetX+course.temporaryOffsetX:get(),
-                    course.offsetZ+course.temporaryOffsetZ:get(),dx,dz)
-                p={x=x,z=z,t=math.atan2(dx,dz)}
-            end
-            band[#band+1]=p; pass=currentPass
-        else band=nil end
-      end
-    end
-    return result
-end
-
-function Q.departureFor(course,ix)
-    local first=ix
-    while first>1 and not course:getWaypoint(first):isRowStart() and not course:isOnHeadland(first) do first=first-1 end
-    local saved={row={},headlands={},width=course:getWorkWidth(),position=point(course,ix),
-        headlandOrigin=course:isOnHeadland(ix)}
-    if not saved.width or saved.width<=0 then return end
-    for i=first,ix do saved.row[#saved.row+1]=point(course,i) end
-    saved.headlands=Q.headlands(course)
-    if (#saved.row>=2 or saved.headlandOrigin or course:getWaypoint(first):isRowStart())
-            and #saved.headlands>0 then return saved end
-end
-
--- Save immutable positions BEFORE native release clears combineJustUnloaded.
-function Q.capture(driver)
-    local vehicle=driver.combineToUnload
-    if not vehicle or not vehicle:getIsCpActive() then return end
-    local course,ix=Q.coursePosition(vehicle:getCpDriveStrategy())
-    Q.data(driver).departure=course and Q.departureFor(course,ix) or nil
-end
-
-function Q.recoverDeparture(driver)
-    if not Q.combines or next(Q.combines)==nil then return end
-    local here=W.pose(driver.vehicle:getAIDirectionNode())
-    local best,nearest
-    for _,combine in pairs(Q.combines or {}) do
-        local course=combine.driver.fieldWorkCourse
-        if course and driver:isServingPosition(combine.position.x,combine.position.z,10) then
-            for i=1,course:getNumberOfWaypoints() do
-                local wp=course:getWaypoint(i)
-                if not wp:isOnConnectingPath() and not wp:isHeadlandTransition() then
-                    local d=distance(here,point(course,i))
-                    if d<course:getWorkWidth()/2 and (not nearest or d<nearest) then
-                        best,nearest={course=course,ix=i},d
-                    end
-                end
-            end
-        end
-    end
-    -- This is only a candidate corridor for a resumed/full rig. The complete
-    -- route still has to pass live crop and whole-train validation before moving.
-    if best then
-        local saved=Q.departureFor(best.course,best.ix)
-        if saved then saved.position=here; Q.data(driver).departure=saved end
-    end
 end
 
 local function capacity(driver,fillType)
@@ -284,7 +202,7 @@ function Q.refresh()
             data.lastOwner=owner
             local t={id=id(driver.vehicle),driver=driver,capacity=total,fill=fill,freeCapacity=free,enabled=true,
                 departPercent=driver.settings.fullThreshold:getValue(),compatible={},
-                available=not Q.atDepartureThreshold(driver) and
+                available=not data.nativeDeparture and not Q.atDepartureThreshold(driver) and
                     (driver.state==driver.states.IDLE or (Q.owns(driver) and data.operation=='prepare')),
                 owner=owner,transferring=stableOwner and transfer>0,
                 transferRate=transfer,reservedFor=data.assignment and data.assignment.combine,
@@ -407,27 +325,19 @@ function Q.request(driver,goal,corridor)
     local data=Q.data(driver)
     Q.cancel(driver)
     data.goal=goal
-    if data.operation=='exit' then
-        driver:debug('Queue: exit %s target %.1f, %.1f heading %.1f',
-            goal.exitStage or 'connection',goal.x,goal.z,math.deg(goal.t))
-    end
     local world,reason=W.new(driver)
     if not world then Q.failed(data,reason,'world'); return end
     data.world=world
     local phase
     if goal.choices then
         data.search,reason,phase=S.choices(world,goal.choices,corridor)
-        if data.search then data.search.firstValid=data.operation=='exit' end
     else data.search,reason,phase=S.new(world,goal,corridor) end
     data.searchGeneration=data.generation
     data.corridor=corridor
     if not data.search then Q.failed(data,reason,phase) end
     data.searchStarted=now()
     data.searchWorkMs=0
-    if data.operation=='exit' then
-        driver:debug('Queue: departure search start %.1f, %.1f heading %.1f, %d local candidate(s)',
-            world.model.root.x,world.model.root.z,math.deg(world.model.root.t),goal.choices and #goal.choices or 1)
-    end
+
 end
 
 function Q.startRoute(data,path)
@@ -460,7 +370,7 @@ function Q.schedule()
         if d and d.pathfinderController and d.pathfinderController.pathfinder then return end
     end
     local selected
-    local priority={yield=0,exit=1,prepare=2}
+    local priority={yield=0,prepare=1}
     for _, data in pairs(Q.members) do
         if data.search and Q.owns(data.driver) and data.searchGeneration==data.generation
                 and (not selected or priority[data.operation]<priority[selected.operation]
@@ -479,10 +389,6 @@ function Q.schedule()
     if elapsed>=8 then selected.driver:debug('Queue search advance %.1f ms',elapsed) end
     if done then
         selected.search=nil
-        if selected.operation=='exit' then
-            selected.driver:debug('Queue: departure search %s, %.1f ms computation, %.1f s elapsed',
-                path and 'ready' or 'failed',selected.searchWorkMs,(now()-selected.searchStarted)/1000)
-        end
         if path then Q.startRoute(selected,path)
         else Q.failed(selected,reason or 'no safe route') end
     elseif selected.searchWorkMs>(selected.operation=='prepare' and 15000 or 1000) then
@@ -509,13 +415,20 @@ function Q.tick(driver)
     local data=Q.data(driver)
     if data.operation and not Q.owns(driver) then Q.cancel(driver); data.operation=nil end
     Q.refresh()
+    if Q.owns(driver) and Q.holdForHarvesterBypass(driver) then return end
+    if data.nativeDeparture and driver.state~=driver.states.IDLE then return end
     if driver.state==driver.states.IDLE then
-        if driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
+        if data.nativeDeparture or driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
             driver:startUnloadingTrailers(); return
         end
         Q.take(driver,'prepare')
     end
     if Q.owns(driver) then
+        -- Full/manual departure outranks both preparation and a queue yield.
+        -- From here CP owns obstacle clearance and return-marker travel.
+        if driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
+            Q.release(driver); driver:startUnloadingTrailers(); return
+        end
         if data.operation=='yield' and data.path then
             Q.yieldTarget(driver,true)
             if not Q.owns(driver) or data.operation~='yield' then return end
@@ -529,20 +442,11 @@ function Q.tick(driver)
                 data.progressTime=now(); Q.reason(data,'route made no progress; replanning')
             end
         end
-        if data.operation=='prepare' and (driver:isDriveUnloadNowRequested()
-                or driver:getAllTrailersFull(driver.settings.fullThreshold:getValue())) then
-            Q.release(driver); driver:startUnloadingTrailers(); return
-        end
         if not data.search and not data.path and now()>=data.nextAttempt then
-            -- A validated connection may differ from the first candidate. Once
-            -- there, use the actual full-train handover gate before planning
-            -- another parking pose and inadvertently driving past the exit.
-            if data.operation=='exit' and Q.canFinishExit(driver) then Q.finishExit(driver); return end
             local goal,corridor
-            if data.operation=='exit' then goal,corridor=Q.exitTarget(driver)
-            elseif data.operation=='yield' then goal=Q.yieldTarget(driver)
+            if data.operation=='yield' then goal=Q.yieldTarget(driver)
             else goal=Q.target(driver) end
-            -- A clearance check may resume a departure or release to native
+            -- A clearance check may resume preparation or release to native
             -- idle. Do not use the old operation/goal after that transition.
             if not Q.owns(driver) then return end
             if goal then
@@ -559,16 +463,14 @@ function Q.tick(driver)
                     if now()>=Q.nextDeparture or data.operation~='prepare' then
                         Q.request(driver,goal,corridor); Q.nextDeparture=now()+3000
                     end
-                elseif data.operation=='exit' and not goal.exitIntermediate then Q.finishExit(driver)
-                elseif data.operation=='exit' then data.nextAttempt=now()+1000
                 elseif data.operation=='yield' then
                     -- Recheck live clearance; reaching a frozen target is not
                     -- proof that the combine's manoeuvre is still clear.
                     Q.yieldTarget(driver,true); data.nextAttempt=now()+1000
                 else data.parkedGoal=goal; data.nextAttempt=now()+2000 end
             else
-                data.nextAttempt=now()+((data.operation=='yield' or data.exitConnectionPending) and 200 or 3000)
-                if data.operation~='yield' and not data.exitConnectionPending then
+                data.nextAttempt=now()+(data.operation=='yield' and 200 or 3000)
+                if data.operation~='yield' then
                     Q.reason(data,'no verified '..data.operation..' destination')
                 end
             end
@@ -621,5 +523,5 @@ function Q.speed(driver)
     driver:setMaxSpeed(speed)
 end
 
--- Exit and priority manoeuvres use the same ownership and validation boundary.
+-- Preparation and priority manoeuvres use the same ownership and validation boundary.
 -- Their implementations are kept in a separate file for review and testing.

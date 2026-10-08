@@ -7,6 +7,8 @@ local C = AIDriveStrategyCombineCourse
 local update = U.update
 function U:update(dt)
     Q.tick(self)
+    -- A no-marker/full event can synchronously stop CP and delete this driver.
+    if self.vehicle:getCpDriveStrategy()~=self then return end
     return update(self,dt)
 end
 
@@ -18,25 +20,24 @@ end
 
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
-    if Q.enabled(self) and Q.atDepartureThreshold(self) then return false end
+    if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' end
     return allowed(self)
 end
 
 local call = U.call
 function U:call(combine,waypoint)
-    if Q.enabled(self) and Q.atDepartureThreshold(self) then return false end
+    if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then
         if self.queueData.operation~='prepare' then return false end
         Q.release(self)
     end
-    if Q.enabled(self) and self.queueData then self.queueData.departure=nil end
     return call(self,combine,waypoint)
 end
 
 -- The configured emptying percentage is a departure threshold, including
 -- during transfer. Native fullness handling still releases the harvester and
--- performs its reverse-clearance manoeuvre before our row/headland departure.
+-- performs its reverse-clearance manoeuvre before native departure.
 local fullTrailers = U.getAllTrailersFull
 function U:getAllTrailersFull(threshold)
     if threshold==nil and Q.enabled(self) and self.settings and self.settings.fullThreshold then
@@ -54,30 +55,26 @@ function C:findUnloader(combine,waypoint)
     return find(self,combine,waypoint)
 end
 
-local release = U.releaseCombine
-function U:releaseCombine(...)
-    if Q.enabled(self) then Q.capture(self) end
-    return release(self,...)
+-- Native turn recovery handles trees and other objects, but its vehicle-block
+-- callback only asks the other driver to move. Reuse that recovery for a
+-- stationary queued trailer without changing the fieldwork destination.
+local combineBlocking = C.onBlockingVehicle
+function C:onBlockingVehicle(vehicle,isBack)
+    if Q.tryHarvesterBypass(self,vehicle,isBack) then return end
+    return combineBlocking(self,vehicle,isBack)
 end
 
+-- Preparation ends here. CP owns marker travel, retries, clearance and the
+-- full-job event consumed by AD. Do not impose a second handover gate.
 local unload = U.startUnloadingTrailers
 function U:startUnloadingTrailers(...)
-    if Q.enabled(self) then return Q.beginExit(self) end
-    return unload(self,...)
-end
-
-local full = U.onTrailerFull
-function U:onTrailerFull(...)
     if Q.enabled(self) then
-        local clear,reason=Q.canFinishExit(self)
-        if not clear then
-            if not Q.owns(self) or self.queueData.operation~='exit' then Q.beginExit(self) end
-            Q.reason(Q.data(self),reason)
-            self:setMaxSpeed(0)
-            return
-        end
+        if Q.owns(self) then Q.release(self) else Q.cancel(self) end
+        local data=Q.data(self)
+        data.operation=nil; data.nativeDeparture=true
+        data.assignment=nil; data.yieldRequests=nil; data.priorityCombine=nil
     end
-    return full(self,...)
+    return unload(self,...)
 end
 
 local last = U.onLastWaypointPassed

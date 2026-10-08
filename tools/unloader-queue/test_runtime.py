@@ -18,28 +18,15 @@ def load_queue(lua, hooks=True):
 
 
 class AutomaticContractTests(native.NativeContractTests):
-    """Run native contracts with automatic coordination and the authorised departure exception."""
+    """Run native contracts with automatic coordination and unchanged native departure."""
     def setUp(self):
         super().setUp()
         self.lua.execute('HeadlandLoopGeometry={}; g_currentMission={time=0}')
         load_queue(self.lua)
 
 
-    def test_departure_returns_to_valid_start_before_handover(self):
-        self.lua.execute('u.combineToUnload=nil; u.invertedStartPositionMarkerNode=1; u:startUnloadingTrailers()')
-        self.assertTrue(self.lua.eval("CpUnloaderQueue.owns(u) and u.queueData.operation=='exit'"))
-        self.assertNotIn('handover', self.lua.eval('result()'))
 
-    def test_baseline_gap_missing_marker_currently_hands_over_midfield(self):
-        # Automatic integration must close this documented native gap without a setting.
-        self.lua.execute('u.combineToUnload=nil; u:startUnloadingTrailers(); u:onTrailerFull()')
-        self.assertNotIn('handover', self.lua.eval('result()'))
-        self.assertTrue(self.lua.eval('CpUnloaderQueue.owns(u)'))
 
-    def test_baseline_gap_failed_return_path_currently_hands_over_midfield(self):
-        self.lua.execute('u.combineToUnload=nil; u:onPathfindingDoneToInvertedGoalPositionMarker(nil,false,nil,false)')
-        self.assertNotIn('handover', self.lua.eval('result()'))
-        self.assertTrue(self.lua.eval('CpUnloaderQueue.owns(u)'))
 
 
 class OwnershipTests(unittest.TestCase):
@@ -75,23 +62,7 @@ class OwnershipTests(unittest.TestCase):
                 self.assertFalse(self.lua.eval('CpUnloaderQueue.owns(u) or CpUnloaderQueue.members[u]~=nil'))
                 self.lua.execute(f'u.{mode}=nil')
 
-    def test_automatic_missing_marker_retains_cp(self):
-        self.lua.execute('''
-            u.combineToUnload=nil
-            u:startUnloadingTrailers()
-            assert(CpUnloaderQueue.owns(u))
-            assert(u.queueData.operation=='exit')
-            u:onTrailerFull()
-        ''')
-        self.assertNotIn('handover', self.lua.eval('result()'))
 
-    def test_automatic_failed_return_never_grants_handover(self):
-        self.lua.execute('''
-            u.combineToUnload=nil
-            u:onPathfindingDoneToInvertedGoalPositionMarker(nil,false,nil,false)
-            assert(CpUnloaderQueue.owns(u) and u.queueData.operation=='exit')
-        ''')
-        self.assertNotIn('handover', self.lua.eval('result()'))
 
     def test_queue_call_uses_native_rear_pathfinder(self):
         self.lua.execute('''
@@ -113,7 +84,8 @@ class OwnershipTests(unittest.TestCase):
 
     def test_exit_is_not_available_to_a_new_native_call(self):
         self.lua.execute('''
-            CpUnloaderQueue.take(u,'exit')
+            CpUnloaderQueue.take(u,'prepare')
+            u.invertedStartPositionMarkerNode=1; u:startUnloadingTrailers()
             assert(not u:isAllowedToBeCalled())
             assert(u:call(c,{})==false)
         ''')
@@ -608,7 +580,7 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(not CpUnloaderQueueWorld.clear(entry,CpUnloaderQueueWorld.poses(entry.model)))
         ''')
 
-    def test_off_field_entry_cannot_waive_obstacles_islands_or_departure_rules(self):
+    def test_off_field_entry_cannot_waive_obstacles_or_islands(self):
         self.lua.execute('''
             v.cpGetFieldPolygon=function()
                 return {{x=-40,z=10},{x=40,z=10},{x=40,z=150},{x=-40,z=150}}
@@ -626,13 +598,6 @@ class EngineBoundaryTests(unittest.TestCase):
             clear,why=CpUnloaderQueueWorld.clear(entry,p)
             assert(not clear and why=='island')
             CpUnloaderQueueWorld.delete(entry)
-            for _,operation in ipairs({'exit'}) do
-                u.queueData.operation=operation
-                local restricted=assert(CpUnloaderQueueWorld.new(u))
-                assert(not restricted.entrance)
-                assert(not CpUnloaderQueueWorld.clear(restricted,CpUnloaderQueueWorld.poses(restricted.model)))
-                CpUnloaderQueueWorld.delete(restricted)
-            end
         ''')
 
     def test_cut_crop_permitted(self):
@@ -748,12 +713,6 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(not search and reason=='destination: outside harvested exit corridor')
         ''')
 
-    def test_headland_handover_requires_tail_inside(self):
-        self.lua.execute('''
-            local data=CpUnloaderQueue.data(u)
-            data.departure={width=10,headlands={{{x=-50,z=0},{x=50,z=0}}}}
-            assert(not CpUnloaderQueue.canFinishExit(u))
-        ''')
 
     def test_new_route_resets_progress_clock_and_retains_validation_mapping(self):
         self.lua.execute('''
@@ -789,7 +748,7 @@ class EngineBoundaryTests(unittest.TestCase):
             local goal=assert(CpUnloaderQueue.target(u))
             assert(goal.z>400 and goal.z<500, 'must prepare behind upcoming centre row')
             local _,actualIx=CpUnloaderQueue.coursePosition(combine)
-            assert(actualIx==5, 'departure capture must retain actual fieldwork position')
+            assert(actualIx==5, 'current position lookup must retain actual fieldwork position')
             assert(combine.course==temporary and course:getCurrentWaypointIx()==5)
             assert(combine.turnContext.turnEndWpIx==51 and combine.state==states.DRIVING_TO_WORK_START_WAYPOINT)
             -- Starting work restores the current working position, even with old turn context.
@@ -824,129 +783,14 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(ix==2)
         ''')
 
-    def test_capture_uses_saved_work_course_and_survives_second_release(self):
-        self.lua.execute('''
-            local course=Course(v,{{x=-50,z=0},{x=0,z=0},{x=50,z=0},
-                {x=0,z=10},{x=0,z=20},{x=0,z=30}},false)
-            course.workWidth=15; course.currentWaypoint=5
-            for i=1,3 do
-                course:getWaypoint(i).attributes:setHeadlandPassNumber(1)
-                course:getWaypoint(i).attributes:setBoundaryId('F')
-            end
-            course:getWaypoint(4).attributes:setRowStart(true)
-            local combine={fieldWorkCourse=course,course={temporary=true}}
-            u.combineToUnload={getIsCpActive=function() return true end,getCpDriveStrategy=function() return combine end}
-            CpUnloaderQueue.capture(u)
-            local saved=assert(u.queueData.departure)
-            assert(#saved.row==2 and saved.row[1].z==10 and saved.row[2].z==20)
-            course.waypoints[4].z=999
-            assert(saved.row[1].z==10)
-            u.combineToUnload=nil; CpUnloaderQueue.capture(u)
-            assert(u.queueData.departure==saved)
-        ''')
 
-    def test_headland_origin_does_not_require_a_previous_centre_row(self):
-        self.lua.execute('''
-            local course=Course(v,{{x=-50,z=0},{x=0,z=0},{x=50,z=0}},false)
-            course.workWidth=15
-            for i=1,3 do
-                course:getWaypoint(i).attributes:setHeadlandPassNumber(1)
-                course:getWaypoint(i).attributes:setBoundaryId('F')
-            end
-            local saved=assert(CpUnloaderQueue.departureFor(course,2))
-            assert(saved.headlandOrigin and #saved.row==1 and #saved.headlands==1)
-            course:getWaypoint(1).attributes:setBoundaryId('I1')
-            course:getWaypoint(2).attributes:setBoundaryId('I1')
-            course:getWaypoint(3).attributes:setBoundaryId('I1')
-            assert(not CpUnloaderQueue.departureFor(course,2))
-        ''')
 
-    def test_ad_connection_requires_correct_headland_and_direction(self):
-        self.lua.execute('''
-            local nodes={{id=1,x=0,z=0,out={2}},{id=2,x=0,z=10,out={}}}
-            FS25_AutoDrive={ADGraphManager={getWayPointById=function(_,i) return nodes[i] end,
-                getWayPointsInRange=function() return {nodes[1]} end,
-                pathFromTo=function() return nodes end}}
-            v.ad={stateModule={getMode=function() return 2 end,getSecondWayPoint=function() return 2 end}}
-            local saved={width=10,headlands={{{x=-50,z=0},{x=50,z=0}}}}
-            assert(CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
-            assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=math.pi},saved))
-            saved.headlands={{{x=-50,z=30},{x=50,z=30}}}
-            assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
-        ''')
 
-    def ad_exit_network(self):
-        # AD 3.0.1.2 PathCalculation.lua reconstructs a non-trivial route from
-        # the destination back to (but excluding) the requested start node.
-        self.lua.execute('''
-            nodes={{id=1,x=0,z=0,out={2}},{id=2,x=0,z=10,out={3}},
-                {id=3,x=0,z=20,out={}}}
-            adPath={nodes[2],nodes[3]}; destination=3
-            FS25_AutoDrive={ADGraphManager={getWayPointById=function(_,i) return nodes[i] end,
-                getWayPointsInRange=function() return {1} end,
-                pathFromTo=function(_,start,goal) assert(start==1 and goal==destination); return adPath end}}
-            v.ad={stateModule={getMode=function() return 2 end,
-                getSecondWayPoint=function() return destination end}}
-            saved={width=20,row={{x=0,z=80},{x=0,z=100}},position={x=0,z=100},
-                headlands={{{x=0,z=-60,t=0},{x=0,z=60,t=0}}}}
-            CpUnloaderQueue.data(u).departure=saved
-        ''')
 
-    def test_ad_route_omitting_start_provides_exit_site_and_heading(self):
-        self.ad_exit_network()
-        self.lua.execute('''
-            local node,heading,site=CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved)
-            assert(node==nodes[1] and heading==0 and site.x==0 and site.z==0)
-            local target=assert(CpUnloaderQueue.exitTarget(u))
-            assert(target.x==0 and target.z==0 and target.t==0)
-            assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=math.pi},saved))
-        ''')
 
-    def test_ad_single_hop_and_start_included_are_both_supported(self):
-        self.ad_exit_network()
-        self.lua.execute('''
-            destination=2; adPath={nodes[2]}
-            assert(CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
-            adPath={nodes[1],nodes[2]}
-            assert(CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
-        ''')
 
-    def test_ad_route_must_connect_every_directed_edge_and_reach_destination(self):
-        self.ad_exit_network()
-        self.lua.execute('''
-            for _,path in ipairs({{}, {nodes[1]}, {nodes[2]}, {nodes[3]}, {nodes[2],nodes[1],nodes[3]}}) do
-                adPath=path
-                assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
-            end
-            adPath={nodes[2],nodes[3]}; nodes[2].out={}
-            assert(not CpUnloaderQueue.connectedNode(u,{x=0,z=0,t=0},saved))
-        ''')
 
-    def test_ad_native_shape_allows_handover_only_after_whole_train_clears(self):
-        self.ad_exit_network()
-        self.lua.execute('''
-            local handedOver=0
-            u.onTrailerFull=function() handedOver=handedOver+1 end
-            assert(CpUnloaderQueue.canFinishExit(u))
-            CpUnloaderQueue.finishExit(u)
-            assert(handedOver==1)
-            -- The tractor is on this shorter band, but its trailer is not.
-            saved.headlands={{{x=0,z=-3,t=0},{x=0,z=60,t=0}}}
-            assert(not CpUnloaderQueue.canFinishExit(u))
-            CpUnloaderQueue.finishExit(u)
-            assert(handedOver==1)
-        ''')
 
-    def test_ad_connected_route_does_not_waive_crop_or_collision_checks(self):
-        self.ad_exit_network()
-        self.lua.execute('''
-            densityStates={[8]=100}
-            assert(not CpUnloaderQueue.canFinishExit(u))
-            densityStates={[10]=100}; collision=1
-            assert(not CpUnloaderQueue.canFinishExit(u))
-            collision=0
-            assert(CpUnloaderQueue.canFinishExit(u))
-        ''')
 
 
 if __name__=='__main__': unittest.main()

@@ -109,14 +109,13 @@ class YieldTests(unittest.TestCase):
             assert(u.queueData.operation=='prepare' and not u.queueData.search)
         ''')
 
-    def test_exit_resumes_after_clearance_and_keeps_departure(self):
+    def test_preparation_resumes_after_clearance(self):
         self.lua.execute('''
-            place(25,0,0); Q.take(u,'exit')
-            local departure={row={}}; u.queueData.departure=departure
+            place(25,0,0); Q.take(u,'prepare')
             nativeRequest(); c.near=false
             Q.yieldTarget(u,true); g_currentMission.time=2100
             Q.yieldTarget(u,true)
-            assert(u.queueData.operation=='exit' and u.queueData.departure==departure)
+            assert(u.queueData.operation=='prepare')
         ''')
 
     def test_stopped_harvester_releases_yield_without_stale_tick_state(self):
@@ -126,16 +125,16 @@ class YieldTests(unittest.TestCase):
             assert(u.queueData.operation=='prepare')
         ''')
 
-    def test_completed_yield_route_keeps_exit_until_live_clearance_is_confirmed(self):
+    def test_completed_yield_route_waits_for_live_clearance_before_preparation(self):
         self.lua.execute('''
-            place(25,0,0); Q.take(u,'exit'); nativeRequest()
+            place(25,0,0); Q.take(u,'prepare'); nativeRequest()
             local data=u.queueData
             data.path={{x=25,z=0,t=0}}; data.course={}; u.course=data.course
             assert(Q.onLast(u) and data.operation=='yield')
             Q.yieldTarget(u,true); assert(not data.yieldRequests[harvester].clearSince)
             c.near=false; g_currentMission.time=1000; Q.yieldTarget(u,true)
             g_currentMission.time=3100; Q.tick(u)
-            assert(data.operation=='exit')
+            assert(data.operation=='prepare')
         ''')
 
     def test_unavailable_envelope_does_not_claim_clearance(self):
@@ -156,13 +155,13 @@ class YieldTests(unittest.TestCase):
 
     def test_two_harvesters_must_both_clear(self):
         self.lua.execute('''
-            place(25,0,0); Q.take(u,'exit'); nativeRequest()
+            place(25,0,0); Q.take(u,'prepare'); nativeRequest()
             local second,other=makeHarvester(30,0,0); other.near=true
             assert(Q.priority(u,second))
             harvester.active=false; Q.yieldTarget(u,true)
             assert(u.queueData.operation=='yield')
             second.active=false; Q.yieldTarget(u,true)
-            assert(u.queueData.operation=='exit')
+            assert(u.queueData.operation=='prepare')
         ''')
 
     def test_header_sweep_follows_live_route_without_modifying_it(self):

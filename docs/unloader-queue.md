@@ -1,3 +1,39 @@
+## Current contract - build 3013 (8 October 2026)
+
+This revision supersedes the custom row/headland exit and AD-node handover
+requirements recorded below. The user explicitly requested native CP handover.
+At each tractor's configured full threshold (not a hard-coded 85%), preparation
+ends and CP owns departure: reverse clearance where applicable, native return
+marker pathfinding, then the native full-job/onCpFull event. With no marker or
+failed marker path, CP's original direct event fallback applies. AD owns its
+field-exit and delivery route. The queue neither selects AD nodes nor gates that
+event. An accepted native departure cannot be reclaimed for preparation/yield.
+
+The same build includes the requested parked-trailer bypass during a persistent
+forward blockage in a combine turn. It uses the existing turn context and native
+RecoveryTurn implement preparation. Only a stopped, unassigned queue trailer
+below its departure cutoff can be held while the combine passes. Working rows,
+reverse blockage, active searches and special callback/self-unload turns retain
+native handling. Another harvester's yield request is not overridden.
+
+The bypass uses CP's full Hybrid A* with native fruit penalties and vehicle/header
+collision constraints, avoiding the fast middle path's penalty-only smoothing.
+The final course, including native alignment/reversing adjustments, is checked
+again at 0.5 m / 3 degree intervals. No checked route, invalid final clearance or
+blocked recovery stops the job rather than using an unchecked calculated turn
+or skipping to the next row. Holds expire with an explicit recovery failure after
+120 seconds; normal completion, cancellation and full/manual departure release
+both references. Existing combine fieldwork courses are not rewritten.
+
+Validation: native marker/no-marker/failed-path handover, actual CP job event
+mapping, per-tractor thresholds, ownership/cancellation, native reverse clearance,
+real RecoveryTurn lifecycle, whole-header detour through CP's actual planner,
+failed/final-invalid routes, active versus completed searches and hold cleanup.
+The installed AD 3.0.1.2 event handler is exercised read-only with mocked vehicle
+services. These are offline checks, not acceptance of the live save or physics.
+The obsolete custom-exit journey tests are replaced by native-departure tests
+because their protected behaviour is deliberately removed by this request.
+
 # Unloader queue restart
 
 The former implementation is preserved on

@@ -40,15 +40,15 @@ class DepartureThresholdTests(unittest.TestCase):
             fill=27200; u.combineToUnload=nil
             u.checkForTrailerToUnloadTo={get=function() return false end}
             Q.tick(u)
-            assert(Q.owns(u) and u.queueData.operation=='exit')
+            assert(not Q.owns(u) and u.queueData.nativeDeparture)
         ''')
-        self.assertNotIn('handover', self.lua.eval('result()'))
+        self.assertIn('handover', self.lua.eval('result()'))
 
     def test_prepare_at_threshold_starts_exit(self):
         self.lua.execute('''
             Q.take(u,'prepare'); fill=27200; u.combineToUnload=nil
             assert(not u:isAllowedToBeCalled() and not u:call(c,{}))
-            Q.tick(u); assert(u.queueData.operation=='exit')
+            Q.tick(u); assert(not Q.owns(u) and u.queueData.nativeDeparture)
         ''')
 
     def test_active_transfer_uses_native_reverse_clearance_at_configured_cutoff(self):
@@ -82,19 +82,18 @@ class DepartureThresholdTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.lua.execute(f'fill=27200; u.{mode}=true; assert(not u:getAllTrailersFull()); u.{mode}=nil')
 
-    def test_full_yield_stays_yielding_until_clear(self):
+    def test_fullness_preempts_queue_yield_with_native_departure(self):
         self.lua.execute('''
             u.combineToUnload=nil; Q.take(u,'yield'); fill=27200
             Q.yieldTarget=function() return nil end
-            Q.tick(u); assert(u.queueData.operation=='yield')
-            Q.resumeAfterYield(u); Q.tick(u); assert(u.queueData.operation=='exit')
+            Q.tick(u); assert(not Q.owns(u) and u.queueData.nativeDeparture)
         ''')
 
     def test_manual_departure_below_cutoff_is_preserved(self):
         self.lua.execute('''
             fill=1000; u.combineToUnload=nil
             u.isDriveUnloadNowRequested=function() return true end
-            Q.tick(u); assert(u.queueData.operation=='exit')
+            Q.tick(u); assert(not Q.owns(u) and u.queueData.nativeDeparture)
         ''')
 
 
