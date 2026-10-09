@@ -1,3 +1,42 @@
+## Current contract - build 3015 (9 October 2026)
+
+An empty trailer must return from successful clearance to the callable queue.
+Yield candidates now include straight forward moves of 10, 20, 40 and 60 metres,
+as well as existing side passes and reversals. Every candidate still requires
+whole-train, field, crop and obstacle clearance; the shortest clearance time wins.
+A tractor held stationary for a harvester detour is excluded from allocation and
+native calls until the hold ends. Fullness/manual departure retains precedence.
+
+The live header/body guard also covers DRIVING_TO_WORK_START_WAYPOINT. Before
+implement lowering starts, a stationary obstruction can initiate native recovery
+using the existing row-start context. It searches a local forward detour to a
+point at least 60 metres (or six turning radii) ahead on the existing temporary
+route, rather than searching hundreds of metres to the final row. An exact
+analytic seam rejoins the original route; its straight entry and lowering markers
+remain intact. The new detour and its exact join are collision checked before installation;
+the unchanged connector tail remains under the live braking-distance guard. Native recovery restores listeners and resumes the saved fieldwork
+course at its original destination. Failed detours request yield and retain the
+existing bounded clearance wait; they never release an obstructing trailer for
+an unrelated call or ignore a collision. Working rows and AD handover are unchanged.
+
+Evidence: 3014 log, 9 October 09:09:36.145, CR11/318 accepted a connector entry.
+At 09:09:44.816 proximity stopped it 1.4 metres from T7.300/322, within the checked
+analytic tail. At 09:09:51.817 tractor 322 entered QUEUE_YIELD; its escape search
+reported destination: field boundary. At 11:55 it was still yielding and CR11/319,
+at 95.01 percent, saw it as busy. Other tractors had stopped CP with NEEDS_UNLOADING
+(323/324) or ERROR_NO_PATH_FOUND (325). The turn-only guard/bypass did not cover
+this connector phase. No log evidence establishes that 3014 changed the original
+connector selection; tight path validation versus live tracking remains a live
+validation concern, now covered by the predictive guard and checked recovery.
+
+Regression coverage adds a narrow-headland forward escape through the real queue
+search, return to callable preparation, work-start header guarding, native recovery
+completion/listener restoration, protection of a held trailer against competing
+calls, failed-detour yield and unchanged-obstacle retry suppression, and a native
+planner detours that locally rejoin routes with 475-metre and 2.5-kilometre final
+destinations without treating the unchanged tail as a bounded short turn.
+Offline checks do not establish physical steering or acceptance of the live save.
+
 ## Current contract - build 3014 (9 October 2026)
 
 New turn routes must be checked for parked vehicles before the harvester starts

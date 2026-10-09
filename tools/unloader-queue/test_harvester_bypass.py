@@ -20,9 +20,10 @@ class HarvesterBypassTests(unittest.TestCase):
         for name in ('AIDriveStrategyUnloadCombine','AIDriveStrategyCombineCourse'):
             self.lua.execute((ROOT/f'scripts/ai/strategies/{name}.lua').read_text())
         source=(ROOT/'scripts/ai/strategies/AIDriveStrategyFieldWorkCourse.lua').read_text()
-        start=source.index('function AIDriveStrategyFieldWorkCourse:startRecoveryTurn(')
-        end=source.index('\nend',start)+4
-        self.lua.execute(source[start:end])
+        for method in ('startRecoveryTurn', 'resumeFieldworkAfterTurn'):
+            start=source.index('function AIDriveStrategyFieldWorkCourse:'+method+'(')
+            end=source.index('\nend',start)+4
+            self.lua.execute(source[start:end])
         runtime.load_queue(self.lua)
         self.lua.execute('''
             Q=CpUnloaderQueue; g_currentMission.time=10000
@@ -116,6 +117,79 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_inactive_old_pathfinder_does_not_disable_bypass(self):
         self.lua.execute('c.pathfinder={isActive=function() return false end}; assert(Q.tryHarvesterBypass(c,tv,false))')
 
+    def test_blocked_work_starter_recovers_to_same_row_start_and_releases_queue(self):
+        self.lua.execute('''
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}
+            c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
+            starter={turnContext=context,states={DRIVING_TO_ROW={},APPROACHING_ROW={}}}
+            starter.state=starter.states.DRIVING_TO_ROW; c.workStarter=starter
+            Q.take(u,'yield'); u.queueData.yieldRequests={[hv]={}}
+            assert(not u:isAllowedToBeCalled())
+            c:onBlockingVehicle(tv,false)
+            assert(c.state==c.states.TURNING and not c.workStarter)
+            assert(c.aiTurn.turnContext==context and c.course==original)
+            assert(Q.holdForHarvesterBypass(u) and not yielded)
+            assert(not u:isAllowedToBeCalled() and not u:call(hv,nil))
+            c.aiTurn:getDriveData(33)
+            assert(calls==1 and args[3]==target and args[4]==-4)
+            c.callback(c.callbackOwner,{{x=0,y=0},{x=10,y=-10},{x=20,y=-20}})
+            assert(c.aiTurn.state==c.aiTurn.states.TURNING and context.turnEndWpIx==953)
+            -- Exercise native turn completion, listener restoration and saved
+            -- fieldwork resumption, not just a mocked state change.
+            c.fieldWorkCourse=original
+            original.getNextFwdWaypointIxFromVehiclePosition=function(_,ix)
+                assert(ix==953); return 1,true
+            end
+            c.ppc.setNormalLookaheadDistance=function() end
+            c.ppc.isReversing=function() return false end
+            c.aiTurn.getLowerImplementNode=function() return 0 end
+            context.shouldPlowBeOnTheLeft=function() return false end
+            c.startWaitingForLower=function(self) self.state=self.states.WORKING end
+            c.lowerImplements=function() lowered=true end
+            c.startCourse=function(self,course,ix) assert(course==original and ix==1); self.course=course end
+            c.resumeFieldworkAfterTurn=AIDriveStrategyFieldWorkCourse.resumeFieldworkAfterTurn
+            restored=false; c.aiTurn:resumeFieldworkAfterTurn(953)
+            assert(restored and lowered and c.course==original)
+            assert(not Q.holdForHarvesterBypass(u))
+            assert(u:isAllowedToBeCalled() and not u.queueData.yieldRequests)
+        ''')
+
+    def test_work_starter_already_lowering_is_not_replaced_by_recovery(self):
+        self.lua.execute('''
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}
+            c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
+            starter={turnContext=context,states={DRIVING_TO_ROW={},APPROACHING_ROW={}}}
+            starter.state=starter.states.APPROACHING_ROW; c.workStarter=starter
+            assert(not Q.tryHarvesterBypass(c,tv,false))
+            assert(c.workStarter==starter and c.aiTurn==old and c.course==original)
+        ''')
+
+    def test_failed_connector_detour_releases_held_trailer_to_yield(self):
+        self.lua.execute('''
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}
+            c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
+            local starter={turnContext=context,states={DRIVING_TO_ROW={}}}
+            starter.state=starter.states.DRIVING_TO_ROW; c.workStarter=starter
+            assert(Q.tryHarvesterBypass(c,tv,false))
+            c.aiTurn:getDriveData(33); c.callback(c.callbackOwner,nil)
+            assert(yielded and c.queueBypass.waiting and not u.queueData.bypass)
+            assert(u.queueData.operation=='yield' and not u:isAllowedToBeCalled())
+            for i=1,10 do g_currentMission.time=g_currentMission.time+1000; c.aiTurn:getDriveData(33) end
+            assert(calls==1,'unchanged blocked connector must not start repeated searches')
+        ''')
+
+    def test_work_start_travel_has_live_header_guard_without_full_route_stop(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}
+            c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
+            assert(Q.guardHarvesterTurn(c,10)==0 and bypassCalls==1)
+            c.queueTurnGuard=nil
+            tv.rootNode.z=75
+            assert(Q.guardHarvesterTurn(c,10)==10)
+            assert(not c.queueTurnPreflight and not c.queueRecoveryFailure)
+        ''')
+
     def test_real_native_planner_routes_header_around_parked_rig(self):
         self.lua.execute('''
             CpUtil.getDefaultCollisionFlags=function() return 334339 end
@@ -170,6 +244,53 @@ class HarvesterBypassTests(unittest.TestCase):
                 self.setUp()
                 self.lua.execute(scenario)
                 self.test_real_native_planner_routes_header_around_parked_rig()
+
+    def test_real_planner_keeps_distant_connector_target_after_local_block(self):
+        self.lua.execute('''
+            targetZ=475; forceForward=true
+            c.course=Course(hv,{{x=0,z=0},{x=0,z=20},{x=0,z=60},
+                {x=0,z=120},{x=0,z=240},{x=0,z=475}},true)
+            original=c.course
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}
+            c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
+            local starter={turnContext=context,states={DRIVING_TO_ROW={}}}
+            starter.state=starter.states.DRIVING_TO_ROW; c.workStarter=starter
+        ''')
+        self.test_real_native_planner_routes_header_around_parked_rig()
+        self.lua.execute('''
+            local _,_,z=installed:getWaypointPosition(installed:getNumberOfWaypoints())
+            assert(z>460 and c.aiTurn.queueConnectorCourse==original)
+            assert(original:getNumberOfWaypoints()==6)
+            assert(c.aiTurn.queueConnectorJoin==4,'search must rejoin locally, not target 475m away')
+            assert(c.aiTurn.queueBypassValidationEnd<installed:getNumberOfWaypoints())
+        ''')
+        self.install_guard_geometry()
+        self.lua.execute('''
+            c.queueTurnPreflight={course=installed,unknown=true,attempts=2,checked=0}
+            Q.yieldArea=function(_,horizon,limit)
+                assert(not limit,'long connector must not receive full-turn preflight')
+                return function() return false end
+            end
+            assert(Q.guardHarvesterTurn(c,10)==10 and not c.queueTurnPreflight)
+        ''')
+
+    def test_unchanged_long_connector_tail_does_not_exhaust_local_validation(self):
+        self.lua.execute('''
+            targetZ=2500; forceForward=true
+            local points={{x=0,z=0},{x=0,z=20},{x=0,z=60},{x=0,z=120}}
+            for z=125,2500,5 do points[#points+1]={x=0,z=z} end
+            c.course=Course(hv,points,true); original=c.course
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}
+            c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
+            local starter={turnContext=context,states={DRIVING_TO_ROW={}}}
+            starter.state=starter.states.DRIVING_TO_ROW; c.workStarter=starter
+        ''')
+        self.test_real_native_planner_routes_header_around_parked_rig()
+        self.lua.execute('''
+            local _,_,z=installed:getWaypointPosition(installed:getNumberOfWaypoints())
+            assert(z==2500 and c.aiTurn.queueBypassValidationEnd<200)
+            assert(original:getNumberOfWaypoints()==480)
+        ''')
 
     def test_live_pathfinder_keeps_ownership(self):
         self.lua.execute('c.pathfinder={isActive=function() return true end}; assert(not Q.tryHarvesterBypass(c,tv,false)); assert(c.aiTurn==old)')

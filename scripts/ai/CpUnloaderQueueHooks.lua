@@ -21,7 +21,7 @@ end
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
-    if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' end
+    if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' and not self.queueData.bypass end
     return allowed(self)
 end
 
@@ -29,7 +29,7 @@ local call = U.call
 function U:call(combine,waypoint)
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then
-        if self.queueData.operation~='prepare' then return false end
+        if self.queueData.operation~='prepare' or self.queueData.bypass then return false end
         Q.release(self)
     end
     return call(self,combine,waypoint)

@@ -13,8 +13,19 @@ function Q.generateHarvesterBypass(turn)
     local x,z,t=PathfinderUtil.getNodePositionAndDirection(turn.vehicle:getAIDirectionNode(),0,0)
     local start=State3D(x,-z,CpMathUtil.angleFromGame(t))
     x,z,t=PathfinderUtil.getNodePositionAndDirection(target,0,offset)
+    if turn.queueConnectorCourse then
+        local course=turn.queueConnectorCourse
+        local ix=course:getNextWaypointIxWithinDistance(turn.queueConnectorIx,math.max(60,6*turn.turningRadius))
+        if ix and ix<course:getNumberOfWaypoints() then
+            turn.queueConnectorJoin=ix
+            x,_,z=course:getWaypointPosition(ix); t=course:getWaypointYRotation(ix)
+        end
+    end
     local goal=State3D(x,-z,CpMathUtil.angleFromGame(t))
     local context=PathfinderContext(turn.vehicle):useFieldNum(CpFieldUtil.getFieldNumUnderVehicle(turn.vehicle))
+    if turn.queueConnectorCourse and turn.settings.avoidFruit then
+        context:ignoreFruit(not turn.settings.avoidFruit:getValue())
+    end
     context:offFieldPenalty(turn.driveStrategy:isTurnOnFieldActive() and 10 or context._offFieldPenalty)
     if not turn.vehicle.spec_combine then context._fieldworkBoundary=FieldworkBoundary.forVehicle(turn.vehicle,turn.workWidth) end
     local constraints=PathfinderConstraints(context)
@@ -40,7 +51,7 @@ function Q.validateHarvesterBypass(turn)
     local course,constraints=turn.turnCourse,turn.queueBypassConstraints
     if not course or not constraints then return false end
     local previous,count=nil,0
-    for i=1,course:getNumberOfWaypoints() do
+    for i=1,turn.queueBypassValidationEnd or course:getNumberOfWaypoints() do
         local x,_,z=course:getWaypointPosition(i)
         local reverse=(course:isReverseAt(i) and not course:switchingToForwardAt(i)) or course:switchingToReverseAt(i)
         local t=course:getWaypointYRotation(i)+(reverse and math.pi or 0)
@@ -69,11 +80,34 @@ end
 -- install its course until the final geometry has passed validation.
 function Q.finishHarvesterBypass(turn,path)
     turn.turnCourse=Course(turn.vehicle,CpMathUtil.pointsToGameInPlace(path),true)
-    turn.turnCourse:setUseTightTurnOffsetForLastWaypoints(15)
-    local ending=turn.turnContext:appendPathfinderEndingTurnCourse(turn.turnCourse,nil)
-    turn.turnCourse:setUseTightTurnOffsetForLastWaypoints(ending)
-    turn.turnCourse:adjustForReversing(math.max(1,-AIUtil.getDirectionNodeToReverserNodeOffset(turn.vehicle)))
-    TurnManeuver.setLowerImplements(turn.turnCourse,ending,true)
+    if turn.queueConnectorJoin then
+        -- Only search the local detour, then rejoin the existing work starter.
+        -- Resolve native solver tolerance with an exact checked seam. Its tail
+        -- already contains the original straight entry and implement markers.
+        local course,ix=turn.queueConnectorCourse,turn.queueConnectorJoin
+        local cut=math.max(1,turn.turnCourse:getPreviousWaypointIxWithinDistance(
+            turn.turnCourse:getNumberOfWaypoints(),2*turn.turningRadius) or 1)
+        local start=PathfinderUtil.getWaypointAsState3D(turn.turnCourse:getWaypoint(cut),0,0)
+        local goal=PathfinderUtil.getWaypointAsState3D(course:getWaypoint(ix),0,0)
+        local tail,length=PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(),start,goal,turn.turningRadius)
+        if not tail or length>6*turn.turningRadius+5 then return false end
+        local joined=Course.createFromAnalyticPath(turn.vehicle,tail,true)
+        if cut>1 then
+            local prefix=turn.turnCourse:copy(turn.vehicle,1,cut-1)
+            prefix:append(joined); joined=prefix
+        end
+        -- Validate the changed detour and its seam; the unchanged, potentially
+        -- kilometre-long connector remains under the live braking guard.
+        turn.queueBypassValidationEnd=joined:getNumberOfWaypoints()+1
+        joined:append(course:copy(turn.vehicle,ix+1))
+        turn.turnCourse=joined
+    else
+        turn.turnCourse:setUseTightTurnOffsetForLastWaypoints(15)
+        local ending=turn.turnContext:appendPathfinderEndingTurnCourse(turn.turnCourse,nil)
+        turn.turnCourse:setUseTightTurnOffsetForLastWaypoints(ending)
+        turn.turnCourse:adjustForReversing(math.max(1,-AIUtil.getDirectionNodeToReverserNodeOffset(turn.vehicle)))
+        TurnManeuver.setLowerImplements(turn.turnCourse,ending,true)
+    end
     if not Q.validateHarvesterBypass(turn) then return false end
     turn.ppc:setCourse(turn.turnCourse)
     turn.ppc:initialize(1)
@@ -103,17 +137,22 @@ end
 -- Called only after native proximity has reported a persistent vehicle block.
 -- Retain CP's target, implement preparation, pathfinder and collision geometry.
 function Q.tryHarvesterBypass(combine,vehicle,isBack)
-    local turn=combine.aiTurn
-    if isBack or not combine.states or combine.state~=combine.states.TURNING or not turn
+    if not combine.states then return false end
+    local connector=combine.states.DRIVING_TO_WORK_START_WAYPOINT and
+        combine.state==combine.states.DRIVING_TO_WORK_START_WAYPOINT
+    local turn=connector and combine.workStarter or combine.aiTurn
+    if isBack or (not connector and combine.state~=combine.states.TURNING) or not turn
             or not combine.turnContext or turn.turnContext~=combine.turnContext
-            or turn.callbackFunction or not turn.startRecoveryTurn then return false end
+            or turn.callbackFunction or not combine.startRecoveryTurn
+            or (not connector and not turn.startRecoveryTurn) then return false end
     local active=combine.queueBypass
     if active and active.turn==turn then
         if active.vehicle~=vehicle then return false end
         if turn.state==turn.states.TURNING then Q.waitForHarvesterClearance(active,'live route obstructed') end
         return true
     end
-    if turn.state~=turn.states.TURNING or (combine.pathfinder and combine.pathfinder:isActive())
+    local driving=connector and turn.states.DRIVING_TO_ROW or turn.states.TURNING
+    if turn.state~=driving or (combine.pathfinder and combine.pathfinder:isActive())
             or (combine.pathfinderController and combine.pathfinderController.pathfinder) then return false end
     local driver=vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
     local data=driver and driver.queueData
@@ -130,11 +169,24 @@ function Q.tryHarvesterBypass(combine,vehicle,isBack)
     local time=g_currentMission.time
     if combine.queueBypassAttempt and time-combine.queueBypassAttempt<15000 then return false end
     combine.queueBypassAttempt=time
-    turn:startRecoveryTurn(combine.turningRadius)
+    if connector then
+        -- StartRowOnly owns the same row-start context but does not register a
+        -- turn proximity listener. Recover to that exact destination through
+        -- the strategy, retaining the saved fieldwork course and straight entry.
+        if not combine:startRecoveryTurn(combine.turningRadius) then return false end
+        combine.workStarter=nil
+    else
+        turn:startRecoveryTurn(combine.turningRadius)
+    end
     local recovery=combine.aiTurn
     if recovery==turn then return false end
     local bypass={turn=recovery,vehicle=vehicle,driver=driver,combine=combine,untilTime=time+120000,
         blockedCourse=combine.ppc:getCourse(),blockedIx=combine.ppc:getRelevantWaypointIx()}
+    if connector then
+        recovery.queueConnectorCourse=bypass.blockedCourse
+        recovery.queueConnectorIx=bypass.blockedIx
+        recovery.queueForwardOnly=true
+    end
     if driver then
         Q.take(driver,'prepare')
         data.yieldRequests=nil; data.priorityCombine=nil; data.bypass=bypass
@@ -219,9 +271,13 @@ function Q.guardHarvesterTurn(combine,speed)
         if bypass.driver then Q.clearHarvesterBypass(bypass.driver) end
         combine.queueBypass=nil
     end
-    if combine.state~=combine.states.TURNING then
+    local connector=combine.states.DRIVING_TO_WORK_START_WAYPOINT and
+        combine.state==combine.states.DRIVING_TO_WORK_START_WAYPOINT
+    if combine.state~=combine.states.TURNING and not connector then
         combine.queueTurnGuard=nil; combine.queueTurnPreflight=nil; return speed
     end
+    local longConnector=connector or (combine.aiTurn and combine.aiTurn.queueConnectorCourse)
+    if longConnector then combine.queueTurnPreflight=nil end
     local time=g_currentMission.time
     local guard=combine.queueTurnGuard
     local course=combine.ppc:getCourse()
@@ -229,7 +285,9 @@ function Q.guardHarvesterTurn(combine,speed)
         guard={course=course,checked=time}; combine.queueTurnGuard=guard
         local origin=W.pose(combine.vehicle:getAIDirectionNode())
         local preflight=combine.queueTurnPreflight
-        local newCourse=combine.aiTurn and combine.aiTurn.turnCourse==course and
+        -- Long work-start routes use the live braking horizon. Full-turn
+        -- preflight belongs only to a newly installed, bounded row manoeuvre.
+        local newCourse=not longConnector and combine.aiTurn and combine.aiTurn.turnCourse==course and
             (not preflight or preflight.course~=course)
         if newCourse then
             preflight={course=course,attempts=1,checked=time}; combine.queueTurnPreflight=preflight
@@ -481,6 +539,15 @@ function Q.yieldTarget(driver,checkOnly)
         return true
     end
     local choices={}
+    -- A rig parallel to a narrow headland may only need to pull forward.
+    -- Sideways targets can all be outside the field and reversing can keep
+    -- its trailer in the header's swept area. Validate these like every other
+    -- candidate, including the trailer, crop and live obstacle checks.
+    for _,length in ipairs({10,20,40,60}) do
+        local forward=G.point({x=here.x,z=here.z,heading=here.t},0,length)
+        forward.t=here.t; forward.accept=accepts; forward.clearance=corridor
+        choices[#choices+1]=forward
+    end
     for _,lateralSide in ipairs({side,-side}) do
         local p=G.point({x=here.x,z=here.z,heading=here.t},lateralSide*(width/2+8),
             math.max(40,3*driver.turningRadius))
