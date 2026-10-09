@@ -342,34 +342,6 @@ class YieldTests(unittest.TestCase):
             assert(data.operation=='prepare' and data.parkedGoal==parking)
         ''')
 
-    def test_narrow_headland_straight_escape_releases_empty_trailer_for_call(self):
-        self.lua.execute('''
-            -- Sideways goals lie outside this harvested strip; reversing puts
-            -- the trailer beyond its end. Only pulling forward clears it.
-            harvester,c,header=makeHarvester(-12,0,math.pi/2); c.near=true
-            c.course=Course(harvester,{{x=-12,z=0},{x=0,z=0},{x=15,z=0}},true)
-            v.cpGetFieldPolygon=function()
-                return {{x=-4,z=-15},{x=4,z=-15},{x=4,z=100},{x=-4,z=100}}
-            end
-            includeHarvesterCollision(); Q.take(u,'prepare'); nativeRequest()
-            local goal=assert(Q.yieldTarget(u)); Q.request(u,goal)
-            local data=u.queueData; local done,path,reason
-            for i=1,30000 do
-                done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
-                if done then break end
-            end
-            assert(done and path,reason or 'no straight escape')
-            assert(not path.reverse and math.abs(path.goal.x)<.01 and path.goal.z>20)
-            local poses=W.poses(data.world.model)
-            for i=2,#path do
-                poses=H.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
-            end
-            place(poses[1].x,poses[1].z,poses[1].t)
-            Q.startRoute(data,path); Q.onLast(u); c.near=false
-            Q.yieldTarget(u,true); g_currentMission.time=2100; Q.yieldTarget(u,true)
-            assert(data.operation=='prepare' and u:isAllowedToBeCalled())
-        ''')
-
     def test_unavailable_geometry_holds_without_repeating_two_messages(self):
         self.lua.execute('''
             local messages={}

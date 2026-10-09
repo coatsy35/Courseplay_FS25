@@ -1,3 +1,32 @@
+## Current contract - build 3018: exact restoration of 3013 (9 October 2026)
+
+The user confirmed build 3013 works at the tested map location and explicitly
+requested restoring that implementation. All runtime files are restored to
+commit 5c9734c9d4a7f90e7c9024e2a995c0e4142170d6. This removes the runtime
+changes in 3014 through 3017, including the additional turn envelope, broader
+parked-vehicle recovery, connector recovery and direct-turn attempts. The
+matching 3013 tests and qualification checks are restored with that runtime.
+Later commits and packages remain available; no history is rewritten.
+
+The new release is qualified with --match-release against the retained 3013 ZIP.
+Its inventory and every entry must match byte for byte except the modDesc.xml
+version. This is an exact restoration, not a new manoeuvre implementation, and
+does not claim to solve other limitations which existed in 3013.
+
+Every future release requires a distinct clean commit and a full-commit-SHA
+folder below dist/unloader-coordinator/history. The ZIP filename remains
+FS25_Courseplay_UnloaderCoordinatorTest.zip. build.json records version, commit
+and SHA-256; restored releases also record the reference ZIP SHA-256. Publishing
+a second release for the same commit or reusing a version is rejected. Previous
+numbered releases have been copied to their original commit folders and hash
+verified; legacy numbered folders remain intact so existing links still work.
+
+The running 3017 log was preserved before restoration. It showed local entries
+rejected for native clearance near the starting pose, forward variants rejected
+for crop, and the subsequently accepted full route immediately intercepted by
+the added parked-trailer recovery. These changes are removed by this rollback;
+no further changes to CP behaviour are included.
+
 ## Current contract - build 3017 (9 October 2026)
 
 Parked-vehicle avoidance must not take ownership of native row finishing or

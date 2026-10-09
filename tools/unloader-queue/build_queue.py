@@ -56,7 +56,7 @@ def check_connector_entry():
     pattern = r' *-- BEGIN authorised harvester connector entry\n.*? *-- END authorised harvester connector entry\n'
     additions = re.findall(pattern, actual, re.S)
     if len(additions) != 3 or hashlib.sha256(''.join(additions).encode()).hexdigest() != (
-            '44f6f2149bc9fc4254d82b8e5c74f2c61ed4383b0892c177c2be552b9d732a52'):
+            '303787a683a82e01ce4eef9085a6cec33cabbf92efc5717ee881cfac58f25d90'):
         raise RuntimeError('Unreviewed harvester connector entry change')
     if re.sub(pattern, '', actual, flags=re.S) != expected:
         raise RuntimeError('Native fieldwork changed outside authorised connector entry')
@@ -97,7 +97,7 @@ def check_queue(packager):
     methods = set(re.findall(r'function ([UC]):([A-Za-z]+)\(', hooks))
     expected = {('U', name) for name in ('update', 'getDriveData', 'isAllowedToBeCalled', 'call',
         'startUnloadingTrailers', 'onLastWaypointPassed',
-        'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine', 'getAllTrailersFull')} | {('C', 'findUnloader'), ('C', 'onBlockingVehicle'), ('C', 'getDriveData'), ('C', 'update')}
+        'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine', 'getAllTrailersFull')} | {('C', 'findUnloader'), ('C', 'onBlockingVehicle')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
     print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)
@@ -106,11 +106,14 @@ def check_queue(packager):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('build_number', type=int)
-    release.build(parser.parse_args().build_number, qualification=check_queue,
+    parser.add_argument('--match-release', help='Require identical ZIP contents except the release version')
+    args = parser.parse_args()
+    release.build(args.build_number, qualification=check_queue,
                   suites=SUITES+('unloader-queue/test_runtime.py', 'unloader-queue/test_lookahead.py',
                                 'unloader-queue/test_harvester_turns.py',
                                 'unloader-queue/test_native_connectors.py',
                                 'unloader-queue/test_native_departure.py', 'unloader-queue/test_yield.py',
                                 'unloader-queue/test_departure_threshold.py',
                                 'unloader-queue/test_harvester_bypass.py'),
-                  stage='queue-operational-candidate-requires-in-game-validation')
+                  stage='queue-operational-candidate-requires-in-game-validation',
+                  reference_zip=args.match_release)

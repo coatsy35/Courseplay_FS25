@@ -202,7 +202,7 @@ function Q.refresh()
             data.lastOwner=owner
             local t={id=id(driver.vehicle),driver=driver,capacity=total,fill=fill,freeCapacity=free,enabled=true,
                 departPercent=driver.settings.fullThreshold:getValue(),compatible={},
-                available=not data.nativeDeparture and not data.bypass and not Q.atDepartureThreshold(driver) and
+                available=not data.nativeDeparture and not Q.atDepartureThreshold(driver) and
                     (driver.state==driver.states.IDLE or (Q.owns(driver) and data.operation=='prepare')),
                 owner=owner,transferring=stableOwner and transfer>0,
                 transferRate=transfer,reservedFor=data.assignment and data.assignment.combine,

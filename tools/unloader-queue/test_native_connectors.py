@@ -170,7 +170,7 @@ class NativeConnectorTests(unittest.TestCase):
             for z=-40,120,2 do table.insert(points,{x=0,z=z}) end
             saved=Course(v,points,true)
             u.connectorEntry={course=saved,context=PathfinderContext(v),node={},zOffset=0,
-                nextAttempt=g_time,index=1,candidates={15,25,35},directPass=false}
+                nextAttempt=g_time,index=1,candidates={15,25,35}}
             pc={active=false,calls=0,reset=function() end,isActive=function(self) return self.active end,
                 registerListeners=function(self,owner,callback) self.owner=owner; self.callback=callback end,
                 findPathToWaypoint=function(self,ctx,c,ix,x,z,retries)
@@ -217,9 +217,7 @@ class NativeConnectorTests(unittest.TestCase):
             u:updateHarvesterConnectorEntry()
             assert(u.connectorEntry.nextAttempt==g_time+5000 and installed==0)
             g_time=g_time+4999; u:updateHarvesterConnectorEntry(); assert(pc.calls==4)
-            PathfinderConstraints=function() return {isValidNode=function() return true end} end
-            g_time=g_time+1; u:updateHarvesterConnectorEntry()
-            assert(pc.calls==4 and u.connectorEntry.validation and u.connectorEntry.directPass~=false)
+            g_time=g_time+1; u:updateHarvesterConnectorEntry(); assert(pc.calls==5 and pc.kind=='local')
         """)
 
     def test_validated_entry_preserves_suffix_and_native_straight_entry(self):
@@ -276,88 +274,6 @@ class NativeConnectorTests(unittest.TestCase):
             local frames=driveEntrySearch()
             assertStarted(); assert(probeCount>20 and frames<120)
             assert(saved:getNumberOfWaypoints()==12)
-        """)
-
-    def test_tight_turn_is_checked_even_when_preliminary_grid_cannot_find_path(self):
-        for shift in (-0.02, 0, 0.02):
-            with self.subTest(shift=shift):
-                self.setUp()
-                self.entry_fixture()
-                self.lua.execute((SOURCE/'tools/unloader-queue/connector-search-fixture.lua').read_text())
-                self.lua.globals().shift=shift
-                self.lua.execute("""
-                    local node=v:getAIDirectionNode()
-                    node.x=-425.47+shift; node.z=-330.50+shift
-                    u.connectorEntry.candidates={10}
-                    obstacles={CpUnloaderQueueGeometry.rectangle({x=-451,z=-329.2,heading=0},{width=3,length=6},0)}
-                    u.pathfinderController.findPathToWaypoint=function() error('grid search wrongly precedes feasible tight turn') end
-                    u.pathfinderController.findPathToNode=function() error('full search wrongly precedes feasible tight turn') end
-                    u:updateHarvesterConnectorEntry()
-                    assert(installed==0 and u.connectorEntry.validation)
-                    assert(not u.connectorEntry.forwardEntryDistance)
-                    drainValidation(); assertStarted()
-                    assert(probeCount>20 and saved:getNumberOfWaypoints()==12)
-                """)
-
-    def test_all_direct_turns_fail_safely_then_original_search_remains_available(self):
-        self.entry_fixture()
-        self.lua.execute("""
-            u.connectorEntry.directPass=nil
-            local tested={}
-            u.debug=function(self,message,ix)
-                if message=='Checking local connector entry at waypoint %d' and self.connectorEntry.directPass~=false then
-                    tested[#tested+1]={ix=ix,forward=self.connectorEntry.forwardEntryDistance or 0}
-                end
-            end
-            PathfinderConstraints=function() return {isValidNode=function() return false end} end
-            for frame=1,200 do
-                u:updateHarvesterConnectorEntry(); g_time=g_time+33
-                if pc.calls>0 then break end
-                assert(installed==0)
-            end
-            assert(pc.calls==1 and pc.kind=='local' and pc.ix==15 and installed==0)
-            assert(#tested==12)
-            for i,item in ipairs(tested) do
-                assert(item.ix==({15,25,35})[(i-1)%3+1])
-                assert(item.forward==({0,3,6,10})[math.floor((i-1)/3)+1])
-            end
-        """)
-
-    def test_short_forward_leg_is_only_used_when_tight_turn_is_obstructed(self):
-        self.entry_fixture()
-        self.lua.execute((SOURCE/'tools/unloader-queue/connector-search-fixture.lua').read_text())
-        self.lua.execute("""
-            u.connectorEntry.candidates={10}
-            -- This object catches the outer header on the immediate turn;
-            -- moving three metres first changes that swept corner's path.
-            obstacles={CpUnloaderQueueGeometry.rectangle({x=-454,z=-307,heading=0},{width=1,length=1},0)}
-            local attempted={}; local check=u.checkHarvesterConnectorEntry
-            u.checkHarvesterConnectorEntry=function(self,course,entry)
-                attempted[#attempted+1]=entry.forwardEntryDistance or 0
-                return check(self,course,entry)
-            end
-            u.pathfinderController.findPathToWaypoint=function() error('safe short-forward turn should precede grid search') end
-            local origin=PathfinderUtil.getVehiclePositionAsState3D(v)
-            for frame=1,300 do
-                g_time=g_time+33; u:updateHarvesterConnectorEntry()
-                if installed>0 then break end
-            end
-            assertStarted(); assert(#attempted==2 and attempted[1]==0 and attempted[2]==3)
-            local x,_,z=u.course:getWaypointPosition(1)
-            assert(math.abs(x-origin.x)<.001 and math.abs(z+origin.y)<.001)
-            assert(saved:getNumberOfWaypoints()==12 and probeCount>20)
-        """)
-
-    def test_obstacle_on_forward_leg_prevents_any_movement(self):
-        self.entry_fixture()
-        self.lua.execute((SOURCE/'tools/unloader-queue/connector-search-fixture.lua').read_text())
-        self.lua.execute("""
-            u.connectorEntry.candidates={10}; u.connectorEntry.forwardEntryDistance=3
-            local x,_,z=localToWorld(v:getAIDirectionNode(),0,0,8)
-            obstacles={CpUnloaderQueueGeometry.rectangle({x=x,z=z,heading=0},{width=1,length=1},0)}
-            u:updateHarvesterConnectorEntry(); assert(u.connectorEntry.validation and installed==0)
-            drainValidation()
-            assert(installed==0 and probeCount>0 and not u.connectorEntry.validation)
         """)
 
     def test_short_connector_schedules_a_real_join_instead_of_empty_retries(self):

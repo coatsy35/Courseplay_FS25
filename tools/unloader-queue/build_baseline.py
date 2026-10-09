@@ -63,15 +63,35 @@ def profiles(runtime):
         cwd=runtime / "scripts/test")
 
 
+def check_release_match(candidate, reference):
+    with ZipFile(candidate) as actual, ZipFile(reference) as expected:
+        if actual.namelist() != expected.namelist():
+            raise RuntimeError("Restored release runtime inventory differs")
+        for name in actual.namelist():
+            a, b = actual.read(name), expected.read(name)
+            if name == "modDesc.xml":
+                pattern = rb"<version>.*?</version>"
+                a, ac = re.subn(pattern, b"<version>RELEASE</version>", a, count=1)
+                b, bc = re.subn(pattern, b"<version>RELEASE</version>", b, count=1)
+                if ac != 1 or bc != 1:
+                    raise RuntimeError("Cannot normalise release version")
+            if a != b:
+                raise RuntimeError(f"Restored release differs from reference: {name}")
+    print(f"PASS: all ZIP contents match {reference}, except release version", flush=True)
+
+
 def build(number, *, qualification=check_main_parity, suites=SUITES,
-          stage="main-baseline-no-queue-feature"):
+          stage="main-baseline-no-queue-feature", reference_zip=None):
     if number <= 2989:
         raise ValueError("Restart builds must follow the archived build 2989")
     commit = revision()
     version = f"8.1.0.{number}"
-    history = DESTINATION / "history" / version
+    history = DESTINATION / "history" / commit
     if history.exists():
-        raise RuntimeError("This numbered release already exists; use a new number")
+        raise RuntimeError("This commit already has a release; create a new release commit")
+    for previous in (DESTINATION / "history").glob("*/build.json"):
+        if json.loads(previous.read_text(encoding="utf-8"))["version"] == version:
+            raise RuntimeError("This numbered release already exists; use a new number")
     spec = importlib.util.spec_from_file_location("package_mod", ROOT / ".github/scripts/build_mod.py")
     packager = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(packager)
@@ -137,10 +157,14 @@ def build(number, *, qualification=check_main_parity, suites=SUITES,
         if revision() != commit:
             raise RuntimeError("Source changed during qualification")
         qualification(packager)
+        if reference_zip is not None:
+            check_release_match(candidate, reference_zip)
         data = candidate.read_bytes()
         metadata = {"version": version, "commit": commit, "base": BASE,
                     "stage": stage,
                     "sha256": hashlib.sha256(data).hexdigest()}
+        if reference_zip is not None:
+            metadata["restored_from_sha256"] = hashlib.sha256(Path(reference_zip).read_bytes()).hexdigest()
         history.mkdir(parents=True)
         (history / NAME).write_bytes(data)
         (history / "build.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

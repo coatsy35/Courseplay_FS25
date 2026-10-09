@@ -21,7 +21,7 @@ end
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
-    if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' and not self.queueData.bypass end
+    if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' end
     return allowed(self)
 end
 
@@ -29,7 +29,7 @@ local call = U.call
 function U:call(combine,waypoint)
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then
-        if self.queueData.operation~='prepare' or self.queueData.bypass then return false end
+        if self.queueData.operation~='prepare' then return false end
         Q.release(self)
     end
     return call(self,combine,waypoint)
@@ -62,28 +62,6 @@ local combineBlocking = C.onBlockingVehicle
 function C:onBlockingVehicle(vehicle,isBack)
     if Q.tryHarvesterBypass(self,vehicle,isBack) then return end
     return combineBlocking(self,vehicle,isBack)
-end
-
-local combineDrive = C.getDriveData
-function C:getDriveData(...)
-    local x,z,forward,speed,distance=combineDrive(self,...)
-    return x,z,forward,Q.guardHarvesterTurn(self,speed),distance
-end
-
--- A pathfinder callback runs inside update. Deleting its strategy there leaves
--- native debug/implement update code holding destroyed nodes. Stop at the next
--- update boundary instead, only after a bounded clearance wait has expired.
-local combineUpdate = C.update
-function C:update(dt)
-    if self.queueRecoveryFailure then
-        self:debug('Queue: %s; stopping after clearance timeout',self.queueRecoveryFailure)
-        local bypass=self.queueBypass
-        if bypass and bypass.driver then Q.clearHarvesterBypass(bypass.driver) end
-        self.queueBypass=nil
-        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
-        return
-    end
-    return combineUpdate(self,dt)
 end
 
 -- Preparation ends here. CP owns marker travel, retries, clearance and the
