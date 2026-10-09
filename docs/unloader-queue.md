@@ -1,3 +1,49 @@
+## Current contract - build 3020: separate turn traffic from queue ownership (9 October 2026)
+
+This fixes the build 3019 incident preserved in out/incident-3019/log-2244.txt.
+At 22:33:09 the departing T7.300/324 obstructed CR11/319's native turn search;
+native calculated fallback added a reverse section. Assigned T7.300/325 was
+still clearing that combine. Incoming T7.300/322 then entered the same area
+and transferred to queue yield at 22:34:27, where standing crop prevented the
+queue search from starting. These were three different native jobs, not three
+parked queue trailers. The former parked-only preflight missed that distinction.
+
+Ordinary planned row turns now reserve their full swept area and observe all
+participating rigs regardless of queue ownership. Moving native traffic holds
+the combine clear. A stationary native obstruction can use the same checked
+detour as a parked queue trailer, without taking its assignment, course,
+departure flag or pathfinder. Failed native detours retain that job and retry
+the original row entry after five seconds. Native departure and AD handover
+remain under CP's existing controller and each tractor's adjustable threshold.
+
+Incoming queue preparation and native approaches stop before entering the
+reservation, using a whole-rig course envelope and a speed-dependent stopping
+horizon. Native waiting transitions retain that protection. Rigs already in
+the area, departing rigs and the turn's coupled unloading/reversing follower
+retain native local coordination; they are not frozen until the entire future
+turn clears. Proximity cannot seize a protected native backup into queue yield.
+Before a native-to-queue yield transfer in this ordinary-turn context, validate
+the real starting configuration. An invalid crop/boundary/collision start keeps
+the native job intact; this does not waive checks or prove an escape route exists.
+
+Reservations expire on turn change, stop or scope exit. Approach checks are
+cached for at most 100 ms and invalidated when reservations change. An obstacle
+entering an accepted detour stops the combine before checked replanning. Existing
+parked-trailer plan-first/forward-clearance behaviour remains in place.
+
+Scope remains ordinary planned row-to-row travel. Native headland corners,
+FinishRowOnly, headland-to-centre entry, active-combine convoy waits, saved
+courses, straight entry, crop checks and native strategy/turn method bodies are
+unchanged from 3019. This is not a parking, allocation or AD integration rewrite.
+
+Qualification includes 39 turn/traffic tests, 25 yield tests and 65 runtime
+tests, including the full/backup/incoming sequence, reservation installation
+during an update, native waiting transitions, successful and failed detours,
+late obstacle arrival, job preservation and a real crop-blocked queue start.
+Run all release suites on source and extracted ZIP, including native parity,
+connectors, departure and packaged Lua compilation. In-game acceptance of the
+same saved-game sequence remains necessary; mocked checks do not prove physics.
+
 ## Current contract - build 3019: plan around parked trailers before yielding (9 October 2026)
 
 Starting from the exact 3013 runtime restored in 3018, ordinary planned

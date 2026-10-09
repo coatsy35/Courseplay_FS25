@@ -82,6 +82,21 @@ class YieldTests(unittest.TestCase):
             assert(not u:isAllowedToBeCalled() and not u:call(harvester,{}))
         ''')
 
+    def test_crop_blocked_native_yield_preserves_assignment_course_and_search(self):
+        self.lua.execute('''
+            c.states={TURNING={}}; c.state=c.states.TURNING
+            c.turnContext={}; c.aiTurn={turnContext=c.turnContext,startRecoveryTurn=function() end}
+            u.state={name='NATIVE_APPROACH'}; local state=u.state
+            u.combineToUnload={}; local assignment=u.combineToUnload
+            u.course={}; local course=u.course
+            u.pathfinderController={pathfinder={}}; local search=u.pathfinderController.pathfinder
+            densityCount=100
+            assert(not Q.priority(u,harvester))
+            assert(u.state==state and u.combineToUnload==assignment and u.course==course)
+            assert(u.pathfinderController.pathfinder==search and not Q.owns(u))
+            assert(u.queueData.reason:find('standing crop',1,true))
+        ''')
+
     def test_yield_uses_native_move_away_warning_policy_but_keeps_proximity(self):
         self.lua.execute('''
             u.collisionAvoidanceController={isCollisionWarningActive=function() return true end}

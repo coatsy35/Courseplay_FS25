@@ -28,6 +28,10 @@ class HarvesterBypassTests(unittest.TestCase):
                 if nativeStep then nativeStep() end
                 return 10,20,true,nativeSpeed or 10,0.7
             end
+            AIDriveStrategyUnloadCombine.getDriveData=function(self)
+                if nativeUnloaderStep then nativeUnloaderStep(self) end
+                return 30,40,true,15,0.6
+            end
         ''')
         runtime.load_queue(self.lua)
         self.lua.execute('''
@@ -127,6 +131,182 @@ class HarvesterBypassTests(unittest.TestCase):
             c.aiTurn:getDriveData(33)
             assert(calls==1 and not stopped and context.turnEndWpIx==953)
         ''')
+
+    def traffic_fixture(self):
+        self.travel_fixture(trailer_x=40)
+        self.lua.execute('''
+            for k,value in pairs(AIDriveStrategyUnloadCombine.myCombineUnloadStates) do u.states[k]=value end
+            function trafficRig(x,z,state,assignment,departing)
+                local vehicle={active=true,stopped=false,rootNode={x=x,z=z,t=math.pi/2},size={width=3,length=5}}
+                local trailer={rootNode={x=x-10,z=z,t=math.pi/2},size={width=3,length=10}}
+                vehicle.getAIDirectionNode=function() return vehicle.rootNode end
+                vehicle.getIsCpActive=function() return vehicle.active end
+                vehicle.getAttachedImplements=function() return {{object=trailer}} end
+                local driver=setmetatable({vehicle=vehicle,states=u.states,state=state,combineToUnload=assignment,
+                    settings=u.settings,turningRadius=9,debug=function() end},AIDriveStrategyUnloadCombine)
+                driver.getAllTrailersFull=function() return departing end
+                driver.isDriveUnloadNowRequested=function() return false end
+                driver.setMaxSpeed=function(self,speed) self.speed=speed end
+                driver.ppc={getRelevantWaypointIx=function() return 1 end}
+                driver.course=Course(vehicle,{{x=x,z=z},{x=x+60,z=z}},true)
+                driver.getCurrentCourse=function(self) return self.course end
+                vehicle.getCpDriveStrategy=function() return driver end
+                Q.data(driver).nativeDeparture=departing
+                return driver,vehicle,trailer
+            end
+            Q.speed=function() end -- queue following has separate production tests
+        ''')
+
+    def test_departing_serving_and_incoming_traffic_keep_their_native_jobs(self):
+        self.traffic_fixture()
+        self.lua.execute('''
+            outgoing,ov,ot=trafficRig(0,40,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
+            serving,sv,st=trafficRig(0,20,u.states.BACKING_UP_FOR_REVERSING_COMBINE,hv,false)
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+            local departure=outgoing.course; local approach=incoming.course; local assignment=incoming.combineToUnload
+            incoming.pathfinderController={pathfinder={}}; local runner=incoming.pathfinderController.pathfinder
+            assert(select(4,c:getDriveData(33))==0 and c.aiTurn==old)
+            local gx,gz,f,s,a=incoming:getDriveData(33)
+            assert(gx==30 and gz==40 and f and s==0 and a==0.6)
+            assert(incoming.course==approach and incoming.combineToUnload==assignment)
+            assert(incoming.pathfinderController.pathfinder==runner and not Q.owns(incoming))
+            assert(not Q.priority(serving,hv) and serving.state==u.states.BACKING_UP_FOR_REVERSING_COMBINE)
+            assert(outgoing.course==departure and outgoing.queueData.nativeDeparture and not Q.owns(outgoing))
+            ov.rootNode.x=80; ot.rootNode.x=70; g_currentMission.time=g_currentMission.time+201
+            -- A coupled backup still overlaps a later segment: native local
+            -- clearance must be allowed to continue, not a whole-turn deadlock.
+            assert(select(4,c:getDriveData(33))==10 and c.aiTurn==old)
+            assert(select(4,incoming:getDriveData(33))==0)
+            c.state=c.states.WORKING
+            assert(select(4,incoming:getDriveData(33))==15)
+            assert(incoming.course==approach and incoming.combineToUnload==assignment)
+        ''')
+
+    def test_approach_waiting_transition_cannot_be_seized_by_proximity_callback(self):
+        self.traffic_fixture()
+        self.lua.execute('''
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+            c:getDriveData(33)
+            nativeUnloaderStep=function(driver)
+                driver.stateAfterWaitingForManeuveringCombine=driver.state
+                driver.state=driver.states.WAITING_FOR_MANEUVERING_COMBINE
+                assert(Q.priority(driver,hv))
+            end
+            assert(select(4,incoming:getDriveData(33))==0)
+            assert(not Q.owns(incoming) and incoming.combineToUnload)
+        ''')
+
+    def test_full_stationary_obstacle_is_planned_around_without_taking_departure(self):
+        self.traffic_fixture()
+        self.lua.execute('''
+            outgoing,ov,ot=trafficRig(0,40,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
+            ov.stopped=true; local course=outgoing.course; local state=outgoing.state
+            assert(select(4,c:getDriveData(33))==0 and c.aiTurn~=old)
+            c.aiTurn:getDriveData(33)
+            assert(calls==1 and outgoing.state==state and outgoing.course==course)
+            assert(not outgoing.queueData.bypass and outgoing.queueData.nativeDeparture)
+            c.callback(c.callbackOwner,nil)
+            assert(c.queueTrailerWait and outgoing.state==state and outgoing.course==course)
+            assert(not Q.owns(outgoing) and not outgoing.queueData.yieldRequests)
+            g_currentMission.time=g_currentMission.time+5001
+            c:getDriveData(33); c.aiTurn:getDriveData(33)
+            assert(calls==2 and context.turnEndWpIx==953 and not stopped)
+        ''')
+
+    def test_existing_occupant_departure_and_backup_are_never_approach_held(self):
+        self.traffic_fixture()
+        self.lua.execute('''
+            c:getDriveData(33)
+            incoming,iv,it=trafficRig(0,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+            assert(not Q.holdIncomingTurn(incoming,15))
+            outgoing,ov,ot=trafficRig(-20,55,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
+            assert(not Q.holdIncomingTurn(outgoing,15))
+            serving,sv,st=trafficRig(-20,55,u.states.BACKING_UP_FOR_REVERSING_COMBINE,hv,false)
+            assert(not Q.holdIncomingTurn(serving,15))
+        ''')
+
+    def test_new_reservation_invalidates_cached_clear_approach_in_same_update(self):
+        self.traffic_fixture()
+        self.lua.execute('''
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+            assert(not Q.holdIncomingTurn(incoming,15))
+            c:getDriveData(33)
+            assert(Q.holdIncomingTurn(incoming,15))
+            local checks=0; local area=Q.yieldArea
+            Q.yieldArea=function(...) checks=checks+1; return area(...) end
+            for i=1,10 do assert(Q.holdIncomingTurn(incoming,15)) end
+            assert(checks==0)
+        ''')
+
+    def test_stalled_queue_yield_can_be_planned_around_without_losing_its_requests(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            Q.take(u,'yield'); local state=u.state
+            local other={}; u.queueData.yieldRequests={[other]={turnClearance=function() return true end}}
+            local requests=u.queueData.yieldRequests
+            assert(select(4,c:getDriveData(33))==0 and c.aiTurn~=old)
+            c.aiTurn:getDriveData(33)
+            assert(calls==1 and u.state==state and u.queueData.yieldRequests==requests)
+            assert(not u.queueData.bypass)
+            c.callback(c.callbackOwner,nil)
+            assert(u.state==state and u.queueData.yieldRequests==requests)
+            g_currentMission.time=g_currentMission.time+5001
+            c:getDriveData(33); c.aiTurn:getDriveData(33)
+            assert(calls==2 and not stopped)
+        ''')
+
+    def test_failed_native_approach_detour_does_not_take_its_job_or_index_yield_request(self):
+        self.traffic_fixture()
+        self.lua.execute('''
+            incoming,iv,it=trafficRig(0,40,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+            iv.stopped=true; incoming.pathfinderController={pathfinder={}}
+            local assignment=incoming.combineToUnload; local course=incoming.course
+            local search=incoming.pathfinderController.pathfinder
+            c:getDriveData(33); c.aiTurn:getDriveData(33)
+            -- The target moves outside the reservation while search is pending.
+            iv.rootNode.x=-20; it.rootNode.x=-30
+            c.callback(c.callbackOwner,nil)
+            assert(c.queueTrailerWait and not incoming.queueData.yieldRequests)
+            assert(not Q.owns(incoming) and incoming.combineToUnload==assignment)
+            assert(incoming.course==course and incoming.pathfinderController.pathfinder==search)
+        ''')
+
+    def test_native_bypass_record_is_discarded_before_new_turn_obstruction_check(self):
+        self.traffic_fixture()
+        self.lua.execute('''
+            outgoing,ov,ot=trafficRig(0,40,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
+            ov.stopped=true; c:getDriveData(33); local first=c.queueBypass
+            assert(first and not outgoing.queueData.bypass)
+            c.aiTurn=old; installed=nil
+            c:getDriveData(33)
+            assert(c.queueBypass and c.queueBypass~=first and c.aiTurn~=old)
+        ''')
+
+    def test_new_stationary_native_obstacle_stops_accepted_detour_before_replanning(self):
+        self.traffic_fixture()
+        self.lua.execute('''
+            tv.rootNode.x=0; trailer.rootNode.x=0
+            c:getDriveData(33); c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=20,y=-10,t=0},{x=20,y=-30,t=0}})
+            local recovery=c.aiTurn
+            outgoing,ov,ot=trafficRig(20,20,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
+            ov.stopped=true
+            assert(select(4,c:getDriveData(33))==0)
+            assert(recovery.state==recovery.states.PREPARING_RECOVERY)
+            assert(outgoing.queueData.nativeDeparture and not Q.owns(outgoing))
+            recovery:getDriveData(33); assert(calls==2)
+        ''')
+
+    def test_reservation_expires_on_turn_change_stop_and_does_not_cover_special_turns(self):
+        for change in ('c.aiTurn={}', 'hv.active=false', 'c.state=c.states.WORKING'):
+            with self.subTest(change=change):
+                self.setUp(); self.traffic_fixture()
+                self.lua.execute('''
+                    incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+                    c:getDriveData(33); assert(Q.holdIncomingTurn(incoming,15))
+                '''+change+'''
+                    assert(not Q.holdIncomingTurn(incoming,15))
+                ''')
 
     def test_brakes_and_reserves_trailer_before_starting_search(self):
         self.travel_fixture()

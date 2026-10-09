@@ -15,7 +15,10 @@ end
 local drive = U.getDriveData
 function U:getDriveData(...)
     Q.speed(self)
-    return drive(self,...)
+    local hold=Q.holdIncomingTurn(self)
+    local gx,gz,forwards,speed,acceleration=drive(self,...)
+    if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
+    return gx,gz,forwards,speed,acceleration
 end
 
 local allowed = U.isAllowedToBeCalled
