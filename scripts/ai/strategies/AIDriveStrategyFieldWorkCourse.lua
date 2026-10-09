@@ -725,7 +725,7 @@ function AIDriveStrategyFieldWorkCourse:updateHarvesterConnectorEntry()
                 self:debug('Checked local connector entry ready')
                 self:startCourseToWorkStart(course)
             else
-                entry.nextAttempt = g_time + 1000
+                entry.nextAttempt = entry.directPass ~= false and g_time or g_time + 1000
             end
         end
         return
@@ -741,8 +741,43 @@ function AIDriveStrategyFieldWorkCourse:updateHarvesterConnectorEntry()
             :ignoreFruit(not self.settings.avoidFruit:getValue()):maxIterations(3000)
         entry.joinContext = context
         self:debug('Checking local connector entry at waypoint %d', candidate)
+        if entry.directPass ~= false then
+            -- A coarse grid can report no path before the native solver gets
+            -- to try a perfectly feasible tight turn. Check the direct native
+            -- Dubins candidate first, using the same exact seam, header and
+            -- crop validation as a searched entry. Try all local joins before
+            -- falling back to the ordinary obstacle-avoiding search.
+            local origin = PathfinderUtil.getVehiclePositionAsState3D(self.vehicle)
+            local advance = entry.forwardEntryDistance or 0
+            local start = PathfinderUtil.getVehiclePositionAsState3D(self.vehicle, 0, advance)
+            local goal = PathfinderUtil.getWaypointAsState3D(entry.course:getWaypoint(candidate), 0, 0)
+            local radius = AIUtil.getTurningRadius(self.vehicle)
+            local path, length = PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(), start, goal, radius)
+            local distance = math.sqrt((goal.x-origin.x)^2 + (goal.y-origin.y)^2)
+            if path and length + advance <= math.max(50, 3 * distance) then
+                if advance > 0 then table.insert(path, 1, origin) end
+                entry.validation = self:checkHarvesterConnectorEntry(Course.createFromAnalyticPath(self.vehicle, path, true), entry)
+            end
+            if entry.validation then
+                self:debug('Validating direct connector turn at waypoint %d, forward %.1f m before grid search', candidate, advance)
+            else
+                entry.nextAttempt = g_time
+            end
+            return
+        end
         self.pathfinderController:registerListeners(self, self.onHarvesterConnectorEntryDone)
         self.pathfinderController:findPathToWaypoint(context, entry.course, candidate, 0, 0, 0)
+    elseif entry.directPass ~= false then
+        -- Try the tight turn at each join first. Only then consider a short,
+        -- fully checked forward leg before turning; never drive it unchecked.
+        entry.directAdvance = (entry.directAdvance or 0) + 1
+        entry.forwardEntryDistance = ({3, 6, 10})[entry.directAdvance]
+        if not entry.forwardEntryDistance then
+            entry.directPass = false
+            self:debug('Direct connector turns unavailable; trying searched local entries')
+        end
+        entry.index = 1
+        entry.nextAttempt = g_time
     elseif not entry.triedFullRoute then
         entry.triedFullRoute = true
         entry.joinIx = nil
@@ -751,6 +786,9 @@ function AIDriveStrategyFieldWorkCourse:updateHarvesterConnectorEntry()
         self.pathfinderController:findPathToNode(entry.context, entry.node, 0, entry.zOffset, 0)
     else
         entry.index = 1
+        entry.directPass = nil
+        entry.directAdvance = nil
+        entry.forwardEntryDistance = nil
         entry.nextAttempt = g_time + 5000
         self:debug('No checked connector entry; holding and retrying local manoeuvres')
     end

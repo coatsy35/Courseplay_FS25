@@ -1,3 +1,31 @@
+## Current contract - build 3016 (9 October 2026)
+
+Headland-to-centre connector entry tries the native direct Dubins turn before
+allowing the preliminary grid search to veto it. It first tries every existing
+local join from the current pose. Only if these fail does it try each join after
+a straight forward leg of 3, 6 and then 10 metres. These legs are planned and
+validated as part of the complete manoeuvre, never driven speculatively. The
+existing local and full-route searches remain the final fallbacks.
+
+The native turning radius, exact join, saved course suffix and straight entry
+remain intact. Every new path, including its forward leg, must pass the existing
+header/body and crop checks before movement. Validation remains bounded to 20
+samples per update. No global pathfinder, working-row or AD changes are included.
+
+Evidence: build 3013 accepted waypoint 10 on 8 October at 16:54:45 after the
+native planner found a direct LSL turn in 56 ms. Build 3014 attempted that same
+join on 9 October at 09:08:41 from a pose only centimetres away, but exhausted
+3,000 preliminary grid iterations in 3,883 ms. The direct turn solver was never
+reached. It later selected waypoint 6. The reason the preliminary grid differed
+is unproven; the fix removes its veto over an independently checked direct turn.
+
+Regression coverage checks the recorded tight-turn geometry with centimetre pose
+variations, a real header obstruction requiring the 3-metre forward fallback,
+an obstruction on that forward leg preventing movement, and exhaustion of every
+direct variant returning to the original search. The 24 connector tests retain
+crop, header, seam and straight-entry coverage. Offline qualification cannot
+establish physical steering or successful completion in the live save.
+
 ## Current contract - build 3015 (9 October 2026)
 
 An empty trailer must return from successful clearance to the callable queue.
