@@ -41,9 +41,10 @@ AIUtil.getTurningRadius=function() return 4.7 end
 AIUtil.getDirectionNode=function(vehicle) return vehicle:getAIDirectionNode() end
 -- Logged whole-vehicle envelope, including the attached header. Engine model
 -- scanning is substituted; actual rectangle overlap and native filtering run.
-PathfinderUtil.VehicleData=function(vehicle)
+PathfinderUtil.VehicleData=function(vehicle,withImplements,buffer)
+    local margin=buffer or 0.25
     return {getVehicle=function() return vehicle end,
-        getVehicleOverlapBoxParams=function() return {width=8.3,length=6.5,xOffset=0,zOffset=0} end,
+        getVehicleOverlapBoxParams=function() return {width=8.05+margin,length=6.25+margin,xOffset=0,zOffset=0} end,
         getTowedImplement=function() return nil end}
 end
 v.getRootVehicle=function(self) return self end

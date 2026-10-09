@@ -1,4 +1,44 @@
-## Current contract - build 3013 (8 October 2026)
+## Current contract - build 3014 (9 October 2026)
+
+New turn routes must be checked for parked vehicles before the harvester starts
+following them. A newly installed turn is checked over its complete length against
+nearby parked harvesters and tractors, including their attached implements. A
+blocked route is held and replanned to the original turn destination. The saved
+fieldwork course and work-start waypoint remain unchanged. The local moving guard
+also checks body/header clearance through the braking horizon, independently of
+proximity-ray hits. It covers parked harvesters whose CP driver has stopped.
+
+The turn bypass now accepts stationary harvesters and non-queue tractors without
+claiming their controls. A queue tractor can be held during the detour. The native
+Hybrid A* detour reserves tracking clearance around the actual vehicle envelope;
+its completed course, including alignment and reverse extensions, must still pass
+a separate clearance check before installation. A rejected route gets one
+forward-only alternative using Dubins geometry. Both failures request queue yield
+where supported and hold the combine for clearance. Retry requires changed
+obstacle geometry; unchanged obstacles do not cause repeated searches. Clearance
+waiting is bounded to 120 seconds, with a diagnostic stop deferred to the next
+strategy update boundary. Unknown geometry is retried with a bounded diagnostic
+failure rather than silently waiting forever. No unchecked reverse or row-skipping
+fallback is installed. Native CP full-trailer departure/AD handover remains as in
+3013, including each tractor's configured cutoff.
+
+Evidence: loaded 3013 log, 9 October 08:18:42.578, CR11/319 attempted a bypass of
+T7.300/324; its 94-point solver path became a 105-point native course and final
+clearance rejected a collision at 08:18:43.191. The old failure branch stopped the
+job without requesting yield and caused a deleted TurnContext debug-node error.
+At 08:19:39.575, following CR11/318 detected stopped CR11/319 at 1.3 m, then logged
+no obstacle at 08:19:39.911 and continued. 3013's reactive bypass only accepted
+queue tractors and did not preflight the initial turn or cover parked combines.
+
+Regression coverage includes a blocked vehicle 75 m along a newly planned turn,
+missed ray hits, attached header overlap, moving versus parked vehicles, real
+native planner side detours around a trailer and a wide combine, forward-only
+gear restrictions, final-course rejection before installation, actual queue-yield
+transition, unchanged-obstacle retry suppression, stopped-job blockers, geometry
+recovery, and safe deferred timeout. These are offline engine-boundary tests;
+acceptance of the live save, physical steering and frame cost remains outstanding.
+
+## Previous contract - build 3013 (8 October 2026)
 
 This revision supersedes the custom row/headland exit and AD-node handover
 requirements recorded below. The user explicitly requested native CP handover.

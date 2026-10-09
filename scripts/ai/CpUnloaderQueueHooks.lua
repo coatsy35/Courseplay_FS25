@@ -64,6 +64,28 @@ function C:onBlockingVehicle(vehicle,isBack)
     return combineBlocking(self,vehicle,isBack)
 end
 
+local combineDrive = C.getDriveData
+function C:getDriveData(...)
+    local x,z,forward,speed,distance=combineDrive(self,...)
+    return x,z,forward,Q.guardHarvesterTurn(self,speed),distance
+end
+
+-- A pathfinder callback runs inside update. Deleting its strategy there leaves
+-- native debug/implement update code holding destroyed nodes. Stop at the next
+-- update boundary instead, only after a bounded clearance wait has expired.
+local combineUpdate = C.update
+function C:update(dt)
+    if self.queueRecoveryFailure then
+        self:debug('Queue: %s; stopping after clearance timeout',self.queueRecoveryFailure)
+        local bypass=self.queueBypass
+        if bypass and bypass.driver then Q.clearHarvesterBypass(bypass.driver) end
+        self.queueBypass=nil
+        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        return
+    end
+    return combineUpdate(self,dt)
+end
+
 -- Preparation ends here. CP owns marker travel, retries, clearance and the
 -- full-job event consumed by AD. Do not impose a second handover gate.
 local unload = U.startUnloadingTrailers

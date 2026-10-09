@@ -97,7 +97,7 @@ def check_queue(packager):
     methods = set(re.findall(r'function ([UC]):([A-Za-z]+)\(', hooks))
     expected = {('U', name) for name in ('update', 'getDriveData', 'isAllowedToBeCalled', 'call',
         'startUnloadingTrailers', 'onLastWaypointPassed',
-        'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine', 'getAllTrailersFull')} | {('C', 'findUnloader'), ('C', 'onBlockingVehicle')}
+        'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine', 'getAllTrailersFull')} | {('C', 'findUnloader'), ('C', 'onBlockingVehicle'), ('C', 'getDriveData'), ('C', 'update')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
     print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)

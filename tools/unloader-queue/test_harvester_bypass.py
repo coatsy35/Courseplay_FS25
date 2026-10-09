@@ -34,6 +34,7 @@ class HarvesterBypassTests(unittest.TestCase):
                 getAIDirectionNode=function() return {x=0,z=0,t=0} end,
                 stopCurrentAIJob=function() stopped=true end}
             tv={stopped=true,getIsCpActive=function() return true end}
+            tv.getAIDirectionNode=function() return {x=0,z=20,t=0} end
             AIUtil.isStopped=function(v) return v.stopped end
             AIUtil.getSteeringParameters=function() return nil,0 end
             AIUtil.hasChainedAttachments=function() return false end
@@ -47,6 +48,7 @@ class HarvesterBypassTests(unittest.TestCase):
             tv.getCpDriveStrategy=function() return u end
             c=setmetatable({vehicle=hv,states={TURNING={},WORKING={}}},AIDriveStrategyCombineCourse)
             c.state=c.states.TURNING; c.turningRadius=9; c.workWidth=15.2
+            hv.getCpDriveStrategy=function() return c end
             c.debug=function() end; c.settings=settings
             c.raiseImplements=function() raised=true end
             c.raiseControllerEvent=function() end
@@ -70,6 +72,15 @@ class HarvesterBypassTests(unittest.TestCase):
                 appendPathfinderEndingTurnCourse=function() return 0 end}
             c.turnContext=context; c.course=Course(hv,{{x=0,z=0},{x=0,z=10}},false)
             original=c.course
+            c.ppc.getCourse=function() return installed or original end
+            c.ppc.getRelevantWaypointIx=function() return 1 end
+            c.getCurrentCourse=function() return c.ppc:getCourse() end
+            c.getWorkWidth=function() return 15.2 end
+            productionPriority=Q.priority
+            Q.priority=function(driver,vehicle)
+                assert(driver==u and vehicle==hv); yielded=true
+                Q.take(driver,'yield'); return true
+            end
             old=setmetatable({vehicle=hv,driveStrategy=c,turnContext=context,ppc=c.ppc,
                 proximityController=c.proximityController,states={TURNING={}},turningRadius=9},CourseTurn)
             old.state=old.states.TURNING; c.aiTurn=old
@@ -121,17 +132,19 @@ class HarvesterBypassTests(unittest.TestCase):
             settings.penaltyFactor={getValue=function() return 1 end}
             settings.useJps={getValue=function() return true end}
             CpFieldUtil.getFieldNumUnderVehicle=function() return 11 end
-            target.x=0; target.z=80; target.t=0
+            target.x=targetX or 0; target.z=targetZ or 80; target.t=targetT or 0
             local G=CpUnloaderQueueGeometry
-            obstacles={G.rectangle({x=0,z=40,heading=0},{width=3.5,length=18},0)}
+            obstacles={G.rectangle({x=0,z=40,heading=0},{width=obstacleWidth or 3.5,length=18},0)}
             local validation=PathfinderConstraints(PathfinderContext(hv))
             assert(not validation:isValidNode(State3D(0,-40,CpMathUtil.angleFromGame(0)),false,true),'fixture must detect trailer collision')
             Q.generateHarvesterBypass=productionGenerate
             PathfinderUtil.findPathForTurn=nativeTurnSearch
             assert(Q.tryHarvesterBypass(c,tv,false))
+            c.aiTurn.queueForwardOnly=forceForward
             c.aiTurn:getDriveData(33)
             for i=1,2000 do
                 if installed or stopped then break end
+                if c.queueBypass.retry then c.aiTurn:getDriveData(33) end
                 if c.pathfinder and c.pathfinder:isActive() then
                     local result=c.pathfinder:resume()
                     if result.done then c.callback(c.callbackOwner,result.path) end
@@ -145,9 +158,18 @@ class HarvesterBypassTests(unittest.TestCase):
                     {width=16.6,length=13},0)
                 assert(not G.overlap(box,obstacles[1]),string.format('header intersects at %d x%.2f z%.2f yaw%.2f reverse%s',i,x,z,installed:getWaypointYRotation(i),tostring(installed:isReverseAt(i))))
                 if math.abs(x)>11 then outside=true end
+                if forceForward then assert(not installed:isReverseAt(i),'forward route contains reversing') end
             end
             assert(outside and probeCount>10 and c.course==original and context.turnEndWpIx==953)
         ''')
+
+    def test_real_planner_side_detours_for_head_on_trailer_and_wide_parked_combine(self):
+        for scenario in ('targetX=-30; targetT=math.pi; forceForward=true',
+                         'obstacleWidth=16.6; forceForward=true'):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.lua.execute(scenario)
+                self.test_real_native_planner_routes_header_around_parked_rig()
 
     def test_live_pathfinder_keeps_ownership(self):
         self.lua.execute('c.pathfinder={isActive=function() return true end}; assert(not Q.tryHarvesterBypass(c,tv,false)); assert(c.aiTurn==old)')
@@ -158,7 +180,15 @@ class HarvesterBypassTests(unittest.TestCase):
             recovery.generateCalculatedTurn=function() error('unsafe fallback') end
             recovery.resumeFieldworkAfterTurn=function() error('skipped blocked corner') end
             recovery:getDriveData(33); c.callback(c.callbackOwner,nil)
-            assert(stopped and not installed and not u.queueData.bypass and not c.queueBypass)
+            assert(not stopped and not installed and c.queueBypass.retry and not yielded)
+            recovery:getDriveData(33); assert(calls==2)
+            c.callback(c.callbackOwner,nil)
+            assert(not stopped and not installed and yielded and c.queueBypass.waiting)
+            assert(not u.queueData.bypass and u.queueData.operation=='yield')
+            for i=1,10 do g_currentMission.time=g_currentMission.time+10000; recovery:getDriveData(33) end
+            assert(calls==2,'unchanged blocker must not trigger repeated searches')
+            tv.getAIDirectionNode=function() return {x=10,z=20,t=0} end
+            recovery:getDriveData(33); assert(calls==3 and not c.queueBypass.waiting)
         ''')
 
     def test_recovery_block_listener_does_not_skip_row(self):
@@ -167,7 +197,7 @@ class HarvesterBypassTests(unittest.TestCase):
             recovery.resumeFieldworkAfterTurn=function() error('skipped blocked corner') end
             c.proximityController.callback(recovery); assert(not stopped)
             recovery.state=recovery.states.TURNING
-            c.proximityController.callback(recovery); assert(stopped and not c.queueBypass)
+            c.proximityController.callback(recovery); assert(not stopped and c.queueBypass.retry)
         ''')
 
     def test_final_adjusted_course_is_rejected_if_it_intersects_an_obstacle(self):
@@ -179,7 +209,8 @@ class HarvesterBypassTests(unittest.TestCase):
                 checks=checks+1; return node.x<5
             end
             c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=10,y=-10,t=0},{x=20,y=-30,t=0}})
-            assert(stopped and checks>1 and not c.queueBypass and context.turnEndWpIx==953)
+            assert(not stopped and checks>1 and c.queueBypass.retry and context.turnEndWpIx==953)
+            assert(not installed,'invalid final course must never be installed')
         ''')
 
     def test_moving_full_assigned_and_native_departing_trailers_do_not_get_held(self):
@@ -209,16 +240,201 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_cancel_invalidates_both_hold_references(self):
         self.lua.execute('assert(Q.tryHarvesterBypass(c,tv,false)); Q.cancel(u); assert(not c.queueBypass and not u.queueData.bypass)')
 
-    def test_timed_out_recovery_stops_before_releasing_parked_trailer(self):
+    def test_timed_out_recovery_requests_yield_without_deleting_combine_driver(self):
         self.lua.execute('''
             assert(Q.tryHarvesterBypass(c,tv,false)); g_currentMission.time=130001
-            assert(not Q.holdForHarvesterBypass(u)); assert(stopped and not c.queueBypass)
+            assert(not Q.holdForHarvesterBypass(u)); assert(not stopped and c.queueBypass.waiting and yielded)
+            assert(not u.queueData.bypass)
+        ''')
+
+    def test_parked_combine_without_live_driver_can_be_bypassed(self):
+        self.lua.execute('''
+            tv.spec_combine={}; tv.getCpDriveStrategy=function() return nil end
+            assert(Q.tryHarvesterBypass(c,tv,false))
+            assert(not c.queueBypass.driver and not u.queueData.bypass)
+            c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=10,y=-10,t=0},{x=20,y=-30,t=0}})
+            assert(installed and not stopped and c.course==original)
+        ''')
+
+    def test_forward_retry_is_deferred_out_of_completion_callback(self):
+        self.lua.execute('''
+            assert(Q.tryHarvesterBypass(c,tv,false)); local recovery=c.aiTurn
+            recovery:getDriveData(33); c.callback(c.callbackOwner,nil)
+            assert(calls==1 and recovery.queueForwardOnly)
+            recovery.generatePathfinderTurn=function(self)
+                assert(self.queueForwardOnly); calls=calls+1
+            end
+            recovery:getDriveData(33); assert(calls==2)
+        ''')
+
+    def test_failed_bypass_enters_real_queue_yield_and_preserves_waiting_combine(self):
+        self.lua.execute('''
+            Q.priority=productionPriority
+            u.releaseCombine=function(self) self.combineToUnload=nil end
+            assert(Q.tryHarvesterBypass(c,tv,false)); local recovery=c.aiTurn
+            recovery:getDriveData(33); c.callback(c.callbackOwner,nil)
+            recovery:getDriveData(33); c.callback(c.callbackOwner,nil)
+            assert(Q.owns(u) and u.queueData.operation=='yield')
+            assert(u.queueData.yieldRequests[hv] and c.queueBypass.waiting)
+            assert(not u.queueData.bypass and not stopped and c.course==original)
+        ''')
+
+    def test_no_reverse_setting_does_not_install_unchecked_initial_backup(self):
+        self.lua.execute('''
+            c.getAllowReversePathfinding=function() return false end
+            assert(Q.tryHarvesterBypass(c,tv,false)); c.aiTurn:getDriveData(33)
+            assert(calls==1 and not installed and c.aiTurn.state==c.aiTurn.states.WAITING_FOR_PATHFINDER)
         ''')
 
     def test_failed_recovery_creation_does_not_change_queue_state(self):
         self.lua.execute('''
             old.startRecoveryTurn=function() end; local state=u.state
             assert(not Q.tryHarvesterBypass(c,tv,false)); assert(u.state==state and not u.queueData.bypass)
+        ''')
+
+    def install_guard_geometry(self):
+        self.lua.execute('''
+            hv.rootNode={x=0,z=0,t=0}; hv.lastSpeedReal=0
+            tv.rootNode={x=0,z=19,t=math.pi/2}; tv.spec_combine={}
+            tv.getCpDriveStrategy=function() return nil end
+            hv.getAIDirectionNode=function() return hv.rootNode end
+            tv.getAIDirectionNode=function() return tv.rootNode end
+            g_currentMission.vehicleSystem={vehicles={hv,tv}}
+            c.course=Course(hv,{{x=0,z=0},{x=0,z=5},{x=0,z=10},{x=0,z=20},{x=0,z=30}},false)
+            original=c.course
+            CpUnloaderQueueWorld.currentBodies=function(v)
+                if v==hv then return {
+                    {body={left=2,right=-2,front=4,back=-5},pose=hv.rootNode},
+                    {body={left=7.6,right=-7.6,front=1,back=-1},pose={x=0,z=7,t=0}}}
+                end
+                return {{body={left=7.6,right=-7.6,front=6,back=-6},pose=v.rootNode}}
+            end
+            bypassCalls=0
+            c.onBlockingVehicle=function(self,vehicle,back)
+                assert(vehicle==tv and not back); bypassCalls=bypassCalls+1
+            end
+        ''')
+
+    def test_turn_envelope_stops_before_header_contact_without_a_ray_hit(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            -- No proximity ray or live driver is supplied for the parked combine.
+            assert(Q.guardHarvesterTurn(c,10)==0)
+            assert(bypassCalls==1 and c.queueTurnGuard.vehicle==tv)
+            assert(Q.guardHarvesterTurn(c,10)==0,'a ray gap must not release the stop')
+            tv.rootNode.x=40; g_currentMission.time=g_currentMission.time+100
+            assert(Q.guardHarvesterTurn(c,10)==10,'actual clearance must release the guard')
+        ''')
+
+    def test_guard_checks_attached_header_and_keeps_parallel_traffic_clear(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            tv.rootNode.x=12; tv.rootNode.z=12
+            assert(Q.guardHarvesterTurn(c,10)==0,'header overlap must count outside centre rays')
+            tv.rootNode.x=22; g_currentMission.time=g_currentMission.time+100
+            assert(Q.guardHarvesterTurn(c,10)==10,'parallel non-overlapping rig must not block')
+        ''')
+
+    def test_moving_vehicle_is_stopped_for_but_not_treated_as_parked(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            tv.stopped=false
+            assert(Q.guardHarvesterTurn(c,10)==0 and bypassCalls==0)
+            tv.stopped=true; hv.stopped=false
+            assert(Q.guardHarvesterTurn(c,10)==0 and bypassCalls==0)
+        ''')
+
+    def test_guard_rechecks_new_course_immediately_and_leaves_working_rows_native(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            assert(Q.guardHarvesterTurn(c,10)==0)
+            installed=Course(hv,{{x=0,z=0},{x=-10,z=0},{x=-20,z=0}},true)
+            tv.rootNode.z=30
+            assert(Q.guardHarvesterTurn(c,10)==10)
+            c.state=c.states.WORKING
+            assert(Q.guardHarvesterTurn(c,10)==10 and not c.queueTurnGuard)
+        ''')
+
+    def test_guard_uses_braking_distance_at_speed(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            tv.rootNode.z=32
+            assert(Q.guardHarvesterTurn(c,10)==10)
+            hv.lastSpeedReal=30/3600; g_currentMission.time=g_currentMission.time+100
+            assert(Q.guardHarvesterTurn(c,30)==0,'fast approach must be held early')
+        ''')
+
+    def test_guard_detects_queued_tractor_and_trailer(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            tv.spec_combine=nil; tv.getCpDriveStrategy=function() return u end
+            assert(Q.guardHarvesterTurn(c,10)==0)
+        ''')
+
+    def test_complete_turn_is_checked_before_start_not_only_near_obstacle(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            tv.rootNode.z=75
+            c.course=Course(hv,{{x=0,z=0},{x=0,z=30},{x=0,z=60},{x=0,z=90}},true)
+            original=c.course; old.turnCourse=c.course
+            assert(Q.guardHarvesterTurn(c,10)==0,'must reject turn before driving towards distant trailer')
+            assert(c.queueTurnPreflight.vehicle==tv and bypassCalls==1)
+            g_currentMission.time=g_currentMission.time+100
+            assert(Q.guardHarvesterTurn(c,10)==0,'short horizon must not release planned-route block')
+            tv.rootNode.x=40; g_currentMission.time=g_currentMission.time+100
+            assert(Q.guardHarvesterTurn(c,10)==10)
+        ''')
+
+    def test_repeat_block_callbacks_preserve_preparing_and_searching_bypass(self):
+        self.lua.execute('''
+            assert(Q.tryHarvesterBypass(c,tv,false)); local recovery=c.aiTurn
+            assert(Q.tryHarvesterBypass(c,tv,false) and c.aiTurn==recovery and not yielded)
+            recovery:getDriveData(33)
+            assert(Q.tryHarvesterBypass(c,tv,false) and not yielded and c.queueBypass)
+        ''')
+
+    def test_preflight_unavailable_geometry_retries_then_reports_failure(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            old.turnCourse=c.course; local area=Q.yieldArea
+            Q.yieldArea=function(_,horizon,limit) if limit then return nil end; return function() return false end end
+            assert(Q.guardHarvesterTurn(c,10)==0 and not c.queueRecoveryFailure)
+            g_currentMission.time=g_currentMission.time+1000
+            assert(Q.guardHarvesterTurn(c,10)==0 and not c.queueRecoveryFailure)
+            g_currentMission.time=g_currentMission.time+1000
+            assert(Q.guardHarvesterTurn(c,10)==0 and c.queueRecoveryFailure)
+        ''')
+
+    def test_preflight_recovers_when_geometry_becomes_available(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            old.turnCourse=c.course; local area=Q.yieldArea
+            Q.yieldArea=function() return nil end
+            assert(Q.guardHarvesterTurn(c,10)==0)
+            Q.yieldArea=area; tv.rootNode.x=40
+            g_currentMission.time=g_currentMission.time+1000
+            assert(Q.guardHarvesterTurn(c,10)==10 and not c.queueRecoveryFailure)
+        ''')
+
+    def test_parked_non_queue_tractor_does_not_require_cp_ownership(self):
+        self.lua.execute('''
+            tv.spec_motorized={}; tv.getCpDriveStrategy=function() return nil end
+            assert(Q.tryHarvesterBypass(c,tv,false) and not c.queueBypass.driver)
+            assert(not u.queueData.bypass)
+        ''')
+
+    def test_wait_timeout_stops_at_update_boundary_not_inside_pathfinder_callback(self):
+        self.lua.execute('''
+            tv.spec_combine={}; tv.getCpDriveStrategy=function() return nil end
+            assert(Q.tryHarvesterBypass(c,tv,false)); local recovery=c.aiTurn
+            recovery:getDriveData(33); c.callback(c.callbackOwner,nil)
+            recovery:getDriveData(33); c.callback(c.callbackOwner,nil)
+            assert(not stopped and c.queueBypass.waiting)
+            g_currentMission.time=g_currentMission.time+120001
+            recovery:getDriveData(33)
+            assert(not stopped and c.queueRecoveryFailure)
+            c:update(33); assert(stopped and not c.queueBypass)
         ''')
 
 
