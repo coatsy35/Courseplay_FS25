@@ -20,6 +20,7 @@ end
 
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
+    if self.queueData and self.queueData.bypass then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' end
     return allowed(self)
@@ -27,6 +28,7 @@ end
 
 local call = U.call
 function U:call(combine,waypoint)
+    if self.queueData and self.queueData.bypass then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then
         if self.queueData.operation~='prepare' then return false end
@@ -60,8 +62,17 @@ end
 -- stationary queued trailer without changing the fieldwork destination.
 local combineBlocking = C.onBlockingVehicle
 function C:onBlockingVehicle(vehicle,isBack)
+    if not isBack and Q.checkParkedTrailerTravel(self) then return end
     if Q.tryHarvesterBypass(self,vehicle,isBack) then return end
     return combineBlocking(self,vehicle,isBack)
+end
+
+local combineDrive = C.getDriveData
+function C:getDriveData(...)
+    local hold=Q.checkParkedTrailerTravel(self)
+    local gx,gz,forwards,speed,acceleration=combineDrive(self,...)
+    if Q.checkParkedTrailerTravel(self) or hold then speed=0 end
+    return gx,gz,forwards,speed,acceleration
 end
 
 -- Preparation ends here. CP owns marker travel, retries, clearance and the
@@ -85,6 +96,7 @@ end
 
 local blocking = U.onBlockingVehicle
 function U:onBlockingVehicle(vehicle,isBack)
+    if Q.deferTrailerYield(self,vehicle) then return end
     if Q.priority(self,vehicle) then return end
     return blocking(self,vehicle,isBack)
 end
@@ -99,7 +111,8 @@ end
 -- The existing reverse-clearance manoeuvre retains its native controller.
 -- Invalidate a pending preparation route before native backup takes ownership.
 local backup = U.requestToBackupForReversingCombine
-function U:requestToBackupForReversingCombine(...)
+function U:requestToBackupForReversingCombine(vehicle,...)
+    if Q.deferTrailerYield(self,vehicle) then return end
     if Q.owns(self) then Q.release(self) end
-    return backup(self,...)
+    return backup(self,vehicle,...)
 end

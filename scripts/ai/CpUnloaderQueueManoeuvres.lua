@@ -5,6 +5,116 @@ local G = CpUnloaderQueueGeometry
 local H = HeadlandLoopGeometry
 local function distance(a,b) return math.sqrt((a.x-b.x)^2+(a.z-b.z)^2) end
 
+local function parkedQueueTrailer(driver)
+    local data=driver and driver.queueData
+    return data and Q.owns(driver) and data.operation=='prepare' and not data.nativeDeparture
+        and not Q.atDepartureThreshold(driver) and not driver:isDriveUnloadNowRequested()
+        and not driver.combineToUnload and AIUtil.isStopped(driver.vehicle)
+end
+
+local function ordinaryTravelTurn(combine)
+    local turn=combine.aiTurn
+    return combine.states and combine.state==combine.states.TURNING and turn
+        and combine.turnContext and turn.turnContext==combine.turnContext
+        and not turn.callbackFunction and turn.startRecoveryTurn
+        and not (turn.turnContext.isHeadlandCorner and turn.turnContext:isHeadlandCorner())
+end
+
+local function intersects(area,vehicle)
+    local bodies=W.currentBodies(vehicle)
+    if not bodies or not area then return true end -- unknown geometry cannot establish clearance
+    for _,item in ipairs(bodies) do
+        if area(W.rectangle(item.body,item.pose,0)) then return true end
+    end
+    return false
+end
+
+-- Only actual row-to-row travel courses qualify. Finishing-row extensions,
+-- headland corners, centre-work connectors and other combines retain native CP.
+-- Called after native drive data, so a newly installed turn is checked in the
+-- same update, before its first movement. Native speed limits can only decrease.
+function Q.checkParkedTrailerTravel(combine)
+    if not ordinaryTravelTurn(combine) then return false end
+    local turn=combine.aiTurn
+    local wait=combine.queueTrailerWait
+    if wait and wait.turn~=turn then combine.queueTrailerWait=nil; wait=nil end
+    if wait then
+        if intersects(wait.area,wait.driver.vehicle) then wait.clearSince=nil; return true end
+        for other in pairs(wait.driver.queueData and wait.driver.queueData.yieldRequests or {}) do
+            if other~=combine.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(other) then return true end
+        end
+        wait.clearSince=wait.clearSince or g_currentMission.time
+        if g_currentMission.time-wait.clearSince<2000 then return true end
+        combine.queueTrailerWait=nil
+        combine:debug('Queue: whole trailer clear of reserved turn; replanning original row entry')
+        -- Recheck the route from the stopped pose after the entire rig clears.
+        -- Never skip to the next row or restart the obstructed calculated turn.
+        local driver=wait.driver
+        if Q.owns(driver) and not Q.atDepartureThreshold(driver) and not driver:isDriveUnloadNowRequested() then
+            Q.take(driver,'prepare')
+            local bypass={turn=turn,vehicle=driver.vehicle,driver=driver,combine=combine,
+                area=wait.area,untilTime=g_currentMission.time+120000}
+            combine.queueBypass=bypass; driver.queueData.bypass=bypass
+        end
+        turn.state=turn.states.PREPARING_RECOVERY
+        return true
+    end
+    local active=combine.queueBypass
+    if active and active.turn==turn then
+        if active.braking then
+            if not parkedQueueTrailer(active.driver) then Q.clearHarvesterBypass(active.driver); return true end
+            if AIUtil.isStopped(combine.vehicle) then
+                Q.tryHarvesterBypass(combine,active.vehicle,false,active.area)
+            end
+            return true
+        end
+        return turn.state==turn.states.PREPARING_RECOVERY or turn.state==turn.states.WAITING_FOR_PATHFINDER
+    end
+    if turn.state~=turn.states.TURNING or not turn.turnCourse
+            or combine:getCurrentCourse()~=turn.turnCourse then return false end
+    local time=g_currentMission.time
+    local checked=combine.queueTrailerChecked
+    if checked and checked.course==turn.turnCourse and time-checked.time<200 then return false end
+    local firstCheck=not checked or checked.course~=turn.turnCourse
+    combine.queueTrailerChecked={course=turn.turnCourse,time=time}
+    local area
+    for driver in pairs(Q.members) do
+        if driver.vehicle~=combine.vehicle and parkedQueueTrailer(driver)
+                and not driver.queueData.bypass then
+            area=area or Q.yieldArea(combine.vehicle,turn.turnCourse,firstCheck and math.huge or 30,
+                firstCheck and 1600 or 160)
+            if area and intersects(area,driver.vehicle) then
+                -- Clearance must cover the full turn, even after a local approach check.
+                area=Q.yieldArea(combine.vehicle,turn.turnCourse,math.huge,1600) or area
+                Q.take(driver,'prepare') -- reserve and stop its queue movement during planning
+                local bypass={turn=turn,vehicle=driver.vehicle,driver=driver,combine=combine,
+                    area=area,braking=true,untilTime=time+120000}
+                combine.queueBypass=bypass; driver.queueData.bypass=bypass
+                combine:debug('Queue: parked trailer intersects planned row turn; stopping to plan around it')
+                if AIUtil.isStopped(combine.vehicle) then Q.tryHarvesterBypass(combine,driver.vehicle,false,area) end
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- Native forward/reverse proximity callbacks may run before drive data. Keep
+-- their trailer requests behind the same plan-first decision, only in scope.
+function Q.deferTrailerYield(driver,vehicle)
+    local combine=vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+    if not combine or not ordinaryTravelTurn(combine) then return false end
+    local data=driver.queueData
+    if not data or data.nativeDeparture or Q.atDepartureThreshold(driver) or driver:isDriveUnloadNowRequested() then return false end
+    if data and data.bypass and data.bypass.combine==combine then return true end
+    if combine.queueTrailerWait and combine.queueTrailerWait.driver==driver then return true end
+    if parkedQueueTrailer(driver) then
+        Q.checkParkedTrailerTravel(combine)
+        return data.bypass~=nil and data.bypass.combine==combine
+    end
+    return false
+end
+
 -- Use CP's collision-aware hybrid planner for the entire short bypass. Its
 -- fast A* middle section smooths using penalties only, so it can straighten a
 -- route back through a parked vehicle. Do not change that planner globally.
@@ -55,15 +165,14 @@ function Q.validateHarvesterBypass(turn)
     return true
 end
 
--- Called only after native proximity has reported a persistent vehicle block.
+-- Called by route preflight or native proximity's vehicle-block callback.
 -- Retain CP's target, implement preparation, pathfinder and collision geometry.
-function Q.tryHarvesterBypass(combine,vehicle,isBack)
+function Q.tryHarvesterBypass(combine,vehicle,isBack,area)
     local turn=combine.aiTurn
-    if isBack or not combine.states or combine.state~=combine.states.TURNING or not turn
-            or not combine.turnContext or turn.turnContext~=combine.turnContext
-            or turn.callbackFunction or not turn.startRecoveryTurn then return false end
+    if isBack or not ordinaryTravelTurn(combine) then return false end
+    if combine.queueTrailerWait and combine.queueTrailerWait.turn==turn then return true end
     local active=combine.queueBypass
-    if active and active.turn==turn then return active.vehicle==vehicle end
+    if active and active.turn==turn and not active.braking then return active.vehicle==vehicle end
     if turn.state~=turn.states.TURNING or (combine.pathfinder and combine.pathfinder:isActive())
             or (combine.pathfinderController and combine.pathfinderController.pathfinder) then return false end
     local driver=vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
@@ -76,33 +185,47 @@ function Q.tryHarvesterBypass(combine,vehicle,isBack)
         if other~=combine.vehicle then return false end
     end
     local time=g_currentMission.time
-    if combine.queueBypassAttempt and time-combine.queueBypassAttempt<15000 then return false end
+    if not area and combine.queueBypassAttempt and time-combine.queueBypassAttempt<15000 then return false end
     combine.queueBypassAttempt=time
+    area=area or (turn.turnCourse and Q.yieldArea(combine.vehicle,turn.turnCourse,math.huge,1600))
     turn:startRecoveryTurn(combine.turningRadius)
     local recovery=combine.aiTurn
     if recovery==turn then return false end
     Q.take(driver,'prepare')
     data.yieldRequests=nil; data.priorityCombine=nil
-    local bypass={turn=recovery,vehicle=vehicle,driver=driver,combine=combine,untilTime=time+120000}
+    local bypass={turn=recovery,vehicle=vehicle,driver=driver,combine=combine,area=area,untilTime=time+120000}
     combine.queueBypass=bypass; data.bypass=bypass
     recovery.generatePathfinderTurn=Q.generateHarvesterBypass
+    -- Unlike generic recovery, never perform an unchecked reverse first when
+    -- reverse pathfinding is disabled. The checked planner honours that setting.
+    recovery.startPreparedRecovery=function(self) self:generatePathfinderTurn() end
     local function failed(self,reason)
-        combine:debug('Queue: parked-trailer bypass failed: %s; no unchecked turn fallback',reason)
+        if combine.aiTurn~=self or combine.state~=combine.states.TURNING then return end
+        combine:debug('Queue: parked-trailer bypass failed: %s; holding for trailer clearance',reason)
         Q.clearHarvesterBypass(driver)
-        -- Do not resume at the next row or install a calculated turn through
-        -- the obstacle when the checked route cannot be completed.
-        self.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        self.state=self.states.WAITING_FOR_PATHFINDER
+        combine.pathfinder=nil
+        combine.queueTrailerWait={turn=self,driver=driver,area=area}
+        if Q.priority(driver,combine.vehicle) then
+            local request=driver.queueData.yieldRequests[combine.vehicle]
+            request.turnClearance=area
+            request.preferForward=true
+            driver.queueData.nextAttempt=0
+        end
     end
     local completed=recovery.onPathfindingDone
+    recovery.queueBypassFailed=failed
     recovery.onPathfindingDone=function(self,path)
+        if combine.aiTurn~=self or combine.state~=combine.states.TURNING or combine.queueTrailerWait then return end
         if not path or #path<=2 then failed(self,'no collision-checked route'); return end
         completed(self,path)
         -- Native completion appends alignment and adjusts reversing points.
         -- Check that final course before the next drive update can use it.
         if not Q.validateHarvesterBypass(self) then failed(self,'final route clearance'); return end
+        combine:debug('Queue: checked parked-trailer detour accepted; original row entry retained')
     end
     recovery.onBlocked=function(self)
-        if self.state==self.states.PREPARING_RECOVERY then return end
+        if self.state==self.states.PREPARING_RECOVERY or self.state==self.states.WAITING_FOR_PATHFINDER then return end
         failed(self,'recovery route blocked')
     end
     -- RecoveryTurn registered its original method during construction.
@@ -132,9 +255,13 @@ function Q.holdForHarvesterBypass(driver)
         return false
     end
     if g_currentMission.time>=bypass.untilTime then
-        Q.clearHarvesterBypass(driver)
-        combine:debug('Queue: parked-trailer bypass timed out; stopping recovery')
-        combine.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+        if bypass.turn.queueBypassFailed then
+            bypass.turn:queueBypassFailed('search timed out')
+        else
+            -- Still braking: do not release the reservation or permit motion.
+            driver:setMaxSpeed(0)
+            return true
+        end
         return false
     end
     driver:setMaxSpeed(0)
@@ -143,7 +270,8 @@ end
 
 -- Read CP's current route; never create or replace a harvester course here.
 -- The envelope includes the attached header, relative to the AI direction node.
-function Q.yieldArea(combine)
+function Q.yieldArea(combine,travelCourse,horizon,sampleLimit)
+    horizon=horizon or 30; sampleLimit=sampleLimit or 160
     local strategy=combine:getCpDriveStrategy()
     local origin=W.pose(combine:getAIDirectionNode())
     local bodies=W.currentBodies(combine)
@@ -169,7 +297,7 @@ function Q.yieldArea(combine)
         rectangles[#rectangles+1]=r
     end
     add(origin)
-    local course=strategy.getCurrentCourse and strategy:getCurrentCourse()
+    local course=travelCourse or (strategy.getCurrentCourse and strategy:getCurrentCourse())
     local ix=strategy.ppc and strategy.ppc:getRelevantWaypointIx()
     if course and ix and course:getNumberOfWaypoints()>1 then
         local previous,travelled,sinceSample=origin,0,0
@@ -184,7 +312,7 @@ function Q.yieldArea(combine)
                 or course:switchingToReverseAt(i)
             local t=course:getWaypointYRotation(i)+(reverse and math.pi or 0)
             local d=distance(previous,{x=x,z=z})
-            local fraction=d>0 and math.min(1,(30-travelled)/d) or 1
+            local fraction=d>0 and math.min(1,(horizon-travelled)/d) or 1
             local target={x=previous.x+(x-previous.x)*fraction,z=previous.z+(z-previous.z)*fraction,
                 t=previous.t+H.math.delta(t,previous.t)*fraction}
             local motion=d*fraction+cornerRadius*math.abs(H.math.delta(target.t,previous.t))
@@ -193,7 +321,7 @@ function Q.yieldArea(combine)
             -- straight route. One metre of padding covers the unsampled sweep.
             local sampleAt=1-sinceSample
             while sampleAt<=motion and motion>0 do
-                if #rectangles>=160 then return nil,'harvester route envelope sample limit' end
+                if #rectangles>=sampleLimit then return nil,'harvester route envelope sample limit' end
                 local f=sampleAt/motion
                 add({x=previous.x+(target.x-previous.x)*f,z=previous.z+(target.z-previous.z)*f,
                     t=previous.t+H.math.delta(target.t,previous.t)*f})
@@ -201,10 +329,10 @@ function Q.yieldArea(combine)
             end
             sinceSample=motion-(sampleAt-1)
             previous=target; travelled=travelled+d*fraction
-            if travelled>=30 then break end
+            if travelled>=horizon then break end
         end
         if sinceSample>0.000001 then
-            if #rectangles>=160 then return nil,'harvester route envelope sample limit' end
+            if #rectangles>=sampleLimit then return nil,'harvester route envelope sample limit' end
             add(previous)
         end
     end
@@ -242,6 +370,7 @@ function Q.priority(driver,combine)
         return false
     end
     local data=Q.data(driver)
+    if data.bypass and data.bypass.combine.vehicle==combine then return true end
     Q.clearHarvesterBypass(driver)
     if data.operation=='yield' and Q.owns(driver) then
         data.yieldRequests[combine]=data.yieldRequests[combine] or {}
@@ -264,15 +393,18 @@ end
 function Q.yieldTarget(driver,checkOnly)
     local data=Q.data(driver)
     local bodies=W.currentBodies(driver.vehicle)
-    local areas,combine,anyBlocked={},nil,false
+    local areas,combine,anyBlocked,preferForward={},nil,false,false
     local time=g_currentMission.time
     for vehicle,request in pairs(data.yieldRequests or {}) do
         if not AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
             data.yieldRequests[vehicle]=nil
         else
             local strategy=vehicle:getCpDriveStrategy()
+            preferForward=preferForward or request.preferForward
             if not request.checked or time-request.checked>=200 then
-                request.area,request.reason=Q.yieldArea(vehicle); request.checked=time
+                if request.turnClearance then request.area=request.turnClearance
+                else request.area,request.reason=Q.yieldArea(vehicle) end
+                request.checked=time
             end
             local blocked=not bodies or not request.area or strategy:isVehicleInProximity(driver.vehicle)
             for _,item in ipairs(bodies or {}) do
@@ -309,6 +441,13 @@ function Q.yieldTarget(driver,checkOnly)
         return true
     end
     local choices={}
+    if preferForward then
+        for _,length in ipairs({10,20,40,60}) do
+            local p=G.point({x=here.x,z=here.z,heading=here.t},0,length)
+            p.t=here.t; p.accept=accepts; p.clearance=corridor
+            choices[#choices+1]=p
+        end
+    end
     for _,lateralSide in ipairs({side,-side}) do
         local p=G.point({x=here.x,z=here.z,heading=here.t},lateralSide*(width/2+8),
             math.max(40,3*driver.turningRadius))

@@ -376,5 +376,35 @@ class YieldTests(unittest.TestCase):
             assert(u.queueData.operation=='yield' and not u:isAllowedToBeCalled())
         ''')
 
+    def test_detour_failure_forward_escape_clears_whole_reserved_turn(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(0,0,0); c.near=false
+            c.course=Course(harvester,{{x=0,z=0},{x=0,z=15},{x=20,z=20}},true)
+            place(0,25,0); includeHarvesterCollision()
+            v.cpGetFieldPolygon=function() return {{x=-80,z=-80},{x=80,z=-80},{x=80,z=180},{x=-80,z=180}} end
+            Q.take(u,'prepare'); nativeRequest()
+            local request=u.queueData.yieldRequests[harvester]
+            request.turnClearance=assert(Q.yieldArea(harvester,c.course,math.huge,1600))
+            request.preferForward=true
+            Q.request(u,assert(Q.yieldTarget(u)))
+            local data=u.queueData
+            assert(data.search,data.reason or 'escape search did not start')
+            local done,path,reason
+            for i=1,300000 do
+                done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
+                if done then break end
+            end
+            assert(done and path and not path.reverse,reason or 'no forward clearance')
+            local poses=W.poses(data.world.model)
+            for i=2,#path do
+                poses=H.advance(data.world.model,poses,path[i])
+                assert(W.clear(data.world,poses),'escape intersects live collision or crop')
+            end
+            for i,p in ipairs(poses) do
+                assert(not request.turnClearance(W.rectangle(data.world.model.bodies[i],p)),
+                    'trailer remains in reserved turn')
+            end
+        ''')
+
 
 if __name__ == '__main__': unittest.main()

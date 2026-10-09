@@ -23,6 +23,12 @@ class HarvesterBypassTests(unittest.TestCase):
         start=source.index('function AIDriveStrategyFieldWorkCourse:startRecoveryTurn(')
         end=source.index('\nend',start)+4
         self.lua.execute(source[start:end])
+        self.lua.execute('''
+            AIDriveStrategyCombineCourse.getDriveData=function(self)
+                if nativeStep then nativeStep() end
+                return 10,20,true,nativeSpeed or 10,0.7
+            end
+        ''')
         runtime.load_queue(self.lua)
         self.lua.execute('''
             Q=CpUnloaderQueue; g_currentMission.time=10000
@@ -86,6 +92,191 @@ class HarvesterBypassTests(unittest.TestCase):
             Q.take(u,'prepare')
         ''')
 
+    def travel_fixture(self, trailer_x=0, trailer_z=40):
+        self.lua.execute('''
+            W=CpUnloaderQueueWorld; G=CpUnloaderQueueGeometry
+            hv.rootNode={x=0,z=0,t=0}; hv.size={width=3.5,length=8}
+            hv.getAIDirectionNode=function() return hv.rootNode end
+            hv.getCpDriveStrategy=function() return c end
+            local header={rootNode={x=0,z=5,t=0},size={width=15.2,length=2}}
+            hv.getAttachedImplements=function() return {{object=header}} end
+            tv.rootNode={x=0,z=40,t=0}; tv.size={width=3,length=5}
+            tv.getAIDirectionNode=function() return tv.rootNode end
+            trailer={rootNode={x=0,z=30,t=0},size={width=3,length=10}}
+            tv.getAttachedImplements=function() return {{object=trailer}} end
+            c.getCurrentCourse=function() return installed or old.turnCourse end
+            c.ppc.getRelevantWaypointIx=function() return 1 end
+            c.isVehicleInProximity=function() return false end
+            u.releaseCombine=function() u.combineToUnload=nil end
+            AIDriveStrategyCombineCourse.isActiveCpCombine=function(v) return v==hv and v.active end
+            old.turnCourse=Course(hv,{{x=0,z=0},{x=0,z=20},{x=0,z=60},{x=20,z=80}},true)
+            context.isHeadlandCorner=function() return false end
+            u.turningRadius=9
+            AIUtil.getLength=function() return 18 end
+        ''')
+        self.lua.execute(f'tv.rootNode.x={trailer_x}; tv.rootNode.z={trailer_z}; '
+                         f'trailer.rootNode.x={trailer_x}; trailer.rootNode.z={trailer_z-10}')
+
+    def test_planned_turn_checks_full_header_and_trailer_before_first_movement(self):
+        self.travel_fixture(trailer_x=7, trailer_z=40)
+        self.lua.execute('''
+            local gx,gz,f,s,a=c:getDriveData(33)
+            assert(gx==10 and gz==20 and f and s==0 and a==0.7)
+            assert(c.aiTurn~=old and not u.queueData.yieldRequests)
+            assert(not u:isAllowedToBeCalled() and not u:call(hv,{}))
+            c.aiTurn:getDriveData(33)
+            assert(calls==1 and not stopped and context.turnEndWpIx==953)
+        ''')
+
+    def test_brakes_and_reserves_trailer_before_starting_search(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            hv.stopped=false
+            assert(select(4,c:getDriveData(33))==0 and c.aiTurn==old)
+            assert(c.queueBypass.braking and not u.queueData.yieldRequests)
+            assert(Q.holdForHarvesterBypass(u) and u.speed==0)
+            hv.stopped=true
+            assert(select(4,c:getDriveData(33))==0 and c.aiTurn~=old)
+            assert(not u.queueData.yieldRequests)
+        ''')
+
+    def test_route_appearing_in_native_drive_update_is_checked_immediately(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            local planned=old.turnCourse; old.turnCourse=nil
+            old.states.FINISHING_ROW={}; old.state=old.states.FINISHING_ROW
+            nativeStep=function() old.turnCourse=planned; old.state=old.states.TURNING end
+            assert(select(4,c:getDriveData(33))==0 and c.aiTurn~=old)
+        ''')
+
+    def test_trailer_entering_route_is_detected_on_approach(self):
+        self.travel_fixture(trailer_x=30)
+        self.lua.execute('''
+            assert(select(4,c:getDriveData(33))==10 and c.aiTurn==old)
+            tv.rootNode.x=0; trailer.rootNode.x=0; g_currentMission.time=g_currentMission.time+201
+            assert(select(4,c:getDriveData(33))==0 and c.aiTurn~=old)
+        ''')
+
+    def test_native_corner_centre_entry_and_row_finishing_are_unchanged(self):
+        for condition in (
+            'context.isHeadlandCorner=function() return true end',
+            'old.callbackFunction=function() end',
+            'old.states.FINISHING_ROW={}; old.state=old.states.FINISHING_ROW',
+            'c.states.DRIVING_TO_WORK_START_WAYPOINT={}; c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT',
+            'old.turnCourse=nil',
+        ):
+            with self.subTest(condition=condition):
+                self.setUp(); self.travel_fixture()
+                self.lua.execute(condition+'''
+                    nativeSpeed=0
+                    assert(select(4,c:getDriveData(33))==0 and c.aiTurn==old)
+                    nativeSpeed=10
+                    assert(select(4,c:getDriveData(33))==10 and c.aiTurn==old)
+                    assert(not c.queueBypass and not u.queueData.yieldRequests)
+                ''')
+
+    def test_unobstructed_turn_and_non_queue_harvester_do_not_trigger_changes(self):
+        self.travel_fixture(trailer_x=30)
+        self.lua.execute('''
+            assert(select(4,c:getDriveData(33))==10 and c.aiTurn==old)
+            Q.members={}; tv.rootNode.x=0; trailer.rootNode.x=0
+            g_currentMission.time=g_currentMission.time+201
+            assert(select(4,c:getDriveData(33))==10 and c.aiTurn==old)
+        ''')
+
+    def test_failed_detour_requests_forward_clearance_then_replans_same_row(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            assert(Q.checkParkedTrailerTravel(c)); local recovery=c.aiTurn
+            recovery:getDriveData(33); c.callback(c.callbackOwner,nil)
+            assert(not stopped and c.queueTrailerWait and u.queueData.operation=='yield')
+            assert(select(4,c:getDriveData(33))==0)
+            local request=u.queueData.yieldRequests[hv]
+            assert(request.turnClearance and request.preferForward)
+            local target=Q.yieldTarget(u)
+            assert(target and target.choices[1].z>tv.rootNode.z and not target.choices[1].reverse)
+            -- Tractor clear is insufficient while its trailer remains in the turn.
+            tv.rootNode.x=30
+            assert(Q.checkParkedTrailerTravel(c) and c.queueTrailerWait)
+            trailer.rootNode.x=30
+            assert(Q.checkParkedTrailerTravel(c))
+            g_currentMission.time=g_currentMission.time+2001
+            assert(Q.checkParkedTrailerTravel(c) and not c.queueTrailerWait)
+            assert(recovery.state==recovery.states.PREPARING_RECOVERY)
+            assert(u.queueData.bypass and u.queueData.operation=='prepare')
+            recovery:getDriveData(33)
+            assert(calls==2 and args[3]==targetNode and context.turnEndWpIx==953)
+        '''.replace('args[3]==targetNode', 'args[3].x==20 and args[3].z==30'))
+
+    def test_reverse_disabled_still_plans_before_any_movement(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            c.getAllowReversePathfinding=function() return false end
+            assert(Q.checkParkedTrailerTravel(c))
+            c.aiTurn:getDriveData(33)
+            assert(calls==1 and not args[6] and not installed and not u.queueData.yieldRequests)
+        ''')
+
+    def test_native_reverse_backup_during_drive_update_cannot_preempt_planning(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            -- Execute native checkBlockingUnloader, including its request to U.
+            c.ppc.isReversing=function() return true end
+            AIUtil.isReversing=function() return false end
+            c.proximityController.checkBlockingVehicleBack=function() return 12,tv end
+            c.unloaderRequestedToIgnoreProximity={get=function() return nil end}
+            c.isWaitingForUnload=function() return false end
+            c.shouldHoldInTurnManeuver=function() return false end
+            c.debugSparse=function() end; tv.getName=function() return 'parked trailer' end
+            nativeStep=function() c:checkBlockingUnloader() end
+            assert(select(4,c:getDriveData(33))==0 and c.aiTurn~=old)
+            assert(u.queueData.bypass and not u.queueData.yieldRequests)
+            assert(u.state==u.queueData.state)
+        ''')
+
+    def test_forward_and_reverse_requests_before_drive_data_plan_first(self):
+        for request in ('u:requestToBackupForReversingCombine(hv)', 'u:onBlockingVehicle(hv,false)'):
+            with self.subTest(request=request):
+                self.setUp(); self.travel_fixture()
+                self.lua.execute(request+'''
+                    assert(c.aiTurn~=old and u.queueData.bypass and not u.queueData.yieldRequests)
+                ''')
+
+    def test_successful_bypass_can_complete_native_ending_turn(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=10,y=-10,t=0},{x=20,y=-30,t=0}})
+            c.aiTurn.state=c.aiTurn.states.ENDING_TURN
+            assert(select(4,c:getDriveData(33))==10)
+            nativeSpeed=0; assert(select(4,c:getDriveData(33))==0)
+            c.state=c.states.WORKING
+            assert(not Q.holdForHarvesterBypass(u) and not c.queueBypass)
+        ''')
+
+    def test_other_combine_yield_is_not_cancelled_when_first_turn_clears(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,nil)
+            local other={}
+            AIDriveStrategyCombineCourse.isActiveCpCombine=function() return true end
+            u.queueData.yieldRequests[other]={}
+            tv.rootNode.x=30; trailer.rootNode.x=30
+            g_currentMission.time=g_currentMission.time+3000
+            assert(Q.checkParkedTrailerTravel(c) and c.queueTrailerWait)
+            assert(u.queueData.operation=='yield' and u.queueData.yieldRequests[other])
+        ''')
+
+    def test_superseded_turn_ignores_late_pathfinder_callback(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
+            c.aiTurn=old
+            c.callback(c.callbackOwner,nil)
+            assert(not stopped and not c.queueTrailerWait and not u.queueData.yieldRequests)
+        ''')
+
     def test_vehicle_block_callback_starts_native_recovery_to_unchanged_target(self):
         self.lua.execute('''
             c:onBlockingVehicle(tv,false)
@@ -106,6 +297,7 @@ class HarvesterBypassTests(unittest.TestCase):
         self.lua.execute('c.pathfinder={isActive=function() return false end}; assert(Q.tryHarvesterBypass(c,tv,false))')
 
     def test_real_native_planner_routes_header_around_parked_rig(self):
+        self.travel_fixture()
         self.lua.execute('''
             CpUtil.getDefaultCollisionFlags=function() return 334339 end
             CollisionFlag={TERRAIN_DELTA=0}
@@ -128,7 +320,7 @@ class HarvesterBypassTests(unittest.TestCase):
             assert(not validation:isValidNode(State3D(0,-40,CpMathUtil.angleFromGame(0)),false,true),'fixture must detect trailer collision')
             Q.generateHarvesterBypass=productionGenerate
             PathfinderUtil.findPathForTurn=nativeTurnSearch
-            assert(Q.tryHarvesterBypass(c,tv,false))
+            assert(Q.checkParkedTrailerTravel(c))
             c.aiTurn:getDriveData(33)
             for i=1,2000 do
                 if installed or stopped then break end
@@ -158,7 +350,8 @@ class HarvesterBypassTests(unittest.TestCase):
             recovery.generateCalculatedTurn=function() error('unsafe fallback') end
             recovery.resumeFieldworkAfterTurn=function() error('skipped blocked corner') end
             recovery:getDriveData(33); c.callback(c.callbackOwner,nil)
-            assert(stopped and not installed and not u.queueData.bypass and not c.queueBypass)
+            assert(not stopped and not installed and not u.queueData.bypass and not c.queueBypass)
+            assert(c.queueTrailerWait and recovery.state==recovery.states.WAITING_FOR_PATHFINDER)
         ''')
 
     def test_recovery_block_listener_does_not_skip_row(self):
@@ -167,7 +360,7 @@ class HarvesterBypassTests(unittest.TestCase):
             recovery.resumeFieldworkAfterTurn=function() error('skipped blocked corner') end
             c.proximityController.callback(recovery); assert(not stopped)
             recovery.state=recovery.states.TURNING
-            c.proximityController.callback(recovery); assert(stopped and not c.queueBypass)
+            c.proximityController.callback(recovery); assert(not stopped and c.queueTrailerWait and not c.queueBypass)
         ''')
 
     def test_final_adjusted_course_is_rejected_if_it_intersects_an_obstacle(self):
@@ -179,7 +372,8 @@ class HarvesterBypassTests(unittest.TestCase):
                 checks=checks+1; return node.x<5
             end
             c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=10,y=-10,t=0},{x=20,y=-30,t=0}})
-            assert(stopped and checks>1 and not c.queueBypass and context.turnEndWpIx==953)
+            assert(not stopped and checks>1 and not c.queueBypass and context.turnEndWpIx==953)
+            assert(c.queueTrailerWait and recovery.state==recovery.states.WAITING_FOR_PATHFINDER)
         ''')
 
     def test_moving_full_assigned_and_native_departing_trailers_do_not_get_held(self):
@@ -209,10 +403,10 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_cancel_invalidates_both_hold_references(self):
         self.lua.execute('assert(Q.tryHarvesterBypass(c,tv,false)); Q.cancel(u); assert(not c.queueBypass and not u.queueData.bypass)')
 
-    def test_timed_out_recovery_stops_before_releasing_parked_trailer(self):
+    def test_timed_out_recovery_holds_combine_for_clearance(self):
         self.lua.execute('''
             assert(Q.tryHarvesterBypass(c,tv,false)); g_currentMission.time=130001
-            assert(not Q.holdForHarvesterBypass(u)); assert(stopped and not c.queueBypass)
+            assert(not Q.holdForHarvesterBypass(u)); assert(not stopped and c.queueTrailerWait and not c.queueBypass)
         ''')
 
     def test_failed_recovery_creation_does_not_change_queue_state(self):

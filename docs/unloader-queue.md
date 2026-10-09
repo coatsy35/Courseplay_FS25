@@ -1,3 +1,41 @@
+## Current contract - build 3019: plan around parked trailers before yielding (9 October 2026)
+
+Starting from the exact 3013 runtime restored in 3018, ordinary planned
+row-to-row travel checks the actual turn course against parked CP queue rigs,
+including the combine header and every attached trailer. Check the complete
+turn when installed, before the first drive command. Subsequent approach checks
+use a 30 m horizon every 200 ms; an obstruction reserves the complete remaining
+turn for clearance. This does not scan a row-finishing extension as a turn.
+
+Priority is explicit: stop short and reserve the trailer, then plan a checked
+combine detour to the unchanged row-entry target. Keep native proximity and
+convoy speed limits. A native forward/reverse request cannot move this reserved
+trailer ahead of the detour decision. Reverse-disabled recovery must also plan
+first; it cannot start a speculative reverse manoeuvre.
+
+Only a failed or timed-out detour requests trailer clearance. The combine waits
+while the queue searches a validated whole-rig escape, trying forward distances
+before lateral/reverse candidates and retaining its existing quickest-clearance
+selection. Clearance must cover the complete reserved turn, not just the tractor
+or a short strip. After the whole rig clears for two seconds, replan the same row
+entry; do not skip the turn or blindly resume the blocked route. Another active
+harvester's outstanding yield request prevents reclaiming that trailer.
+
+Scope excludes native headland corners, FinishRowOnly, headland-to-centre
+connectors, incremental turns without a planned course, active combine convoy
+coordination and native full/manual departure. Native route generation, crop
+checks, turning radius, saved course and straight entry remain as restored in
+3018. Departure continues to use each tractor's adjustable CP threshold.
+
+Qualification adds same-update preflight, moving-combine braking, header-only
+obstruction, approach detection, no-obstruction/native-stop parity, scope
+exclusions, native reverse-request ordering, detour-failure/forward-yield/replan,
+whole-trailer clearance, other-harvester yield retention, late callback rejection,
+reverse-disabled planning and successful ENDING_TURN completion. Real planner
+and articulated escape tests exercise production searches with engine-boundary
+fixtures. Release checks run source and extracted-ZIP suites. These checks do
+not establish live physics or acceptance in the user's saved game.
+
 ## Current contract - build 3018: exact restoration of 3013 (9 October 2026)
 
 The user confirmed build 3013 works at the tested map location and explicitly
