@@ -36,6 +36,14 @@ end
 function Q.checkParkedTrailerTravel(combine)
     if not ordinaryTravelTurn(combine) then return false end
     local turn=combine.aiTurn
+    if turn.queueYieldReason then
+        if AIUtil.isStopped(combine.vehicle) then
+            local reason=turn.queueYieldReason
+            turn.queueYieldReason=nil
+            turn:queueBypassFailed(reason)
+        end
+        return true
+    end
     local wait=combine.queueTrailerWait
     if wait and wait.turn~=turn then combine.queueTrailerWait=nil; wait=nil end
     if wait then
@@ -172,7 +180,13 @@ function Q.tryHarvesterBypass(combine,vehicle,isBack,area)
     if isBack or not ordinaryTravelTurn(combine) then return false end
     if combine.queueTrailerWait and combine.queueTrailerWait.turn==turn then return true end
     local active=combine.queueBypass
-    if active and active.turn==turn and not active.braking then return active.vehicle==vehicle end
+    if active and active.turn==turn and not active.braking then
+        if active.vehicle~=vehicle then return false end
+        if turn.state==turn.states.TURNING or turn.state==turn.states.ENDING_TURN then
+            turn:queueBypassFailed('accepted detour persistently blocked by reserved trailer')
+        end
+        return true
+    end
     if turn.state~=turn.states.TURNING or (combine.pathfinder and combine.pathfinder:isActive())
             or (combine.pathfinderController and combine.pathfinderController.pathfinder) then return false end
     local driver=vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
@@ -201,10 +215,14 @@ function Q.tryHarvesterBypass(combine,vehicle,isBack,area)
     recovery.startPreparedRecovery=function(self) self:generatePathfinderTurn() end
     local function failed(self,reason)
         if combine.aiTurn~=self or combine.state~=combine.states.TURNING then return end
-        combine:debug('Queue: parked-trailer bypass failed: %s; holding for trailer clearance',reason)
-        Q.clearHarvesterBypass(driver)
         self.state=self.states.WAITING_FOR_PATHFINDER
         combine.pathfinder=nil
+        if not AIUtil.isStopped(combine.vehicle) then
+            self.queueYieldReason=reason
+            return -- brake before permitting the parked rig to start moving
+        end
+        combine:debug('Queue: parked-trailer bypass failed: %s; holding for trailer clearance',reason)
+        Q.clearHarvesterBypass(driver)
         combine.queueTrailerWait={turn=self,driver=driver,area=area}
         if Q.priority(driver,combine.vehicle) then
             local request=driver.queueData.yieldRequests[combine.vehicle]
@@ -216,7 +234,8 @@ function Q.tryHarvesterBypass(combine,vehicle,isBack,area)
     local completed=recovery.onPathfindingDone
     recovery.queueBypassFailed=failed
     recovery.onPathfindingDone=function(self,path)
-        if combine.aiTurn~=self or combine.state~=combine.states.TURNING or combine.queueTrailerWait then return end
+        if combine.aiTurn~=self or combine.state~=combine.states.TURNING
+                or combine.queueTrailerWait or self.queueYieldReason then return end
         if not path or #path<=2 then failed(self,'no collision-checked route'); return end
         completed(self,path)
         -- Native completion appends alignment and adjusts reversing points.
@@ -254,11 +273,13 @@ function Q.holdForHarvesterBypass(driver)
         Q.clearHarvesterBypass(driver)
         return false
     end
-    if g_currentMission.time>=bypass.untilTime then
+    if g_currentMission.time>=bypass.untilTime and
+            (bypass.turn.state==bypass.turn.states.PREPARING_RECOVERY
+                or bypass.turn.state==bypass.turn.states.WAITING_FOR_PATHFINDER) then
         if bypass.turn.queueBypassFailed then
             bypass.turn:queueBypassFailed('search timed out')
-        else
-            -- Still braking: do not release the reservation or permit motion.
+        end
+        if data.bypass then
             driver:setMaxSpeed(0)
             return true
         end

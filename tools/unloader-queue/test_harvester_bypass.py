@@ -254,6 +254,35 @@ class HarvesterBypassTests(unittest.TestCase):
             assert(not Q.holdForHarvesterBypass(u) and not c.queueBypass)
         ''')
 
+    def test_successful_detour_does_not_time_out_during_convoy_wait_or_driving(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=10,y=-10,t=0},{x=20,y=-30,t=0}})
+            g_currentMission.time=200001
+            hv.stopped=false
+            assert(Q.holdForHarvesterBypass(u) and not c.queueTrailerWait)
+            assert(not u.queueData.yieldRequests and select(4,c:getDriveData(33))==10)
+            hv.stopped=true; nativeSpeed=0
+            assert(Q.holdForHarvesterBypass(u) and select(4,c:getDriveData(33))==0)
+            assert(not c.queueTrailerWait and not u.queueData.yieldRequests)
+        ''')
+
+    def test_persistent_trailer_block_brakes_before_fallback_movement(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=10,y=-10,t=0},{x=20,y=-30,t=0}})
+            hv.stopped=false
+            c:onBlockingVehicle(tv,false)
+            assert(c.aiTurn.queueYieldReason and not u.queueData.yieldRequests)
+            assert(Q.holdForHarvesterBypass(u) and select(4,c:getDriveData(33))==0)
+            assert(not u.queueData.yieldRequests)
+            hv.stopped=true
+            assert(select(4,c:getDriveData(33))==0 and c.queueTrailerWait)
+            assert(u.queueData.operation=='yield' and u.queueData.yieldRequests[hv])
+        ''')
+
     def test_other_combine_yield_is_not_cancelled_when_first_turn_clears(self):
         self.travel_fixture()
         self.lua.execute('''
