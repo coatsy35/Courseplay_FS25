@@ -60,6 +60,7 @@ function Q.checkParkedTrailerTravel(combine)
         local driver=wait.driver
         if Q.owns(driver) and not Q.atDepartureThreshold(driver) and not driver:isDriveUnloadNowRequested() then
             Q.take(driver,'prepare')
+            driver.queueData.yieldRequests=nil; driver.queueData.priorityCombine=nil
             local bypass={turn=turn,vehicle=driver.vehicle,driver=driver,combine=combine,
                 area=wait.area,untilTime=g_currentMission.time+120000}
             combine.queueBypass=bypass; driver.queueData.bypass=bypass

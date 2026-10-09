@@ -204,6 +204,7 @@ class HarvesterBypassTests(unittest.TestCase):
             assert(Q.checkParkedTrailerTravel(c) and not c.queueTrailerWait)
             assert(recovery.state==recovery.states.PREPARING_RECOVERY)
             assert(u.queueData.bypass and u.queueData.operation=='prepare')
+            assert(not u.queueData.yieldRequests and not u.queueData.priorityCombine)
             recovery:getDriveData(33)
             assert(calls==2 and args[3]==targetNode and context.turnEndWpIx==953)
         '''.replace('args[3]==targetNode', 'args[3].x==20 and args[3].z==30'))
