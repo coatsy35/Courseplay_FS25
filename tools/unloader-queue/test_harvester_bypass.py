@@ -448,6 +448,56 @@ class HarvesterBypassTests(unittest.TestCase):
             assert(Q.guardHarvesterTurn(c,10)==10,'actual clearance must release the guard')
         ''')
 
+    def test_row_finishing_does_not_reserve_unused_straight_course_tail(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            -- Native row finishing changes course once the header is raised;
+            -- its straight guiding course is not a committed turn trajectory.
+            old.states.FINISHING_ROW={}; old.state=old.states.FINISHING_ROW
+            assert(Q.guardHarvesterTurn(c,8)==8)
+            assert(Q.guardHarvesterTurn(c,0)==0,'native proximity stop must remain intact')
+            assert(bypassCalls==0 and not c.queueTurnGuard and not c.queueTurnPreflight)
+            assert(not Q.tryHarvesterBypass(c,tv,false) and c.aiTurn==old)
+            -- Once the real turn starts, the parked trailer is still protected.
+            old.state=old.states.TURNING
+            assert(Q.guardHarvesterTurn(c,8)==0 and bypassCalls==1)
+        ''')
+
+    def test_active_fieldworker_keeps_native_corner_coordination(self):
+        self.install_guard_geometry()
+        self.lua.execute('''
+            tv.getIsCpFieldWorkActive=function() return true end
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}
+            for _,state in ipairs({c.states.TURNING,c.states.DRIVING_TO_WORK_START_WAYPOINT}) do
+                c.state=state; c.queueTurnGuard=nil
+                assert(Q.guardHarvesterTurn(c,8)==8,'queue must not stop the leader for its active follower')
+                assert(Q.guardHarvesterTurn(c,0)==0,'native convoy/proximity stop must remain intact')
+                assert(bypassCalls==0 and not c.queueBypass and not c.queueRecoveryFailure)
+            end
+            -- Stopping the other CP job makes it genuinely parked again.
+            tv.getIsCpFieldWorkActive=function() return false end
+            g_currentMission.time=g_currentMission.time+100
+            assert(Q.guardHarvesterTurn(c,8)==0 and bypassCalls==1)
+        ''')
+
+    def test_stopped_active_harvester_is_not_reclassified_as_parked(self):
+        self.lua.execute('''
+            tv.spec_combine={}; tv.getIsCpFieldWorkActive=function() return true end
+            local other={requestToMoveOutOfWay=function(_,vehicle,back)
+                assert(vehicle==hv and not back); nativeRequest=true
+            end}
+            tv.getCpDriveStrategy=function() return other end
+            c:onBlockingVehicle(tv,false)
+            assert(nativeRequest and c.aiTurn==old and calls==0)
+            assert(not c.queueBypass and not c.queueRecoveryFailure and not raised)
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}; c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
+            local starter={turnContext=context,states={DRIVING_TO_ROW={}}}
+            starter.state=starter.states.DRIVING_TO_ROW; c.workStarter=starter
+            nativeRequest=nil; c:onBlockingVehicle(tv,false)
+            assert(nativeRequest and c.workStarter==starter and c.aiTurn==old and calls==0)
+            assert(not c.queueBypass and not c.queueRecoveryFailure)
+        ''')
+
     def test_guard_checks_attached_header_and_keeps_parallel_traffic_clear(self):
         self.install_guard_geometry()
         self.lua.execute('''

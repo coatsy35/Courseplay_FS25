@@ -818,7 +818,10 @@ function AIDriveStrategyFieldWorkCourse:checkHarvesterConnectorEntry(course, ent
     local cut = math.max(1, course:getPreviousWaypointIxWithinDistance(course:getNumberOfWaypoints(), 2 * radius) or 1)
     local start = PathfinderUtil.getWaypointAsState3D(course:getWaypoint(cut), 0, 0)
     local tail, length = PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(), start, goal, radius)
-    if not tail or length > 6 * radius + 5 then return nil end
+    if not tail or length > 6 * radius + 5 then
+        self:debug('Connector entry at %d rejected: exact join does not fit', entry.joinIx)
+        return nil
+    end
     local finish = Course.createFromAnalyticPath(self.vehicle, tail, true)
     local joined = finish
     if cut > 1 then
@@ -852,8 +855,16 @@ function AIDriveStrategyFieldWorkCourse:advanceHarvesterConnectorValidation(entr
         -- A local shortcut must not introduce standing-crop travel. If it cannot
         -- avoid fruit, leave that decision to native full-route search/penalties.
         local fruit, amount = PathfinderUtil.hasFruit(node.x, -node.y, 3, 3, entry.joinContext._areaToIgnoreFruit)
-        if fruit and amount > entry.joinContext._maxFruitPercent then return true, nil end
-        if not v.constraints:isValidNode(node, false, true) then return true, nil end
+        if fruit and amount > entry.joinContext._maxFruitPercent then
+            self:debug('Connector entry at %d rejected: crop %.1f exceeds %.1f at %.1f/%.1f',
+                entry.joinIx, amount, entry.joinContext._maxFruitPercent, node.x, -node.y)
+            return true, nil
+        end
+        if not v.constraints:isValidNode(node, false, true) then
+            self:debug('Connector entry at %d rejected: native clearance at %.1f/%.1f, colliding shapes %s',
+                entry.joinIx, node.x, -node.y, tostring(node.collidingShapes))
+            return true, nil
+        end
         v.sample = v.sample + 1
         if v.sample > v.count then v.ix=v.ix+1; v.sample=0; v.a=nil end
     end

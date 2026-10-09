@@ -56,7 +56,7 @@ def check_connector_entry():
     pattern = r' *-- BEGIN authorised harvester connector entry\n.*? *-- END authorised harvester connector entry\n'
     additions = re.findall(pattern, actual, re.S)
     if len(additions) != 3 or hashlib.sha256(''.join(additions).encode()).hexdigest() != (
-            'babb252c553e199742f5cc05d1fd36823cbe43d05d31777588b757f5552f0870'):
+            '44f6f2149bc9fc4254d82b8e5c74f2c61ed4383b0892c177c2be552b9d732a52'):
         raise RuntimeError('Unreviewed harvester connector entry change')
     if re.sub(pattern, '', actual, flags=re.S) != expected:
         raise RuntimeError('Native fieldwork changed outside authorised connector entry')

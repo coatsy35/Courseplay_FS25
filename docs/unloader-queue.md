@@ -1,3 +1,38 @@
+## Current contract - build 3017 (9 October 2026)
+
+Parked-vehicle avoidance must not take ownership of native row finishing or
+coordination between active CP harvesters. The extra queue envelope now returns
+native speed unchanged during FINISHING_ROW: that phase follows an overlong
+straight guiding course which native implement raising ends early, not a
+committed turn. The queue must not reserve its unused tail and trigger a trailer
+reverse before the actual turn exists. Native proximity remains active.
+
+An active CpAIJobFieldWork harvester is excluded from the added queue envelope
+and parked-vehicle recovery, including while temporarily stopped. The original
+native blocking callback and convoy/proximity limits remain in charge. A stopped
+fieldwork job is a genuinely parked obstacle again. Actual turns around parked
+trailers and inactive combines retain the checked detour and header guard.
+
+Evidence: the preserved 3016 log before reset shows CR11/319 stopped by the queue
+while finishing its row at 13:21:19.776; trailer 322 began a 10-metre reverse at
+13:21:21.978. At 13:21:49.068 the new connector guard held the lead combine for
+active CR11/318. At 13:22:15.183 custom recovery labelled 318 parked. Its failed
+detour ended in ERROR_NO_PATH_FOUND at 13:24:15.403, and 318 then remained blocked
+by 319 until game exit. These are scope errors in the added recovery, not evidence
+that the native convoy controller was removed. The earlier successful 3013 run
+had no additional queue envelope. Its first combine's local joins also failed
+before a full-route search. Current evidence does not identify the exact cause
+of each rejected 3016 U-turn: new per-candidate diagnostics distinguish crop,
+native clearance and an unfit exact join without changing those checks.
+
+Three regressions fail on 3016 and pass after the scope correction: unused
+row-finishing tail; active harvester versus genuinely parked harvester; and
+native blocking callbacks during both a turn and centre-work approach. The
+40-test detour suite still covers real planner/header clearance. Release checks
+also qualify the packaged ZIP. Actual physical corner timing, trailer clearance
+and the tight-turn choice still require the saved-game run; mocks cannot establish
+those outcomes. No native course, waiting, collision or AD method is changed.
+
 ## Current contract - build 3016 (9 October 2026)
 
 Headland-to-centre connector entry tries the native direct Dubins turn before

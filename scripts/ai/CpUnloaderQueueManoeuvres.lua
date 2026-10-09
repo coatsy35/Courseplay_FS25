@@ -5,6 +5,14 @@ local G = CpUnloaderQueueGeometry
 local H = HeadlandLoopGeometry
 local function distance(a,b) return math.sqrt((a.x-b.x)^2+(a.z-b.z)^2) end
 
+-- A fieldworker waiting for its turn is not a parked obstacle. Native CP owns
+-- the convoy/proximity relationship between active harvesters, including when
+-- one is temporarily stationary or joining centre work.
+local function isActiveFieldworker(vehicle)
+    return vehicle and vehicle.spec_combine and vehicle.getIsCpFieldWorkActive
+        and vehicle:getIsCpFieldWorkActive()
+end
+
 -- Use CP's collision-aware hybrid planner for the entire short bypass. Its
 -- fast A* middle section smooths using penalties only, so it can straighten a
 -- route back through a parked vehicle. Do not change that planner globally.
@@ -137,6 +145,7 @@ end
 -- Called only after native proximity has reported a persistent vehicle block.
 -- Retain CP's target, implement preparation, pathfinder and collision geometry.
 function Q.tryHarvesterBypass(combine,vehicle,isBack)
+    if isActiveFieldworker(vehicle) then return false end
     if not combine.states then return false end
     local connector=combine.states.DRIVING_TO_WORK_START_WAYPOINT and
         combine.state==combine.states.DRIVING_TO_WORK_START_WAYPOINT
@@ -273,8 +282,15 @@ function Q.guardHarvesterTurn(combine,speed)
     end
     local connector=combine.states.DRIVING_TO_WORK_START_WAYPOINT and
         combine.state==combine.states.DRIVING_TO_WORK_START_WAYPOINT
-    if combine.state~=combine.states.TURNING and not connector then
-        combine.queueTurnGuard=nil; combine.queueTurnPreflight=nil; return speed
+    local turn=combine.aiTurn
+    local finishing=combine.state==combine.states.TURNING and turn and turn.states.FINISHING_ROW
+        and turn.state==turn.states.FINISHING_ROW
+    -- Row finishing follows a deliberately overlong straight guiding course.
+    -- Native implement raising ends it early. Reserving that unused tail can
+    -- stop the combine and send a trailer backwards before the real turn exists.
+    if finishing or (combine.state~=combine.states.TURNING and not connector) then
+        combine.queueTurnGuard=nil; combine.queueTurnPreflight=nil; combine.queueTurnBlocker=nil
+        return speed
     end
     local longConnector=connector or (combine.aiTurn and combine.aiTurn.queueConnectorCourse)
     if longConnector then combine.queueTurnPreflight=nil end
@@ -306,7 +322,7 @@ function Q.guardHarvesterTurn(combine,speed)
         end
         local candidates={}
         for _,other in pairs(g_currentMission.vehicleSystem.vehicles) do
-            if other~=combine.vehicle and other.rootNode and other.getAIDirectionNode then
+            if other~=combine.vehicle and other.rootNode and other.getAIDirectionNode and not isActiveFieldworker(other) then
                 local driver=other.getCpDriveStrategy and other:getCpDriveStrategy()
                 if other.spec_combine or other.spec_motorized or (driver and driver.queueData) then
                     local pose=W.pose(other:getAIDirectionNode())
