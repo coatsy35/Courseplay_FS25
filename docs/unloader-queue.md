@@ -1,3 +1,73 @@
+## Agreed requirements - staged preparation (10 October 2026)
+
+These user-confirmed requirements govern the next preparation change and
+supersede any earlier description of continuous following or parking alone.
+They describe intended behaviour, not a claim that build 3020 implements it.
+Build 3020, commit 28b1bd6a8c19f04e4905bb21b997839788a74a00, remains the
+user's currently working traffic/unloading baseline. Preserve that release and
+its ZIP unchanged; subsequent implementation needs a separate commit/build.
+
+### Staged movement and waiting
+
+1. Once native CP takes control of a returned, available trailer, move it away
+   from the AD arrival/exit point and into a safe field staging position. Roughly
+   halfway towards its assigned harvester is a suggested starting position,
+   subject to harvested ground, access and traffic clearance; it is not a rigid
+   midpoint or a requirement to cross standing crop.
+2. Park and wait between movements. As the harvester fills, advance in distinct
+   stages to nearer waiting positions. Do not continuously follow the harvester,
+   chase its position or repeatedly move a parked rig for small position changes.
+3. Allow for travel and whole-rig alignment so the lead trailer is about 30 yards
+   (27 metres) behind before the harvester reaches its configured CP unloading
+   trigger. The trigger is per the CP setting, not a hard-coded 80%. Native CP
+   owns the final approach, admission/crop checks and unloading. When immediate
+   unloading is unsafe, stage nearby on safe ground without weakening those checks.
+4. While loading, estimate whether the current trailer can accommodate the
+   remaining load, accounting for compatible free capacity and incoming harvest.
+   If it cannot, bring a compatible replacement to a nearby waiting position
+   before capacity runs out, ready for prompt native CP changeover. Retain
+   existing reservation and partial-load priorities; avoid duplicate dispatch.
+5. Full or departure-ready trailers retain native CP departure and AD handover,
+   using each tractor's adjustable emptying threshold, not a hard-coded 85%.
+   They leave the loading area and follow the established exit behaviour.
+
+### Alignment and clearance at every stage
+
+Every initial, intermediate, near-harvester and replacement staging position
+must align and straighten the complete tractor and attached trailer train:
+
+- On a headland, parallel to the local outer field boundary.
+- Within the field, aligned with the centre work rows.
+
+Provide enough approach length and spacing to straighten the whole rig rather
+than merely point the tractor towards the target. A diagonally parked trailer
+or articulated rig is not an accepted staging result. Keep arrival/exit access,
+departure routes, active combine turn areas and other parked rigs clear. These
+are staging requirements; retain native manoeuvres needed to reach or leave
+the position. Combine priority and the working 3020 traffic behaviour remain.
+
+### Scope and acceptance
+
+Participation remains automatic for eligible CP unloaders. Support grain and
+other tank harvesters, including beet/vegetable harvesters where supported by
+CP. For forage/continuous-output harvesters, use continuous service and trailer
+capacity/changeover timing rather than assuming a grain tank reaches 80%.
+
+Keep the change within trailer preparation, staging and replacement readiness.
+Preserve 3020's combine courses, headland corners, centre-work transitions,
+convoy waits, straight entry, yielding, native unloading and AD departure.
+Do not add new options, AD driving logic or broad combine/pathfinder changes.
+
+Regression scenarios must demonstrate clearing the AD point; staged advances
+with stationary waits; whole-rig alignment in both permitted orientations;
+readiness before different configured triggers; alternative safe positions
+after a blocked preparation route; replacement readiness before capacity runs
+out; no duplicate reservation; continuous-output replacement timing; and
+unchanged 3020 traffic and native departure. Measure actual readiness and
+position in scenario tests, not merely successful route generation. Release
+checks must pass on source and packaged ZIP, followed by validation in the
+user's saved game before describing the behaviour as accepted in-game.
+
 ## Current contract - build 3020: separate turn traffic from queue ownership (9 October 2026)
 
 This fixes the build 3019 incident preserved in out/incident-3019/log-2244.txt.
