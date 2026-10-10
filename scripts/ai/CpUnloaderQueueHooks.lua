@@ -72,9 +72,19 @@ end
 
 local combineDrive = C.getDriveData
 function C:getDriveData(...)
-    local hold=Q.checkParkedTrailerTravel(self)
+    local cornerHold=Q.holdHeadlandCorner(self)
+    local hold=Q.checkParkedTrailerTravel(self) or cornerHold
     local gx,gz,forwards,speed,acceleration=combineDrive(self,...)
-    if Q.checkParkedTrailerTravel(self) or hold then speed=0 end
+    cornerHold=Q.holdHeadlandCorner(self) or cornerHold
+    if cornerHold~=self.queueCornerHold then
+        if cornerHold then
+            self:debug('Queue: waiting before headland corner for centre-entry combine %s', CpUtil.getName(cornerHold))
+        elseif self.queueCornerHold then
+            self:debug('Queue: centre-entry hold released')
+        end
+        self.queueCornerHold=cornerHold
+    end
+    if Q.checkParkedTrailerTravel(self) or cornerHold or hold then speed=0 end
     return gx,gz,forwards,speed,acceleration
 end
 

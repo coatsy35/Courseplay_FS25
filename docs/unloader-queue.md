@@ -1,3 +1,50 @@
+## Build 3023 - bounded headland-to-centre entry and follower wait
+
+This is a separate correction on top of the exact 3020 rollback in build 3022.
+Both rollback and original release ZIPs remain retained unchanged.
+
+The preserved 3021 incident log records CR11/319 finishing its headland at
+22:00:30. Its three local connector entries failed clearance against T7.300/322;
+at 22:00:48 it accepted a full route beginning in reverse. CR11/318 entered its
+headland corner, and the native historical-trail convoy distance still reported
+about 55 metres shortly before a proximity reading of 0.2 metres. An unmatched
+trail later returned infinity. These explain the chosen route and inadequate
+following separation, but do not establish why an earlier successful run differed.
+
+The 3020-to-3021 package diff changed only the stationary unloader admission
+guard and version. The incident's first recorded unloader call was a moving
+rendezvous after the failed entries, which bypasses that new guard. No evidence
+shows the 3021 guard caused this corner incident; it remains completely reverted.
+The retained 3020 comparison copies start mid-operation at 15:07:34. This is a
+limitation of those copies, not evidence that the user started logging late.
+
+The original local entry remains first choice. Only after its clearance fails,
+and only for a headland-to-centre connector, try a 2 m then 4 m forward lead-in
+with the native Dubins solver. Keep the exact saved join/suffix, native turning
+radius, fruit policy and complete machine/header clearance validation. Validation
+remains capped at 20 samples per update. Reject obstructed alternatives and retain
+the existing next-candidate/full-route fallback; never start an unchecked route.
+
+For a same-course follower approaching or turning a headland corner, maintain
+its configured CP convoy distance in physical space while the lead plans/drives
+its centre entry. This is deliberately more conservative than the historical
+trail slowdown during that specific phase. It can hold the follower before the
+corner until the lead clears that spacing. It changes only the returned speed,
+never the course, steering, tractor state or leader's priority. Release when the
+lead clears the distance, leaves the entry phase or stops its fieldwork job.
+Normal row turns, other connectors, centre-row work and different courses are
+excluded. Log entry/exit of the hold once per transition.
+
+Regression coverage uses the recorded pose, saved connector coordinates and
+tractor/trailer dimensions with production path assembly and collision code.
+The original and 2 m alternatives fail; 4 m passes and preserves the suffix.
+Also check crop/header rejection, bounded retries, original successful entries,
+follower hold/release, adjustable spacing and excluded states. The planar fixture
+does not replay crop density, scenery or terrain slope. Source/package tests and
+release qualification are required; same-save in-game acceptance remains needed.
+
+No staged-preparation, AD handover or trailer-departure changes are included.
+
 ## Build 3022 - restore build 3020 exactly
 
 At the user's request, revert the entire build 3021 change (commit

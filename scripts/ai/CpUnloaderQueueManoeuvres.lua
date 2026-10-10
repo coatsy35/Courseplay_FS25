@@ -29,6 +29,49 @@ local function intersects(area,vehicle)
     return false
 end
 
+-- A centre-entry U-turn/reverse can bring the lead back towards its own
+-- historical trail. During that transition, do not use trail distance to
+-- decide whether a follower may enter a nearby headland corner. Keep the
+-- configured convoy separation in physical space until the lead clears it.
+-- Only the headland follower is held; the centre-entry machine keeps priority.
+function Q.holdHeadlandCorner(combine)
+    local states,course=combine.states,combine.fieldWorkCourse
+    local proximity=combine.fieldWorkerProximityController
+    local setting=combine.settings and combine.settings.convoyDistance
+    if not states or not course or not proximity or not setting then return false end
+    local limit=setting:getValue()
+    if limit<=0 then return false end
+    local corner=combine.state==states.TURNING and combine.turnContext
+        and combine.turnContext.fieldWorkCourse==course and combine.turnContext.turnStartWpIx
+        and course:isOnHeadland(combine.turnContext.turnStartWpIx)
+        and combine.turnContext.isHeadlandCorner and combine.turnContext:isHeadlandCorner()
+    if not corner then
+        if combine.state~=states.WORKING or combine:getCurrentCourse()~=course then return false end
+        local ix=combine.ppc:getRelevantWaypointIx()
+        if not course:isOnHeadland(ix) then return false end
+        local last=course:getNextWaypointIxWithinDistance(ix,limit)
+        for i=ix,last do
+            if course:isHeadlandTurnAtIx(i) then corner=true; break end
+        end
+    end
+    if not corner then return false end
+    local here=W.pose(combine.vehicle:getAIDirectionNode())
+    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if vehicle~=combine.vehicle and vehicle.spec_combine and proximity:hasSameCourse(vehicle)
+                and vehicle.getIsCpFieldWorkActive and vehicle:getIsCpFieldWorkActive() then
+            local lead=vehicle:getCpDriveStrategy()
+            local ix=lead and lead.turnContext and lead.turnContext.turnStartWpIx
+            local entering=ix and ix>1 and lead.fieldWorkCourse
+                and not lead.fieldWorkCourse:isOnHeadland(ix) and lead.fieldWorkCourse:isOnConnectingPath(ix-1)
+                and (lead.connectorEntry or (lead.states and lead.state==lead.states.DRIVING_TO_WORK_START_WAYPOINT))
+            if entering and distance(here,W.pose(vehicle:getAIDirectionNode()))<limit then
+                return vehicle
+            end
+        end
+    end
+    return false
+end
+
 -- Reservations observe native traffic; they never transfer its controller.
 Q.turnTraffic=setmetatable({}, {__mode='k'})
 Q.turnTrafficRevision=0

@@ -23,7 +23,8 @@ class NativeConnectorTests(unittest.TestCase):
         for name in ('onPathfindingDoneToConnectingPathEnd', 'onPathfindingFailedToConnectingPathEnd',
                      'startCourseToWorkStart', 'getDriveData', 'startConnectingPath',
                      'updateHarvesterConnectorEntry', 'onHarvesterConnectorEntryDone',
-                     'checkHarvesterConnectorEntry', 'advanceHarvesterConnectorValidation'):
+                     'checkHarvesterConnectorEntry', 'advanceHarvesterConnectorValidation',
+                     'checkForwardHarvesterConnectorEntry'):
             method=text.split('function AIDriveStrategyFieldWorkCourse:'+name,1)[1].split('\nend',1)[0]
             self.lua.execute('function NativeFieldwork:'+name+method+'\nend')
         self.lua.execute('''
@@ -160,6 +161,7 @@ class NativeConnectorTests(unittest.TestCase):
     def entry_fixture(self):
         self.lua.execute("""
             CpUtil.getDefaultCollisionFlags=function() return 334339 end
+            AIUtil.getDirectionNode=function(vehicle) return vehicle:getAIDirectionNode() end
             CollisionFlag={TERRAIN_DELTA=0}
             require('HybridAStar'); require('PathfinderContext')
             PathfinderUtil.hasFruit=function() return false,0 end
@@ -170,7 +172,7 @@ class NativeConnectorTests(unittest.TestCase):
             for z=-40,120,2 do table.insert(points,{x=0,z=z}) end
             saved=Course(v,points,true)
             u.connectorEntry={course=saved,context=PathfinderContext(v),node={},zOffset=0,
-                nextAttempt=g_time,index=1,candidates={15,25,35}}
+                nextAttempt=g_time,index=1,candidates={15,25,35},allowForwardLeadIn=true}
             pc={active=false,calls=0,reset=function() end,isActive=function(self) return self.active end,
                 registerListeners=function(self,owner,callback) self.owner=owner; self.callback=callback end,
                 findPathToWaypoint=function(self,ctx,c,ix,x,z,retries)
@@ -250,7 +252,13 @@ class NativeConnectorTests(unittest.TestCase):
             assert(pc.calls==1)
             drainValidation()
             assert(installed==0 and not u.connectorEntry.validation and pc.calls==1)
-            g_time=g_time+1000; u:updateHarvesterConnectorEntry(); assert(pc.calls==2)
+            -- Rejected forward alternatives must also remain stationary and
+            -- eventually advance to the next normal candidate.
+            for i=1,20 do
+                g_time=g_time+1000; u:updateHarvesterConnectorEntry()
+                if pc.calls==2 then break end
+            end
+            assert(pc.calls==2 and installed==0)
         """)
 
     def test_full_search_success_retains_native_startrowonly(self):
@@ -297,6 +305,85 @@ class NativeConnectorTests(unittest.TestCase):
             u:startConnectingPath(0)
             assert(started==1 and u.state==u.states.WAITING_FOR_PATHFINDER)
             RowStartOrFinishContext=original
+        """)
+
+    def incident_fixture(self):
+        self.entry_fixture()
+        for name in ('connector-search-fixture.lua', 'connector-incident-fixture.lua'):
+            self.lua.execute((SOURCE/'tools/unloader-queue'/name).read_text())
+
+    def test_recorded_entry_uses_four_metre_forward_fallback_before_full_route(self):
+        self.incident_fixture()
+        self.lua.execute("""
+            local entry=u.connectorEntry
+            local frames=driveEntrySearch()
+            assertStarted()
+            assert(entry.leadIn==4 and not entry.triedFullRoute and frames<180)
+            assert(saved:getNumberOfWaypoints()==12)
+            local first=u.course:getWaypoint(1)
+            assert(math.abs(first.x+439.48)<.001 and math.abs(first.z+332.51)<.001)
+            -- StartRowOnly can extend the final course; find the exact retained
+            -- suffix in order instead of assuming a fixed appended length.
+            local nextSaved=entry.joinIx+1
+            for _,wp in ipairs(u.course:getAllWaypoints()) do
+                local expected=saved:getWaypoint(nextSaved)
+                if wp.x==expected.x and wp.z==expected.z then nextSaved=nextSaved+1 end
+                if nextSaved>12 then break end
+            end
+            assert(nextSaved==13)
+        """)
+
+    def test_forward_fallback_checks_crop_and_header_along_the_forward_segment(self):
+        self.incident_fixture()
+        self.lua.execute("""
+            local entry=u.connectorEntry
+            entry.joinIx=6; entry.joinContext=PathfinderContext(v); entry.leadIn=4
+            for _,kind in ipairs({'crop','header'}) do
+                entry.validation=u:checkForwardHarvesterConnectorEntry(entry)
+                assert(entry.validation)
+                if kind=='crop' then PathfinderUtil.hasFruit=function() return true,100 end
+                else
+                    PathfinderUtil.hasFruit=function() return false,0 end
+                    local x,_,z=localToWorld(v:getAIDirectionNode(),7,0,2)
+                    obstacles={CpUnloaderQueueGeometry.rectangle({x=x,z=z,heading=0},{width=1,length=1},0)}
+                end
+                local done,result=u:advanceHarvesterConnectorValidation(entry)
+                assert(done and not result and installed==0)
+            end
+        """)
+
+    def test_unavailable_forward_alternatives_terminate_before_next_candidate(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            u:updateHarvesterConnectorEntry()
+            local entry=u.connectorEntry
+            local attempts={}
+            u.checkForwardHarvesterConnectorEntry=function(_,e)
+                attempts[#attempts+1]=e.leadIn; return nil
+            end
+            pc.active=false
+            entry.validation={}
+            u.advanceHarvesterConnectorValidation=function() return true,nil end
+            u:updateHarvesterConnectorEntry()
+            u:updateHarvesterConnectorEntry(); u:updateHarvesterConnectorEntry()
+            assert(#attempts==2 and attempts[1]==2 and attempts[2]==4)
+            u:updateHarvesterConnectorEntry()
+            assert(pc.calls==2 and pc.ix==25 and not entry.leadIn and not entry.nextLeadIn)
+            pc.active=false; entry.validation={}
+            u:updateHarvesterConnectorEntry()
+            u:updateHarvesterConnectorEntry(); u:updateHarvesterConnectorEntry()
+            assert(#attempts==4 and attempts[3]==2 and attempts[4]==4)
+        """)
+
+    def test_other_connectors_keep_original_retry_without_forward_alternative(self):
+        self.entry_fixture()
+        self.lua.execute("""
+            local entry=u.connectorEntry
+            entry.allowForwardLeadIn=false
+            entry.validation={}
+            u.advanceHarvesterConnectorValidation=function() return true,nil end
+            u:updateHarvesterConnectorEntry()
+            assert(not entry.nextLeadIn and entry.nextAttempt==g_time+1000)
         """)
 
     def test_validator_uses_short_angle_across_zero(self):

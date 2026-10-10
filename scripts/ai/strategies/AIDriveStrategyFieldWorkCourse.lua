@@ -661,7 +661,9 @@ function AIDriveStrategyFieldWorkCourse:startConnectingPath(ix)
         -- BEGIN authorised harvester connector entry
         if self.vehicle.spec_combine and steeringLength == 0 and #connectingPath >= 2 then
             self.connectorEntry = {course=self.workStarterCourse, context=context, node=targetNode,
-                zOffset=zOffset, nextAttempt=g_time, index=1, candidates={}}
+                zOffset=zOffset, nextAttempt=g_time, index=1, candidates={},
+                allowForwardLeadIn=ix>0 and self.fieldWorkCourse:isOnHeadland(ix)
+                    and not self.fieldWorkCourse:isOnHeadland(targetWaypointIx)}
             local spacing = math.max(15, 3 * AIUtil.getTurningRadius(self.vehicle))
             for distance = spacing, spacing * 3, spacing do
                 local candidate = math.min(self.workStarterCourse:getNumberOfWaypoints() - 1,
@@ -725,7 +727,11 @@ function AIDriveStrategyFieldWorkCourse:updateHarvesterConnectorEntry()
                 self:debug('Checked local connector entry ready')
                 self:startCourseToWorkStart(course)
             else
-                entry.nextAttempt = g_time + 1000
+                -- A tight turn can sweep the header into an obstacle even
+                -- though the native search's coarser samples passed. Try a
+                -- short forward lead-in before abandoning this local join.
+                if entry.allowForwardLeadIn and not entry.leadIn then entry.nextLeadIn = 2 end
+                entry.nextAttempt = g_time + (entry.nextLeadIn and 0 or 1000)
             end
         end
         return
@@ -733,9 +739,17 @@ function AIDriveStrategyFieldWorkCourse:updateHarvesterConnectorEntry()
     if not entry.nextAttempt or g_time < entry.nextAttempt or self.pathfinderController:isActive() then return end
     entry.nextAttempt = nil
     self.pathfinderController:reset()
+    if entry.nextLeadIn then
+        entry.leadIn = entry.nextLeadIn
+        entry.nextLeadIn = entry.leadIn < 4 and entry.leadIn + 2 or nil
+        entry.validation = self:checkForwardHarvesterConnectorEntry(entry)
+        if not entry.validation then entry.nextAttempt = g_time end
+        return
+    end
     local candidate = entry.candidates[entry.index]
     entry.index = entry.index + 1
     if candidate then
+        entry.leadIn = nil
         entry.joinIx = candidate
         local context = PathfinderContext(self.vehicle):allowReverse(false):mustBeAccurate(true)
             :ignoreFruit(not self.settings.avoidFruit:getValue()):maxIterations(3000)
@@ -754,6 +768,25 @@ function AIDriveStrategyFieldWorkCourse:updateHarvesterConnectorEntry()
         entry.nextAttempt = g_time + 5000
         self:debug('No checked connector entry; holding and retrying local manoeuvres')
     end
+end
+
+function AIDriveStrategyFieldWorkCourse:checkForwardHarvesterConnectorEntry(entry)
+    local radius = AIUtil.getTurningRadius(self.vehicle)
+    local start = PathfinderUtil.getVehiclePositionAsState3D(self.vehicle)
+    local forward = PathfinderUtil.getVehiclePositionAsState3D(self.vehicle, 0, entry.leadIn)
+    local goal = PathfinderUtil.getWaypointAsState3D(entry.course:getWaypoint(entry.joinIx), 0, 0)
+    local path, length = PathfinderUtil.findAnalyticPathFromStartToGoal(DubinsSolver(), forward, goal, radius)
+    local direct = math.sqrt((goal.x-start.x)^2 + (goal.y-start.y)^2)
+    if not path or length + entry.leadIn > direct + 2 * math.pi * radius then return nil end
+    local points = {}
+    for d = 0, entry.leadIn - 1 do
+        points[#points+1] = State3D(start.x + d * math.cos(start.t), start.y + d * math.sin(start.t), start.t)
+    end
+    for _, point in ipairs(path) do points[#points+1] = point end
+    self:debug('Checking local connector entry with %.1f m forward lead-in', entry.leadIn)
+    -- The complete forward segment, turn and join are checked with the same
+    -- crop and full machine/header clearance tests as the original entry.
+    return self:checkHarvesterConnectorEntry(Course.createFromAnalyticPath(self.vehicle, points, true), entry)
 end
 
 function AIDriveStrategyFieldWorkCourse:onHarvesterConnectorEntryDone(controller, success, course)

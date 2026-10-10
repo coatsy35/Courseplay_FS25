@@ -603,6 +603,94 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_other_harvester_yield_request_is_not_overridden(self):
         self.lua.execute('u.queueData.yieldRequests={[{}]={}}; assert(not Q.tryHarvesterBypass(c,tv,false))')
 
+    def headland_corner_fixture(self):
+        self.lua.execute('''
+            require('FieldWorkerProximityController')
+            local points={}
+            for z=0,100,5 do points[#points+1]={x=0,z=z} end
+            fc=Course(hv,points,false)
+            for i=1,fc:getNumberOfWaypoints() do
+                fc:getWaypoint(i).attributes:setHeadlandPassNumber(1)
+            end
+            fc:getWaypoint(7).attributes:setHeadlandTurn(true)
+            fc.name='same saved course'; fc.multiTools=2
+            c.fieldWorkCourse=fc; c.course=fc
+            c.getCurrentCourse=function(self) return self.course end
+            c.ppc.getRelevantWaypointIx=function() return 1 end
+            c.state=c.states.WORKING
+            c.settings.convoyDistance={getValue=function() return 75 end}
+            hv.getFieldWorkCourse=function() return fc end
+            c.fieldWorkerProximityController=setmetatable({fieldWorkCourse=fc},FieldWorkerProximityController)
+            leaderNode={x=0,z=55,t=math.pi}
+            lv={spec_combine={},active=true,getAIDirectionNode=function() return leaderNode end,
+                getFieldWorkCourse=function() return fc end,
+                getIsCpFieldWorkActive=function(self) return self.active end}
+            lc=Course(lv,{{x=0,z=55},{x=0,z=65},{x=0,z=75}},false)
+            lc:getWaypoint(1).attributes:setOnConnectingPath(true)
+            lead={vehicle=lv,fieldWorkCourse=lc,connectorEntry={},states={DRIVING_TO_WORK_START_WAYPOINT={}},
+                turnContext={turnStartWpIx=2}}
+            lv.getCpDriveStrategy=function() return lead end
+            g_currentMission.vehicleSystem={vehicles={hv,lv}}
+        ''')
+
+    def test_corner_follower_stops_for_physical_gap_despite_stale_convoy_trail(self):
+        self.headland_corner_fixture()
+        self.lua.execute('''
+            assert(Q.holdHeadlandCorner(c))
+            local x,z,f,s,a=c:getDriveData()
+            assert(x==10 and z==20 and f and s==0 and a==.7)
+            assert(c.state==c.states.WORKING and c.course==fc and lead.connectorEntry)
+            leaderNode.z=90
+            assert(not Q.holdHeadlandCorner(c))
+            local _,_,_,speed=c:getDriveData(); assert(speed==10)
+        ''')
+
+    def test_corner_hold_continues_after_lead_finishes_planning_then_releases(self):
+        self.headland_corner_fixture()
+        self.lua.execute('''
+            lead.connectorEntry=nil; lead.state=lead.states.DRIVING_TO_WORK_START_WAYPOINT
+            assert(Q.holdHeadlandCorner(c))
+            lead.state={}; assert(not Q.holdHeadlandCorner(c))
+            lead.connectorEntry={}; lv.active=false; assert(not Q.holdHeadlandCorner(c))
+        ''')
+
+    def test_corner_hold_respects_machine_convoy_setting_and_course_identity(self):
+        self.headland_corner_fixture()
+        self.lua.execute('''
+            c.settings.convoyDistance.getValue=function() return 50 end
+            assert(not Q.holdHeadlandCorner(c))
+            c.settings.convoyDistance.getValue=function() return 60 end
+            assert(Q.holdHeadlandCorner(c))
+            lv.getFieldWorkCourse=function() return Course(lv,{{x=0,z=0},{x=0,z=100}},false) end
+            assert(not Q.holdHeadlandCorner(c))
+        ''')
+
+    def test_hold_excludes_centre_rows_unrelated_turns_and_headland_connector_targets(self):
+        self.headland_corner_fixture()
+        self.lua.execute('''
+            fc:getWaypoint(1).attributes:setHeadlandPassNumber(nil)
+            assert(not Q.holdHeadlandCorner(c))
+            fc:getWaypoint(1).attributes:setHeadlandPassNumber(1)
+            fc:getWaypoint(7).attributes:setHeadlandTurn(false)
+            assert(not Q.holdHeadlandCorner(c))
+            c.state=c.states.TURNING
+            c.turnContext={fieldWorkCourse=fc,turnStartWpIx=7,isHeadlandCorner=function() return true end}
+            assert(Q.holdHeadlandCorner(c))
+            fc:getWaypoint(7).attributes:setHeadlandPassNumber(nil)
+            assert(not Q.holdHeadlandCorner(c))
+            fc:getWaypoint(7).attributes:setHeadlandPassNumber(1)
+            lc:getWaypoint(2).attributes:setHeadlandPassNumber(1)
+            assert(not Q.holdHeadlandCorner(c))
+        ''')
+
+    def test_leading_centre_entry_is_never_held_by_the_headland_follower(self):
+        self.headland_corner_fixture()
+        self.lua.execute('''
+            c.states.DRIVING_TO_WORK_START_WAYPOINT={}
+            c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
+            assert(not Q.holdHeadlandCorner(c))
+        ''')
+
     def test_success_stop_and_fullness_release_both_hold_references(self):
         for change in ('c.state=c.states.WORKING','hv.active=false','full=true','manual=true'):
             with self.subTest(change=change):
