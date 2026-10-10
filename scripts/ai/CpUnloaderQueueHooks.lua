@@ -33,6 +33,18 @@ local call = U.call
 function U:call(combine,waypoint)
     if self.queueData and self.queueData.bypass then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
+    if Q.enabled(self) and not waypoint and
+            (self:isIdle() or (Q.owns(self) and self.queueData.operation=='prepare')) then
+        local blocker=Q.waitingApproachBlocker(self,combine)
+        if blocker then
+            if self.queueCallBlocker~=blocker then
+                self:debug('Queue: waiting for vehicle %s to clear stationary unload approach',tostring(blocker.rootNode))
+            end
+            self.queueCallBlocker=blocker
+            return false
+        end
+        self.queueCallBlocker=nil
+    end
     if Q.enabled(self) and Q.owns(self) then
         if self.queueData.operation~='prepare' then return false end
         Q.release(self)

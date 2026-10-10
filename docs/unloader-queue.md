@@ -1,3 +1,46 @@
+## Build 3021 - preserve replacement availability during changeover
+
+The 10 October log shows tractor 325 beginning its full-trailer clearance at
+16:06:00.937. At 16:06:02.507, replacement 323 accepted the stopped combine's
+call while a trailer still occupied its rear approach target. Native pathfinding
+rejected that same occupied goal four times and stopped 323 with
+ERROR_NO_PATH_FOUND at 16:06:02.539. Tractor 325 handed over to AD at 16:06:05.
+The collision log names the trailer type, not a unique vehicle identifier.
+
+Before accepting a new stationary call, an idle/preparing replacement now checks
+its native rear approach position against the complete physical footprints of
+other live rigs. A proven overlap declines the call without cancelling preparation,
+claiming the combine or consuming pathfinder retries. The combine's existing
+three-second call cycle retries after clearance. This also recognises an outgoing
+rig which has already handed over to AD and left the queue. Nearby native entry,
+moving rendezvous and unsupported rig geometry retain native handling.
+
+Only the existing queue call hook and its admission helper change at runtime.
+Native strategies, pathfinding failure handling, combine turns, straight entry,
+convoy waits, configured departure thresholds and CP/AD handover stay unchanged
+from 3020. No staged-preparation behaviour is introduced in this release.
+
+Qualification includes the actual native call/timer lifecycle at a mocked GIANTS
+boundary: tractor-clear/trailer-blocking, incoming trailer footprint, AD-owned
+blocker, unrelated harvester, root/attachment exclusion, rotated and attached
+harvester reference nodes, every stationary offset branch, nearby entry, moving
+rendezvous, unsupported coupling and native non-vehicle failure handling. The
+release runs this coverage against source and the extracted ZIP, with existing
+native parity, compile and regression checks. In-game acceptance remains required.
+
+The same log has no later CP return for 324 after 15:56:44 or for 325 after
+16:16:47. It does show 325 returning successfully at 16:13:36, after 323 stopped.
+Installed AD requires arrival at its loading target and the CP helper-restart
+conditions before returning ownership. The log lacks AD arrival/collision detail
+to identify why those later returns did not complete. This release does not force
+CP to reclaim AD-owned vehicles or claim that all AD return failures are fixed.
+
+Test on the same save: replacement remains active through the full rig's clearance,
+then unloads; full rigs still depart at their own CP threshold; empty rigs return
+from AD and resume CP. Verify the previously working headland/centre transitions
+and ordinary parked-trailer bypass. Retain build 3020 unchanged. Validate this
+availability change before adding the agreed staged preparation below.
+
 ## Agreed requirements - staged preparation (10 October 2026)
 
 These user-confirmed requirements govern the next preparation change and
