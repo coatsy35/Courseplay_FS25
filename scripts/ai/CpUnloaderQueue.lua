@@ -26,62 +26,6 @@ function Q.atDepartureThreshold(driver)
     return setting and driver:getAllTrailersFull(setting:getValue()) or false
 end
 
--- Native release happens before a full rig has physically cleared the pipe.
--- An occupied stationary goal otherwise exhausts all native retries in a few
--- frames and stops the replacement's job. Decline this call without taking
--- ownership; the combine's normal three-second call cycle will try again.
-function Q.waitingApproachBlocker(driver,combine)
-    local system=g_currentMission.vehicleSystem
-    if not system or not system.vehicles or driver.combineToUnload then return end
-    -- Native call prefers direct aligned entry over pathfinding, even beyond
-    -- its five-metre pathfinding range. Evaluate those read-only predicates
-    -- against the proposed target without assigning the real driver.
-    local candidate=setmetatable({combineToUnload=combine},{__index=driver})
-    if candidate:isOkToStartUnloadingCombine() then return end
-    local model=W.model(driver.vehicle)
-    if not model then return end -- unsupported rigs retain native handling
-    local harvester=combine:getCpDriveStrategy()
-    local node=harvester:getPipeOffsetReferenceNode()
-    local xOffset=driver:getPipeOffset(combine)
-    local zOffset=-harvester:getMeasuredBackDistance()
-    -- Match U.call's stationary target, including pulled-back and auto-aim
-    -- harvesters. Read the passed harvester, never assign combineToUnload here.
-    if harvester:isWaitingForUnloadAfterPulledBack() then
-        zOffset=zOffset-10
-    elseif harvester:hasAutoAimPipe() then
-        if math.abs(driver:getAutoAimPipeOffsetX())<3 then
-            local _,front=Markers.getFrontMarkerNode(driver.vehicle)
-            zOffset=zOffset-front-2
-        end
-    else
-        zOffset=zOffset-(math.abs(xOffset)>6 and 2 or 5)
-    end
-    -- Preserve native near-target handling as well as direct aligned entry.
-    if not driver:isPathfindingNeeded(driver.vehicle,node,xOffset,zOffset) then return end
-    local x,_,z=localToWorld(node,xOffset,0,zOffset)
-    local poses=W.settledPoses(model,{x=x,z=z,t=H.math.heading(node)})
-    local rectangles={}
-    for i,body in ipairs(model.bodies) do rectangles[i]=W.rectangle(body,poses[i]) end
-    local function root(vehicle)
-        return vehicle.getRootVehicle and vehicle:getRootVehicle() or vehicle
-    end
-    local seen={[root(driver.vehicle)]=true,[root(combine)]=true}
-    -- Use live physical rigs, not queue membership: the outgoing trailer may
-    -- already belong to AD while it still occupies the replacement's goal.
-    for _,vehicle in pairs(system.vehicles) do
-        local other=root(vehicle)
-        if not seen[other] then
-            seen[other]=true
-            for _,item in ipairs(W.currentBodies(other) or {}) do
-                local rectangle=W.rectangle(item.body,item.pose)
-                for _,incoming in ipairs(rectangles) do
-                    if G.overlap(incoming,rectangle) then return other end
-                end
-            end
-        end
-    end
-end
-
 function Q.data(driver)
     if not driver.queueData then
         driver.queueData={generation=0,driver=driver,nextAttempt=0}

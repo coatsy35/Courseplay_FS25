@@ -114,7 +114,6 @@ if __name__ == '__main__':
                                 'unloader-queue/test_native_connectors.py',
                                 'unloader-queue/test_native_departure.py', 'unloader-queue/test_yield.py',
                                 'unloader-queue/test_departure_threshold.py',
-                                'unloader-queue/test_harvester_bypass.py',
-                                'unloader-queue/test_unloader_changeover.py'),
+                                'unloader-queue/test_harvester_bypass.py'),
                   stage='queue-operational-candidate-requires-in-game-validation',
                   reference_zip=args.match_release)
