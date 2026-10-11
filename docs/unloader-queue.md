@@ -1,3 +1,29 @@
+## Build 3024 - pocket departure pause and completed bypass cleanup
+
+Two narrow corrections on build 3023; previous release ZIPs remain unchanged.
+
+The full-session log preserved at out/incident-3023-pocket-turn/log-20261011-160310.txt
+records T7.300/324 backing away from CR11/319's unloading pocket at 16:00:31,
+then starting its forward departure route at 16:00:44 while the combine returns
+to its row. Add a two-second stationary pause when that forward route is ready
+to move. Reverse clearance and pathfinding run normally; search time does not
+consume the pause. Ordinary departures, native backing/yield recovery, the
+per-tractor full threshold and native marker/AD handover remain unchanged.
+
+A later full-session snapshot, log-20261011-1612.txt in the same evidence folder,
+records CR11/319 turning at waypoint 1419. Its first bypass failed final vehicle
+clearance at 16:08:02.142. The retry accepted an immediate analytic route at
+16:08:07.908, but the completed planner remained attached to the strategy.
+The next update resumed it without start arguments, causing HybridAStar.lua:260
+errors every frame. Detach an immediately completed queue bypass planner before
+its completion callback. Preserve asynchronous searches and all route checks.
+
+Regression coverage exercises the real immediate analytic search and subsequent
+production strategy updates, plus the timed pause, search latency, reverse
+recovery, ordinary departures, job cleanup and native handover. The immediate
+completion test reproduced the failure before the fix. Release checks must pass
+against source and extracted ZIP; in-game acceptance remains outstanding.
+
 ## Build 3023 - bounded headland-to-centre entry and follower wait
 
 This is a separate correction on top of the exact 3020 rollback in build 3022.

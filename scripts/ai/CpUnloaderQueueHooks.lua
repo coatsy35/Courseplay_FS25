@@ -17,6 +17,7 @@ function U:getDriveData(...)
     Q.speed(self)
     local hold=Q.holdIncomingTurn(self)
     local gx,gz,forwards,speed,acceleration=drive(self,...)
+    if Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
     if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
     return gx,gz,forwards,speed,acceleration
 end
@@ -93,6 +94,15 @@ end
 local unload = U.startUnloadingTrailers
 function U:startUnloadingTrailers(...)
     if Q.enabled(self) then
+        -- Remember a pocket departure only after native reverse clearance.
+        -- Pathfinding can take longer than the pause, so start its clock when
+        -- the resulting forward route is actually ready to move.
+        if self.state==self.states.MOVING_BACK_WITH_TRAILER_FULL then
+            local vehicle=self.state.properties.vehicle
+            local combine=vehicle and vehicle:getCpDriveStrategy()
+            Q.data(self).pocketDeparturePause=combine and combine.isAboutToReturnFromPocket
+                and combine:isAboutToReturnFromPocket() and {} or nil
+        end
         if Q.owns(self) then Q.release(self) else Q.cancel(self) end
         local data=Q.data(self)
         data.operation=nil; data.nativeDeparture=true

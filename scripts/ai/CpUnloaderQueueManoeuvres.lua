@@ -5,6 +5,35 @@ local G = CpUnloaderQueueGeometry
 local H = HeadlandLoopGeometry
 local function distance(a,b) return math.sqrt((a.x-b.x)^2+(a.z-b.z)^2) end
 
+-- Give the combine two extra seconds to clear its pocket before a full
+-- unloader starts turning forwards onto its native departure route.
+function Q.holdPocketDeparture(driver,forwards,speed)
+    local data=driver.queueData
+    local pause=data and data.pocketDeparturePause
+    if not pause then return false end
+    local states=driver.states
+    if not Q.enabled(driver) or not data.nativeDeparture then
+        data.pocketDeparturePause=nil
+        return false
+    end
+    if driver.state~=states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL then
+        if driver.state~=states.WAITING_FOR_PATHFINDER
+                and driver.state~=states.MOVING_BACK_BEFORE_PATHFINDING then
+            data.pocketDeparturePause=nil
+        end
+        return false
+    end
+    if not forwards or not speed or speed<=0 then return false end
+    local now=g_currentMission.time
+    if not pause.untilTime then
+        pause.untilTime=now+2000
+        driver:debug('Queue: waiting two seconds before forward departure from unloading pocket')
+    end
+    if now<pause.untilTime then return true end
+    data.pocketDeparturePause=nil
+    return false
+end
+
 local function parkedQueueTrailer(driver)
     local data=driver and driver.queueData
     return data and Q.owns(driver) and data.operation=='prepare' and not data.nativeDeparture
@@ -341,7 +370,13 @@ function Q.generateHarvesterBypass(turn)
     turn.pathfindingStartedAt=g_currentMission.time
     local result=pathfinder:start(start,goal,turn.turningRadius,
         turn.driveStrategy:getAllowReversePathfinding(),constraints,constraints.trailerHitchLength)
-    if result.done then return turn:onPathfindingDone(result.path) end
+    if result.done then
+        -- An analytic solution can finish inside start(), leaving the native
+        -- planner marked active. Detach it before the callback: the next
+        -- strategy update must not resume that completed search without args.
+        if turn.driveStrategy.pathfinder==pathfinder then turn.driveStrategy.pathfinder=nil end
+        return turn:onPathfindingDone(result.path)
+    end
     turn.state=turn.states.WAITING_FOR_PATHFINDER
     turn.driveStrategy:setPathfindingDoneCallback(turn,turn.onPathfindingDone)
 end

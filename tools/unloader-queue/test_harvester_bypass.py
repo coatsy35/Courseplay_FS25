@@ -506,7 +506,7 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_inactive_old_pathfinder_does_not_disable_bypass(self):
         self.lua.execute('c.pathfinder={isActive=function() return false end}; assert(Q.tryHarvesterBypass(c,tv,false))')
 
-    def test_real_native_planner_routes_header_around_parked_rig(self):
+    def real_planner_fixture(self):
         self.travel_fixture()
         self.lua.execute('''
             CpUtil.getDefaultCollisionFlags=function() return 334339 end
@@ -530,6 +530,29 @@ class HarvesterBypassTests(unittest.TestCase):
             assert(not validation:isValidNode(State3D(0,-40,CpMathUtil.angleFromGame(0)),false,true),'fixture must detect trailer collision')
             Q.generateHarvesterBypass=productionGenerate
             PathfinderUtil.findPathForTurn=nativeTurnSearch
+        ''')
+
+    def test_immediate_analytic_bypass_is_not_resumed_on_next_update(self):
+        self.real_planner_fixture()
+        source=(ROOT/'scripts/ai/strategies/AIDriveStrategyCourse.lua').read_text()
+        start=source.index('function AIDriveStrategyCourse:updatePathfinding()')
+        end=source.index('\nend',start)+4
+        self.lua.execute(source[start:end])
+        self.lua.execute('''
+            -- The obstruction cleared before the retry: native analytic search
+            -- finishes inside start(), without a single resume() call.
+            obstacles={}
+            assert(Q.tryHarvesterBypass(c,tv,false))
+            c.aiTurn:getDriveData(33)
+            assert(installed and c.aiTurn.state==c.aiTurn.states.TURNING)
+            c.setMaxSpeed=function() error('completed planner held combine') end
+            for i=1,3 do AIDriveStrategyCourse.updatePathfinding(c) end
+            assert(not c.pathfinder and c.course==original and context.turnEndWpIx==953)
+        ''')
+
+    def test_real_native_planner_routes_header_around_parked_rig(self):
+        self.real_planner_fixture()
+        self.lua.execute('''
             assert(Q.checkParkedTrailerTravel(c))
             c.aiTurn:getDriveData(33)
             for i=1,2000 do

@@ -127,6 +127,85 @@ class NativeDepartureTests(unittest.TestCase):
             Q.tick(u); assert(u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL)
         ''')
 
+    def arm_pocket_departure(self, pocket=True):
+        self.lua.execute('''
+            pocket=true
+            local combine={isAboutToReturnFromPocket=function() return pocket end}
+            u.state=u.states.MOVING_BACK_WITH_TRAILER_FULL
+            u.state.properties={vehicle={getCpDriveStrategy=function() return combine end}}
+        ''')
+        self.lua.globals().pocket = pocket
+        self.lua.execute('u:startUnloadingTrailers()')
+
+    def test_pocket_pause_starts_when_forward_route_can_move_not_during_search(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            assert(u.queueData.pocketDeparturePause and starts==1)
+            assert(not Q.holdPocketDeparture(u,true,0))
+            g_currentMission.time=9000
+            assert(not Q.holdPocketDeparture(u,true,0))
+            assert(not u.queueData.pocketDeparturePause.untilTime)
+            finishSearch(true)
+            assert(not Q.holdPocketDeparture(u,true,0))
+            assert(Q.holdPocketDeparture(u,true,15))
+            g_currentMission.time=10999; assert(Q.holdPocketDeparture(u,true,15))
+            g_currentMission.time=11000; assert(not Q.holdPocketDeparture(u,true,15))
+            assert(not u.queueData.pocketDeparturePause)
+            g_currentMission.time=12000; assert(not Q.holdPocketDeparture(u,true,15))
+            u:onLastWaypointPassed(); assert(result():find('handover'))
+        ''')
+
+    def test_pocket_pause_does_not_hold_reverse_or_restart_after_native_recovery(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            u.state=u.states.MOVING_BACK_BEFORE_PATHFINDING
+            assert(not Q.holdPocketDeparture(u,false,5))
+            assert(not u.queueData.pocketDeparturePause.untilTime)
+            u.state=u.states.WAITING_FOR_PATHFINDER
+            finishSearch(true); assert(not Q.holdPocketDeparture(u,false,5))
+            assert(Q.holdPocketDeparture(u,true,15))
+            u.state=u.states.BACKING_UP_FOR_REVERSING_COMBINE
+            assert(not Q.holdPocketDeparture(u,false,5))
+            assert(not u.queueData.pocketDeparturePause)
+            u.state=u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL
+            assert(not Q.holdPocketDeparture(u,true,15))
+        ''')
+
+    def test_ordinary_full_departure_has_no_extra_pause(self):
+        self.arm_pocket_departure(pocket=False)
+        self.lua.execute('''
+            finishSearch(true)
+            assert(not u.queueData.pocketDeparturePause)
+            assert(not Q.holdPocketDeparture(u,true,15))
+        ''')
+
+    def test_pocket_pause_changes_only_returned_speed_and_preserves_native_route(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            finishSearch(true)
+            Q.speed=function() end; Q.holdIncomingTurn=function() return false end
+            AIDriveStrategyUnloadCombine.getDriveData=function() return 12,34,true,15,0.8 end
+        ''')
+        # Rebind only this production wrapper around the mocked engine drive result.
+        hooks=(ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
+        wrapper=hooks[hooks.index('local drive = U.getDriveData'):hooks.index('local allowed =')]
+        self.lua.execute('local Q=CpUnloaderQueue; local U=AIDriveStrategyUnloadCombine; '+wrapper)
+        self.lua.execute('''
+            local x,z,f,s,a=u:getDriveData()
+            assert(x==12 and z==34 and f and s==0 and a==0.8 and u.course==route)
+            g_currentMission.time=2000
+            x,z,f,s,a=u:getDriveData()
+            assert(x==12 and z==34 and f and s==15 and a==0.8 and u.course==route)
+        ''')
+
+    def test_pocket_pause_is_removed_with_job(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            finishSearch(true); assert(Q.holdPocketDeparture(u,true,15))
+            Q.remove(u)
+            assert(not Q.holdPocketDeparture(u,true,15) and not u.queueData)
+        ''')
+
     def test_native_move_away_returning_idle_resumes_departure_not_preparation(self):
         self.lua.execute('''
             u:startUnloadingTrailers(); u.state=u.states.MOVING_AWAY_FROM_OTHER_VEHICLE
