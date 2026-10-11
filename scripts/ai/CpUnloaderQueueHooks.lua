@@ -6,6 +6,7 @@ local C = AIDriveStrategyCombineCourse
 
 local update = U.update
 function U:update(dt)
+    Q.resumeWaitingApproach(self)
     Q.tick(self)
     -- A no-marker/full event can synchronously stop CP and delete this driver.
     if self.vehicle:getCpDriveStrategy()~=self then return end
@@ -17,6 +18,7 @@ function U:getDriveData(...)
     Q.speed(self)
     local hold=Q.holdIncomingTurn(self)
     local gx,gz,forwards,speed,acceleration=drive(self,...)
+    if Q.owns(self) then self.queueData.nativeHold=speed==0 end
     if Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
     if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
     return gx,gz,forwards,speed,acceleration
@@ -24,10 +26,36 @@ end
 
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
+    if self.queueData and (self.queueData.approachRetryAt or 0)>g_currentMission.time then return false end
     if self.queueData and self.queueData.bypass then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' end
     return allowed(self)
+end
+
+-- Keep a replacement's native assignment while an outgoing train occupies
+-- its exact final goal. Other failures retain native retry/error handling.
+local waitingPath = U.startPathfindingToWaitingCombine
+function U:startPathfindingToWaitingCombine(x,z)
+    if Q.deferWaitingApproach(self,x,z) then return end
+    if self.queueData then self.queueData.waitingApproach={combine=self.combineToUnload,x=x,z=z} end
+    return waitingPath(self,x,z)
+end
+
+local stationaryFailed = U.onPathfindingFailedToStationaryTarget
+function U:onPathfindingFailedToStationaryTarget(...)
+    local attempt=self.queueData and self.queueData.waitingApproach
+    if attempt and attempt.combine==self.combineToUnload and Q.deferWaitingApproach(self,attempt.x,attempt.z) then return end
+    return stationaryFailed(self,...)
+end
+
+local waitingDone = U.onPathfindingDoneToWaitingCombine
+function U:onPathfindingDoneToWaitingCombine(controller,success,course,invalid)
+    local attempt=self.queueData and self.queueData.waitingApproach
+    if not success and attempt and attempt.combine==self.combineToUnload
+            and Q.deferWaitingApproach(self,attempt.x,attempt.z) then return false end
+    if self.queueData then self.queueData.waitingApproach=nil end
+    return waitingDone(self,controller,success,course,invalid)
 end
 
 local call = U.call
@@ -66,6 +94,7 @@ end
 -- stationary queued trailer without changing the fieldwork destination.
 local combineBlocking = C.onBlockingVehicle
 function C:onBlockingVehicle(vehicle,isBack)
+    if Q.checkCombineTurns(self) then return end
     if not isBack and Q.checkParkedTrailerTravel(self) then return end
     if Q.tryHarvesterBypass(self,vehicle,isBack) then return end
     return combineBlocking(self,vehicle,isBack)
@@ -74,7 +103,7 @@ end
 local combineDrive = C.getDriveData
 function C:getDriveData(...)
     local cornerHold=Q.holdHeadlandCorner(self)
-    local hold=Q.checkParkedTrailerTravel(self) or cornerHold
+    local hold=Q.checkCombineTurns(self) or Q.checkParkedTrailerTravel(self) or cornerHold
     local gx,gz,forwards,speed,acceleration=combineDrive(self,...)
     cornerHold=Q.holdHeadlandCorner(self) or cornerHold
     if cornerHold~=self.queueCornerHold then
@@ -85,7 +114,7 @@ function C:getDriveData(...)
         end
         self.queueCornerHold=cornerHold
     end
-    if Q.checkParkedTrailerTravel(self) or cornerHold or hold then speed=0 end
+    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or cornerHold or hold then speed=0 end
     return gx,gz,forwards,speed,acceleration
 end
 

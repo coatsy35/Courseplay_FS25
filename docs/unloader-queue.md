@@ -1,3 +1,47 @@
+## Build 3025 - combined unattended-run corrections
+
+One release combines the four findings from the 3024 field run. The scheduled
+monitor is paused; evidence and discussion notes remain in out/live-log-monitor.
+Builds 3020 and 3024 remain available unchanged.
+
+1. Ordinary same-course combine turns reserve their remaining full-header sweep
+   against working followers. Fieldwork progress fixes priority, with a stable
+   identity tie-breaker. If a follower is already inside, only the leader may
+   request a checked detour to its original row-entry target. Native convoy,
+   proximity, corner and connector logic remain active.
+2. Accepted bypasses are retained while the remaining route is clear. Broad
+   traffic overlap no longer resets recovery every frame or renews its timeout.
+   An obstructed route stops, retries after five seconds and retains its bypass
+   record after a successful retry.
+3. A replacement's native stationary approach waits while a departing train
+   occupies its exact native destination. It keeps its assignment, checks once
+   a second and resumes the unchanged native approach after the whole rig clears.
+   After a minute it returns to native idle with a short admission cooldown.
+   Other pathfinding failures retain native handling.
+4. Preparation uses stable initial/intermediate/near stages, the queue speed cap,
+   search latency and whole-rig straightening time. The near target is about
+   27 metres behind (more for long rigs and successors). Moving-trigger prediction
+   never overrides crop validation. Slots reject bends, turn reservations and
+   AD access; headland headings must match the local boundary. Live route checks
+   project onto the forward segment instead of mistaking PPC's segment start for
+   an obstruction. Blocked goals are temporarily excluded, and arrival requires
+   actual train alignment. Early assigned preparation can use a checked headland
+   slot when there is not enough course behind the combine yet.
+
+The saved incidents establish the mutual hold, bypass restart loop, replacement
+job termination and delayed/repeated preparation. Preparation logs alone do not
+identify which clearance branch caused every rejection. Brief native stops that
+recovered are not additional defects. The two-second pocket pause, per-tractor
+cutoff and native AD handover are retained.
+
+Regression coverage exercises combine update order and equal progress, occupied
+goals including a trailing trailer, deferred-search cancellation, successful
+bypass retries, clear/obstructed route projection, stable stages, and physical
+whole-train arrival before several configured triggers with a delayed search.
+These run production code at a simulated engine boundary; they do not establish
+unattended completion in FS25. Source and extracted-package release checks must
+pass before publishing the ZIP.
+
 ## Build 3024 - pocket departure pause and completed bypass cleanup
 
 Two narrow corrections on build 3023; previous release ZIPs remain unchanged.

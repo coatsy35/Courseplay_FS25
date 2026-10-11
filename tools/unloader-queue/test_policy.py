@@ -102,7 +102,7 @@ class PolicyTests(unittest.TestCase):
         c=self.table(self.chopper())
         gaps=[self.policy.lag(c,20,12,5,t) for t in [200,60,20,0]]
         self.assertEqual(gaps,sorted(gaps,reverse=True))
-        self.assertEqual(gaps[-1],35)
+        self.assertEqual(gaps[-1],28)
 
     def test_partial_trailer_preferred_when_both_timely(self):
         p = self.plan([self.combine()], [self.trailer(), self.trailer('t2', fill=9000)])
@@ -193,7 +193,7 @@ class PolicyTests(unittest.TestCase):
                 c['fill'] = fill
                 gaps.append(self.policy.lag(self.table(c), 24, 15, 3))
             self.assertEqual(gaps, sorted(gaps, reverse=True))
-            self.assertGreaterEqual(min(gaps), 36)
+            self.assertGreaterEqual(min(gaps), 32)
         for level in range(40, 101, 5):
             t = self.trailer(departPercent=level, fill=32000*level/100)
             self.assertIsNone(self.plan([self.combine()], [t]).leads.c1)

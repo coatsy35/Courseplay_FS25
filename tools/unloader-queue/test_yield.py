@@ -353,6 +353,12 @@ class YieldTests(unittest.TestCase):
             for _,p in ipairs(poses) do
                 assert(math.abs(H.math.delta(p.t,parking.t))<math.rad(5))
             end
+            for i,p in ipairs(poses) do
+                local node=i==1 and v.rootNode or trailer.rootNode
+                node.x=p.x; node.z=p.z; node.t=p.t
+            end
+            local x,z=H.math.position(v.rootNode,0,-3.3)
+            trailer.joint.node.x=x; trailer.joint.node.z=z; trailer.joint.node.t=v.rootNode.t
             Q.startRoute(data,path); Q.onLast(u)
             assert(data.operation=='prepare' and data.parkedGoal==parking)
         ''')

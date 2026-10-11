@@ -158,7 +158,7 @@ end
 -- Preparation closes progressively, but preserves space for native CP's 25 m
 -- moving-rendezvous admission check and the full tractor/trailer train.
 function CpUnloaderQueuePolicy.lag(combine, rigLength, approachSeconds, speed, preparedBy)
-    local minimum = math.max(35, rigLength + 12)
+    local minimum = math.max(27, rigLength + 8)
     local spare = math.max(0, (preparedBy or CpUnloaderQueuePolicy.deadline(combine)) - approachSeconds)
     return minimum + math.min(100, spare * math.max(0, speed) * 0.35)
 end

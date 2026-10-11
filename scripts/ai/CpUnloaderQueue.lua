@@ -103,8 +103,98 @@ end
 function Q.release(driver)
     Q.cancel(driver)
     local data=driver.queueData
-    if data then data.operation=nil end
+    if data then data.operation=nil; data.stage=nil end
     driver.state=driver.states.IDLE
+end
+
+-- Estimate preparation at the speed the queue actually permits, including
+-- measured search latency and time to straighten the whole train.
+function Q.preparationEta(driver,combine)
+    local metres,eta=driver:getDistanceAndEteToVehicle(combine.vehicle)
+    local speed=math.max(0.5,math.min(15,driver:getFieldSpeed())/3.6)
+    local data=driver.queueData
+    local length=AIUtil.getLength(driver.vehicle)
+    return math.max(eta or 0,(metres or 0)/speed+3)+math.max(12,3*length/speed)
+        +math.min(30,data and data.searchLatency or 0)
+end
+
+-- Only temporary, identifiable outgoing traffic qualifies for deferred native
+-- approach. Static obstacles, crop refusal and unrelated failures stay native.
+function Q.waitingGoalOccupied(driver,x,z)
+    if not Q.enabled(driver) or not driver.combineToUnload then return false end
+    local departing={}
+    for other,data in pairs(Q.members) do
+        local states=other.states
+        local backing=(states.MOVING_BACK_WITH_TRAILER_FULL and other.state==states.MOVING_BACK_WITH_TRAILER_FULL)
+            or (states.MOVING_BACK and other.state==states.MOVING_BACK)
+        if other~=driver and other.vehicle:getIsCpActive() and (data.nativeDeparture or backing) then
+            departing[#departing+1]=other.vehicle
+        end
+    end
+    if #departing==0 then return false end
+    local model=W.model(driver.vehicle)
+    if not model then return false end
+    local node=driver:getPipeOffsetReferenceNode()
+    local px,_,pz=localToWorld(node,x or 0,0,z or 0)
+    local poses=W.settledPoses(model,{x=px,z=pz,t=W.pose(node).t})
+    for _,vehicle in ipairs(departing) do
+        for _,item in ipairs(W.currentBodies(vehicle) or {}) do
+            local obstacle=W.rectangle(item.body,item.pose,1)
+            for i,body in ipairs(model.bodies) do
+                if G.overlap(obstacle,W.rectangle(body,poses[i],1)) then return vehicle end
+            end
+        end
+    end
+    return false
+end
+
+function Q.deferWaitingApproach(driver,x,z)
+    if not Q.waitingGoalOccupied(driver,x,z) then return false end
+    local data=Q.data(driver)
+    local pending=data.deferredApproach
+    if not pending or pending.combine~=driver.combineToUnload then
+        pending={combine=driver.combineToUnload,started=now(),pose=W.pose(driver:getPipeOffsetReferenceNode())}
+        data.deferredApproach=pending
+        driver:debug('Queue: replacement goal occupied by outgoing train; retaining native assignment')
+    end
+    pending.x=x; pending.z=z; pending.retryAt=now()+1000
+    driver:setMaxSpeed(0)
+    return true
+end
+
+function Q.resumeWaitingApproach(driver)
+    local data=driver.queueData
+    local pending=data and data.deferredApproach
+    if not pending then return end
+    if driver.combineToUnload~=pending.combine or driver.state~=driver.states.WAITING_FOR_PATHFINDER then
+        data.deferredApproach=nil; data.waitingApproach=nil
+        return
+    end
+    if not pending.combine:getIsCpActive() or Q.atDepartureThreshold(driver) or driver:isDriveUnloadNowRequested() then
+        data.deferredApproach=nil; data.waitingApproach=nil
+        driver:startWaitingForSomethingToDo()
+        return -- the ordinary idle/full path retains departure ownership
+    end
+    local combine=pending.combine:getCpDriveStrategy()
+    local pose=W.pose(driver:getPipeOffsetReferenceNode())
+    if not combine or distance(pose,pending.pose)>3 or math.abs(H.math.delta(pose.t,pending.pose.t))>math.rad(10)
+            or (combine.isWaitingForUnload and not combine:isWaitingForUnload()
+                and not (combine.alwaysNeedsUnloader and combine:alwaysNeedsUnloader())) then
+        data.deferredApproach=nil; data.waitingApproach=nil
+        driver:startWaitingForSomethingToDo()
+        return -- a fresh native call must calculate the new approach/offsets
+    end
+    driver:setMaxSpeed(0)
+    if now()<pending.retryAt then return end
+    if now()-pending.started>=60000 then
+        data.deferredApproach=nil; data.waitingApproach=nil; data.approachRetryAt=now()+10000
+        driver:startWaitingForSomethingToDo()
+        return
+    end
+    if Q.waitingGoalOccupied(driver,pending.x,pending.z) then pending.retryAt=now()+1000; return end
+    data.deferredApproach=nil
+    driver:debug('Queue: outgoing train cleared replacement goal; resuming native approach')
+    driver:startPathfindingToWaitingCombine(pending.x,pending.z)
 end
 
 function Q.coursePosition(combine, preparing)
@@ -222,8 +312,7 @@ function Q.refresh()
     Q.accountForTransfer(combines,trailers,Q.combines or {})
     Q.plan=P.plan(combines,trailers,function(t,c)
         if not t.compatible[c.id] then return math.huge end
-        local _,eta=t.driver:getDistanceAndEteToVehicle(c.vehicle)
-        return eta+12
+        return Q.preparationEta(t.driver,c)
     end)
     Q.combines=byId
     for _, t in ipairs(trailers) do Q.members[t.driver].assignment=Q.plan.trailers[t.id] end
@@ -271,6 +360,64 @@ function Q.findUnloader(combine,stopped,waypoint)
     return false
 end
 
+function Q.stagingClear(driver,poses,model)
+    Q.pruneTurnReservations()
+    local marker=driver.invertedStartPositionMarkerNode
+    local origin=marker and W.pose(marker)
+    for i,body in ipairs(model.bodies) do
+        local rectangle=W.rectangle(body,poses[i],1)
+        if origin then
+            -- Closest point on the complete oriented body, including edges
+            -- and containment; checking corners alone misses circle crossings.
+            local pose=poses[i]
+            local dx,dz=origin.x-pose.x,origin.z-pose.z
+            local x=dx*math.cos(pose.t)-dz*math.sin(pose.t)
+            local z=dx*math.sin(pose.t)+dz*math.cos(pose.t)
+            local nearestX=math.max(body.right-1,math.min(body.left+1,x))
+            local nearestZ=math.max(body.back-1,math.min(body.front+1,z))
+            if math.sqrt((x-nearestX)^2+(z-nearestZ)^2)<2*driver.turningRadius+4 then return false end
+        end
+        for _,reservation in pairs(Q.turnTraffic or {}) do
+            if reservation.area(rectangle) then return false end
+        end
+    end
+    return true
+end
+
+function Q.stagingCandidate(driver,course,ix)
+    local p=point(course,ix)
+    local length=AIUtil.getLength(driver.vehicle)
+    -- Reject bends/row ends within the parked train and manoeuvring space.
+    local first=course:getPreviousWaypointIxWithinDistance(ix,length+4)
+    local last=course:getNextWaypointIxWithinDistance(ix,driver.turningRadius+5)
+    if not first or not last or distance(point(course,first),p)<length
+            or distance(point(course,last),p)<driver.turningRadius then return end
+    for i=first,last do
+        if math.abs(H.math.delta(course:getWaypointYRotation(i),p.t))>math.rad(10)
+                or (course.isTurnStartAtIx and course:isTurnStartAtIx(i))
+                or (course.isOnConnectingPath and course:isOnConnectingPath(i)) then return end
+    end
+    if course:isOnHeadland(ix) then
+        local boundary=FieldworkBoundary.forVehicle(driver.vehicle,0)
+        if not boundary then return end
+        local nearest,heading
+        for i,a in ipairs(boundary.polygon) do
+            local b=boundary.polygon[i%#boundary.polygon+1]
+            local dx,dz=b.x-a.x,b.z-a.z
+            local f=math.max(0,math.min(1,((p.x-a.x)*dx+(p.z-a.z)*dz)/math.max(.001,dx*dx+dz*dz)))
+            local d=distance(p,{x=a.x+f*dx,z=a.z+f*dz})
+            if not nearest or d<nearest then nearest=d; heading=math.atan2(dx,dz) end
+        end
+        if not heading or math.min(math.abs(H.math.delta(p.t,heading)),
+                math.abs(H.math.delta(p.t,heading+math.pi)))>math.rad(10) then return end
+    end
+    local model=W.model(driver.vehicle)
+    if not model then return end
+    p.accept=function(poses,m) return Q.stagingClear(driver,poses,m) end
+    if not p.accept(W.settledPoses(model,p),model) or not Q.targetAvailable(driver,p) then return end
+    return p
+end
+
 function Q.target(driver)
     local data=Q.data(driver)
     local assignment=data.assignment
@@ -280,45 +427,76 @@ function Q.target(driver)
         if not combine then return end
         local course,ix=Q.coursePosition(combine.driver,true)
         if not course then return end
-        local lag=P.lag(combine,AIUtil.getLength(driver.vehicle),12,driver:getFieldSpeed()/3.6,
-            assignment.successor and assignment.deadline or nil)
+        local eta=Q.preparationEta(driver,combine)
+        local deadline=assignment.successor and assignment.deadline or P.deadline(combine)
+        local stage=deadline<=eta+15 and 3 or (deadline<=2*eta+30 and 2 or 1)
+        local saved=data.stage
+        if saved and saved.combine==assignment.combine and saved.course==course
+                and saved.successor==assignment.successor then
+            stage=math.max(stage,saved.phase) -- no oscillation as measured intake varies
+            if stage==saved.phase and saved.goal and Q.targetAvailable(driver,saved.goal) then return saved.goal end
+        end
+        local gap=distance(W.pose(driver.vehicle:getAIDirectionNode()),combine.position)
+        local lag=stage==3 and math.max(27,AIUtil.getLength(driver.vehicle)+8)
+            or stage==2 and math.max(60,AIUtil.getLength(driver.vehicle)+20) or math.max(90,gap/2)
         if assignment.successor then lag=lag+AIUtil.getLength(driver.vehicle)+20 end
-        for extra=0,40,10 do
+        -- A moving harvester advances while the rig travels and straightens.
+        -- Target its predicted trigger position where already harvested ground
+        -- permits it. Destination/route crop checks still reject unopened crop.
+        if stage==3 and deadline>0 and deadline<90 then
+            local travel=math.min(120,math.max(0,(combine.vehicle.lastSpeedReal or 0)*1000)*deadline)
+            local future=course:getNextWaypointIxWithinDistance(ix,travel)
+            if travel>0 and future and not course:isTurnBetween(ix,future) then ix=future end
+        end
+        for extra=0,100,10 do
             local targetIx=course:getPreviousWaypointIxWithinDistance(ix,lag+extra)
             if targetIx and targetIx>=1 then
-                local p=point(course,targetIx)
-                if Q.targetAvailable(driver,p) then return p end
-            end
-        end
-    else
-        -- Stable slots along harvested headland courses, outside the AD start's
-        -- turning space. Search and density checks decide whether a slot is usable.
-        local index=1
-        for other in pairs(Q.members) do if id(other.vehicle)<id(driver.vehicle) then index=index+1 end end
-        local marker=driver.invertedStartPositionMarkerNode
-        local origin=marker and W.pose(marker) or W.pose(driver.vehicle:getAIDirectionNode())
-        local best,score
-        for _, combine in pairs(Q.combines or {}) do
-            local course=combine.driver.fieldWorkCourse
-            if course and driver:isServingPosition(combine.position.x,combine.position.z,10) then
-                local spacing=math.max(22,AIUtil.getLength(driver.vehicle)+8)
-                local accumulated=0
-                for i=2,course:getNumberOfWaypoints() do
-                    if course:isOnHeadland(i) and course:isOnHeadland(i-1) then
-                        local p=point(course,i)
-                        accumulated=accumulated+distance(p,point(course,i-1))
-                        if accumulated>=index*spacing then
-                            accumulated=0
-                            local d=distance(p,origin)
-                            if d>2*driver.turningRadius+spacing and Q.targetAvailable(driver,p)
-                                    and (not score or d<score) then best,score=p,d end
-                        end
-                    else accumulated=0 end
+                local p=Q.stagingCandidate(driver,course,targetIx)
+                if p then
+                    data.stage={combine=assignment.combine,course=course,successor=assignment.successor,phase=stage,goal=p}
+                    return p
                 end
             end
         end
-        return best
     end
+    -- Early work may not yet have enough course behind it for an assigned
+    -- stage. A checked headland slot still clears AD and keeps the rig nearby.
+    return Q.poolTarget(driver)
+end
+
+function Q.poolTarget(driver)
+    local data=Q.data(driver)
+    local parked=data.parkedGoal
+    if parked and Q.targetAvailable(driver,parked) and Q.arrived(driver,parked) then return parked end
+    -- Stable slots along harvested headland courses, outside the AD start's
+    -- turning space. Search and density checks decide whether a slot is usable.
+    local index=1
+    for other in pairs(Q.members) do if id(other.vehicle)<id(driver.vehicle) then index=index+1 end end
+    local marker=driver.invertedStartPositionMarkerNode
+    local origin=marker and W.pose(marker) or W.pose(driver.vehicle:getAIDirectionNode())
+    local best,score
+    for _, combine in pairs(Q.combines or {}) do
+        local course=combine.driver.fieldWorkCourse
+        if course and driver:isServingPosition(combine.position.x,combine.position.z,10) then
+            local spacing=math.max(22,AIUtil.getLength(driver.vehicle)+8)
+            local accumulated=0
+            for i=2,course:getNumberOfWaypoints() do
+                if course:isOnHeadland(i) and course:isOnHeadland(i-1) then
+                    local p=point(course,i)
+                    accumulated=accumulated+distance(p,point(course,i-1))
+                    if accumulated>=index*spacing then
+                        accumulated=0
+                        local d=distance(p,origin)
+                        if d>2*driver.turningRadius+spacing and (not score or d<score) then
+                            local candidate=Q.stagingCandidate(driver,course,i)
+                            if candidate then best,score=candidate,d end
+                        end
+                    end
+                else accumulated=0 end
+            end
+        end
+    end
+    return best
 end
 
 function Q.request(driver,goal,corridor)
@@ -343,6 +521,7 @@ end
 function Q.startRoute(data,path)
     if not Q.owns(data.driver) or data.searchGeneration~=data.generation then return end
     data.path=path; data.search=nil
+    data.searchLatency=math.max(0,(now()-(data.searchStarted or now()))/1000)
     data.goal=path.goal or data.goal
     data.progressPosition=W.pose(data.driver.vehicle:getAIDirectionNode())
     data.progressTime=now()
@@ -396,10 +575,25 @@ function Q.schedule()
     end
 end
 
+function Q.arrived(driver,goal)
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    if distance(here,goal)>1.5 or math.abs(H.math.delta(here.t,goal.t))>math.rad(10) then return false end
+    local model=W.model(driver.vehicle)
+    if not model then return false end
+    local poses=W.poses(model)
+    for _,p in ipairs(poses) do if math.abs(H.math.delta(p.t,goal.t))>math.rad(10) then return false end end
+    return not goal.accept or goal.accept(poses,model)
+end
+
 function Q.onLast(driver)
     local data=driver.queueData
     if not Q.owns(driver) or driver.course~=data.course then return false end
     local destination=data.goal
+    if not destination or not Q.arrived(driver,destination) then
+        Q.failed(data,'whole train not aligned at destination')
+        Q.cancel(driver)
+        return true
+    end
     Q.cancel(driver)
     data.parkedGoal=destination
     data.nextAttempt=now()+1000
@@ -437,9 +631,11 @@ function Q.tick(driver)
             local position=W.pose(driver.vehicle:getAIDirectionNode())
             if not data.progressPosition or distance(position,data.progressPosition)>1 then
                 data.progressPosition=position; data.progressTime=now()
-            elseif now()-data.progressTime>5000 then
-                Q.cancel(driver); data.nextAttempt=now()+1000
-                data.progressTime=now(); Q.reason(data,'route made no progress; replanning')
+            elseif data.turnHold or data.nativeHold then
+                data.progressTime=now()
+            elseif now()-data.progressTime>10000 then
+                Q.failed(data,'route made no progress; trying another waiting position')
+                Q.cancel(driver); data.progressTime=now()
             end
         end
         if not data.search and not data.path and now()>=data.nextAttempt then
@@ -450,15 +646,7 @@ function Q.tick(driver)
             -- idle. Do not use the old operation/goal after that transition.
             if not Q.owns(driver) then return end
             if goal then
-                local here=W.pose(driver.vehicle:getAIDirectionNode())
-                local arrived=distance(here,goal)<(data.operation=='prepare' and 5 or 1.5)
-                    and math.abs(H.math.delta(here.t,goal.t))<math.rad(10)
-                local model=W.model(driver.vehicle)
-                if arrived and model then
-                    local poses=W.poses(model)
-                    for _,p in ipairs(poses) do if math.abs(H.math.delta(p.t,goal.t))>math.rad(10) then arrived=false end end
-                    if goal.accept and not goal.accept(poses,model) then arrived=false end
-                elseif not model then arrived=false end
+                local arrived=Q.arrived(driver,goal)
                 if not arrived then
                     if now()>=Q.nextDeparture or data.operation~='prepare' then
                         Q.request(driver,goal,corridor); Q.nextDeparture=now()+3000
@@ -479,6 +667,47 @@ function Q.tick(driver)
     Q.schedule()
 end
 
+-- PPC's relevant waypoint is the start of a segment, often behind the tractor.
+-- Project onto a bounded local forward segment instead of driving the collision
+-- probe backwards to that waypoint or treating normal spacing as an obstacle.
+function Q.projectRoute(path,pose,ix)
+    local best,score
+    for i=math.max(1,ix-4),math.min(#path-1,ix+24) do
+        local a,b=path[i],path[i+1]
+        local dx,dz=b.x-a.x,b.z-a.z
+        local length=dx*dx+dz*dz
+        local f=length>0 and math.max(0,math.min(1,((pose.x-a.x)*dx+(pose.z-a.z)*dz)/length)) or 0
+        local p={x=a.x+f*dx,z=a.z+f*dz,t=a.t+H.math.delta(b.t,a.t)*f}
+        local d=distance(p,pose)
+        if d<=1.5 and math.abs(H.math.delta(p.t,pose.t))<=math.rad(20) and (not score or d<score) then
+            best={index=i,point=p}; score=d
+        end
+    end
+    return best
+end
+
+function Q.routeClear(data,poses,ix)
+    local projection=Q.projectRoute(data.path,poses[1],ix)
+    if not projection then return false,'path deviation' end
+    local travelled=0
+    for i=projection.index,#data.path do
+        if travelled>=7 then break end
+        local target=i==projection.index and projection.point or data.path[i]
+        local start=poses[1]
+        local d=distance(start,target)
+        local delta=H.math.delta(target.t,start.t)
+        local samples=math.max(1,math.ceil(d/0.5),math.ceil(math.abs(delta)/math.rad(2)))
+        for j=1,samples do
+            local p={x=start.x+(target.x-start.x)*j/samples,z=start.z+(target.z-start.z)*j/samples,t=start.t+delta*j/samples}
+            poses=H.advance(data.world.model,poses,p)
+            local clear,reason=W.clear(data.world,poses,data.corridor)
+            if not clear then return false,reason end
+        end
+        travelled=travelled+d
+    end
+    return true
+end
+
 function Q.speed(driver)
     local data=driver.queueData
     if not Q.owns(driver) then return end
@@ -491,33 +720,27 @@ function Q.speed(driver)
             data.liveChecked=now()
             local bodies=W.currentBodies(driver.vehicle)
             clear=bodies~=nil
+            local reason
             for _, item in ipairs(bodies or {}) do
-                if not W.bodyClear(data.world,item.body,item.pose,data.corridor) then clear=false; break end
+                clear,reason=W.bodyClear(data.world,item.body,item.pose,data.corridor)
+                if not clear then break end
             end
             -- Recheck a stopping-distance horizon from the current articulated
             -- pose. Native proximity still runs every frame, between these checks.
             local poses=W.poses(data.world.model)
             poses[1]=W.pose(driver.vehicle:getAIDirectionNode())
-            local travelled=0
             local courseIx=math.max(1,driver.ppc:getRelevantWaypointIx())
             local ix=data.courseToPath and data.courseToPath[courseIx] or courseIx
-            for i=ix,#data.path do
-                if not clear or travelled>=7 then break end
-                local p=data.path[i]
-                local d=distance(poses[1],p)
-                if d>=0.2 then
-                    if d>2 then clear=false; break end
-                    poses=H.advance(data.world.model,poses,p)
-                    clear=W.clear(data.world,poses,data.corridor)
-                    travelled=travelled+d
-                end
-            end
+            if clear then clear,reason=Q.routeClear(data,poses,ix) end
+            data.liveReason=reason
             data.liveClear=clear
         end
         if clear then
             speed=data.path.reverse and driver.settings.reverseSpeed:getValue() or math.min(15,driver:getFieldSpeed())
         else
-            Q.cancel(driver); data.nextAttempt=now()+1500; Q.reason(data,'route obstructed; replanning')
+            Q.failed(data,'route rejected: '..(data.liveReason or 'body geometry unavailable'),
+                data.liveReason=='path deviation' and 'start' or nil)
+            Q.cancel(driver)
         end
     end
     driver:setMaxSpeed(speed)

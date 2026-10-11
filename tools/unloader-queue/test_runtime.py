@@ -217,8 +217,10 @@ class HarvesterSnapshotTests(unittest.TestCase):
                 settings={fullThreshold={getValue=function() return 85 end}},
                 isServingPosition=function() return true end,
                 getDistanceAndEteToVehicle=function() return 50,10 end,
+                getFieldSpeed=function() return 30 end,
                 getAllTrailersFull=function(_,threshold) return free<=0 or 100*contents/32000>=threshold end}
             u.state=u.states.IDLE
+            AIUtil={getLength=function() return 18 end}
             CpUnloaderQueueWorld.pose=function() return {x=0,z=0,t=0} end
             AIDriveStrategyCombineCourse={isActiveCpCombine=function() return true end}
             g_currentMission={time=0,vehicleSystem={vehicles={h}}}
@@ -742,9 +744,11 @@ class EngineBoundaryTests(unittest.TestCase):
             local combine={fieldWorkCourse=course,course=temporary,states=states,
                 state=states.DRIVING_TO_WORK_START_WAYPOINT,turnContext={turnEndWpIx=51}}
             u.getFieldSpeed=function() return 18 end
+            u.getDistanceAndEteToVehicle=function() return 200,40 end
+            AIUtil.getLength=function() return 18 end
             local data=CpUnloaderQueue.data(u)
             data.assignment={combine='harvester'}
-            CpUnloaderQueue.combines={harvester={driver=combine,fill=14671,capacity=20000,
+            CpUnloaderQueue.combines={harvester={driver=combine,vehicle=v,position={x=0,z=500},fill=14671,capacity=20000,
                 callPercent=80,rate=38}}
             local goal=assert(CpUnloaderQueue.target(u))
             assert(goal.z>400 and goal.z<500, 'must prepare behind upcoming centre row')

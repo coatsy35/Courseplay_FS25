@@ -96,7 +96,8 @@ def check_queue(packager):
     hooks = (release.ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
     methods = set(re.findall(r'function ([UC]):([A-Za-z]+)\(', hooks))
     expected = {('U', name) for name in ('update', 'getDriveData', 'isAllowedToBeCalled', 'call',
-        'startUnloadingTrailers', 'onLastWaypointPassed',
+        'startUnloadingTrailers', 'onLastWaypointPassed', 'startPathfindingToWaitingCombine',
+        'onPathfindingFailedToStationaryTarget', 'onPathfindingDoneToWaitingCombine',
         'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine', 'getAllTrailersFull')} | {('C', 'findUnloader'), ('C', 'onBlockingVehicle'), ('C', 'getDriveData')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
@@ -114,6 +115,7 @@ if __name__ == '__main__':
                                 'unloader-queue/test_native_connectors.py',
                                 'unloader-queue/test_native_departure.py', 'unloader-queue/test_yield.py',
                                 'unloader-queue/test_departure_threshold.py',
-                                'unloader-queue/test_harvester_bypass.py'),
+                                'unloader-queue/test_harvester_bypass.py',
+                                'unloader-queue/test_combined_recovery.py'),
                   stage='queue-operational-candidate-requires-in-game-validation',
                   reference_zip=args.match_release)

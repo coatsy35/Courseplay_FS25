@@ -1,0 +1,404 @@
+"""3025: crossing turns, replacement clearance and stable articulated preparation."""
+from pathlib import Path
+import sys
+import unittest
+
+SOURCE = Path(__file__).resolve().parents[2]
+ROOT = Path(sys.argv.pop(1)).resolve() if len(sys.argv)>1 and not sys.argv[1].startswith('-') else SOURCE
+sys.path.insert(0, str(SOURCE/'tools/unloader-queue'))
+import test_runtime as runtime
+import test_harvester_bypass as bypass
+runtime.ROOT = ROOT
+bypass.ROOT = ROOT
+
+
+class CrossingTests(unittest.TestCase):
+    def setUp(self):
+        bypass.HarvesterBypassTests.setUp(self)
+        bypass.HarvesterBypassTests.travel_fixture(self, trailer_x=100)
+        self.lua.execute('''
+            local points={}
+            for x=-100,200 do points[#points+1]={x=x,z=40} end
+            fc=Course(hv,points,false)
+            c.fieldWorkCourse=fc; context.turnStartWpIx=100
+            hv.getIsCpFieldWorkActive=hv.getIsCpActive
+            fv={rootNode={x=-20,z=40,t=math.pi/2},size={width=3.5,length=8},
+                spec_combine={},active=true,stopped=false,lastSpeedReal=.004}
+            fh={rootNode={x=-15,z=40,t=math.pi/2},size={width=15.2,length=2}}
+            fv.getAttachedImplements=function() return {{object=fh}} end
+            fv.getAIDirectionNode=function() return fv.rootNode end
+            fv.getIsCpActive=function() return fv.active end
+            fv.getIsCpFieldWorkActive=fv.getIsCpActive
+            f=setmetatable({vehicle=fv,states={WORKING={},TURNING={}},fieldWorkCourse=fc,course=fc,
+                debug=function() end,ppc={getRelevantWaypointIx=function() return 81 end}},AIDriveStrategyCombineCourse)
+            f.state=f.states.WORKING
+            f.getCurrentCourse=function() return fc end
+            f.getClosestFieldworkWaypointIx=function() return 81 end
+            fv.getCpDriveStrategy=function() return f end
+            local proximity={hasSameCourse=function(_,v) return v==hv or v==fv end}
+            c.fieldWorkerProximityController=proximity; f.fieldWorkerProximityController=proximity
+            g_currentMission.vehicleSystem={vehicles={hv,fv}}
+        ''')
+
+    def test_crossing_follower_stops_in_both_update_orders_without_changing_jobs(self):
+        for order in ('c:getDriveData(); f:getDriveData()', 'f:getDriveData(); c:getDriveData()'):
+            self.setUp()
+            self.lua.execute(order+'''
+                assert(f.queueCombineHold and f.queueCombineHold.lead==c)
+                assert(select(4,f:getDriveData())==0)
+                assert(not c.queueCombineHold and c.aiTurn==old)
+                assert(f.course==fc and f.state==f.states.WORKING and not f.queueData)
+                c.state=c.states.WORKING
+                assert(select(4,f:getDriveData())==10 and not f.queueCombineHold)
+            ''')
+
+    def test_already_inside_keeps_follower_job_and_plans_original_leader_target(self):
+        self.lua.execute('''
+            fv.rootNode.x=0; fh.rootNode.x=5; fv.stopped=true
+            local state=f.state; local course=f.course
+            assert(select(4,f:getDriveData())==0)
+            assert(c.aiTurn~=old and not f.queueData and not f.queueBypass)
+            c.aiTurn:getDriveData(33)
+            assert(calls==1 and context.turnEndWpIx==953)
+            c.callback(c.callbackOwner,nil)
+            for i=1,30 do f:getDriveData(); c:getDriveData() end
+            assert(calls==1 and c.queueTrailerWait)
+            assert(f.course==course and f.state==state and not stopped)
+            g_currentMission.time=g_currentMission.time+5001
+            c:getDriveData(); c.aiTurn:getDriveData(33)
+            assert(calls==2 and context.turnEndWpIx==953)
+        ''')
+
+    def test_priority_is_frozen_and_header_only_crossing_is_protected(self):
+        self.lua.execute('''
+            f:getDriveData(); assert(f.queueCombineHold)
+            f.getClosestFieldworkWaypointIx=function() return 200 end
+            for i=1,10 do
+                assert(Q.checkCombineTurns(f,15))
+                assert(not Q.checkCombineTurns(c,15))
+            end
+            assert(f.queueCombineHold.lead==c and not c.queueCombineHold)
+            c.fieldWorkCourse={}
+            assert(not Q.holdCombineTurn(f))
+        ''')
+
+    def test_other_courses_and_nonconflicting_rows_are_unchanged(self):
+        self.lua.execute('''
+            f.fieldWorkerProximityController={hasSameCourse=function() return false end}
+            assert(not Q.holdCombineTurn(f,15))
+            f.fieldWorkerProximityController=c.fieldWorkerProximityController
+            fv.rootNode.x=-90; fh.rootNode.x=-85
+            f.ppc.getRelevantWaypointIx=function() return 11 end
+            assert(not Q.holdCombineTurn(f,15) and not f.queueCombineHold)
+        ''')
+
+    def test_equal_progress_turns_choose_one_winner_in_either_order(self):
+        for order in ('c:getDriveData(); f:getDriveData()', 'f:getDriveData(); c:getDriveData()'):
+            self.setUp()
+            self.lua.execute('''
+                hv.rootNode.z=25; hv:getAttachedImplements()[1].object.rootNode.z=30
+                old.turnCourse=Course(hv,{{x=0,z=25},{x=0,z=60},{x=20,z=80}},true)
+                f.state=f.states.TURNING
+                f.turnContext={turnStartWpIx=100,isHeadlandCorner=function() return false end}
+                f.aiTurn={turnContext=f.turnContext,turnCourse=fc,startRecoveryTurn=function() end,states={TURNING={}}}
+                f.aiTurn.state=f.aiTurn.states.TURNING
+                c.vehicle.stopped=false
+            '''+order+'''
+                assert((f.queueCombineHold~=nil)~=(c.queueCombineHold~=nil))
+                local winner=f.queueCombineHold and c or f
+                for i=1,10 do c:getDriveData(); f:getDriveData() end
+                assert(not winner.queueCombineHold)
+            ''')
+
+
+class AcceptedRouteTests(unittest.TestCase):
+    def setUp(self):
+        bypass.HarvesterBypassTests.setUp(self)
+        self.travel_fixture=lambda *args,**kwargs: bypass.HarvesterBypassTests.travel_fixture(self,*args,**kwargs)
+        bypass.HarvesterBypassTests.traffic_fixture(self)
+
+    def test_stationary_traffic_does_not_restart_checked_detour_every_frame(self):
+        self.lua.execute('''
+            tv.rootNode.x=0; trailer.rootNode.x=0
+            c:getDriveData(); c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=20,y=-10,t=0},{x=20,y=-30,t=0}})
+            local recovery=c.aiTurn; local course=recovery.turnCourse
+            outgoing,ov,ot=trafficRig(20,20,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
+            ov.stopped=true
+            local deadline=c.queueBypass.untilTime
+            -- The full reservation may overlap, but the planner's complete
+            -- vehicle clearance says this accepted course remains traversable.
+            for i=1,400 do
+                g_currentMission.time=g_currentMission.time+33
+                c:getDriveData()
+                if recovery.state==recovery.states.PREPARING_RECOVERY then recovery:getDriveData(33) end
+                assert(recovery.turnCourse==course and calls==1)
+            end
+            assert(c.queueBypass.untilTime==deadline and not c.queueTrailerWait)
+        ''')
+
+
+    def test_success_after_failed_retry_retains_active_detour(self):
+        self.lua.execute('''
+            outgoing,ov,ot=trafficRig(0,40,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
+            ov.stopped=true
+            c:getDriveData(); c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,nil)
+            assert(c.queueTrailerWait and not c.queueBypass)
+            g_currentMission.time=g_currentMission.time+5001
+            c:getDriveData(); c.aiTurn:getDriveData(33)
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=20,y=-10,t=0},{x=20,y=-30,t=0}})
+            local recovery=c.aiTurn
+            assert(c.queueBypass and c.queueBypass.turn==recovery)
+            for i=1,60 do
+                g_currentMission.time=g_currentMission.time+33
+                c:getDriveData()
+                assert(c.aiTurn==recovery and recovery.state~=recovery.states.PREPARING_RECOVERY)
+            end
+            assert(calls==2 and not c.queueTrailerWait)
+        ''')
+
+
+class PreparationTests(unittest.TestCase):
+    def setUp(self):
+        runtime.EngineBoundaryTests.setUp(self)
+        self.lua.execute('''
+            Q=CpUnloaderQueue; W=CpUnloaderQueueWorld; H=HeadlandLoopGeometry
+            AIUtil.getLength=function() return 18 end
+            u.states={IDLE={}}; u.state=u.states.IDLE
+            u.getFieldSpeed=function() return 30 end
+            u.getDistanceAndEteToVehicle=function() return 100,15 end
+            u.setMaxSpeed=function(self,s) self.speed=s end
+            u.startCourse=function(self,course) self.course=course end
+            u.settings={reverseSpeed={getValue=function() return 8 end}}
+            u.getAllTrailersFull=function() return false end
+            u.isDriveUnloadNowRequested=function() return false end
+            u.ppc={getRelevantWaypointIx=function() return 1 end}
+            v.getCpDriveStrategy=function() return u end
+            function place(x,z,t)
+                v.rootNode.x=x; v.rootNode.z=z; v.rootNode.t=t
+                local a,b=H.math.position(v.rootNode,0,-9.8)
+                trailer.rootNode.x=a; trailer.rootNode.z=b; trailer.rootNode.t=t
+                a,b=H.math.position(v.rootNode,0,-3.3)
+                trailer.joint.node.x=a; trailer.joint.node.z=b; trailer.joint.node.t=t
+            end
+        ''')
+
+    def route(self):
+        self.lua.execute('''
+            data=Q.take(u,'prepare'); data.world=world
+            data.searchGeneration=data.generation; data.goal={x=0,z=30,t=0}
+            local path={}
+            for i=0,120 do path[#path+1]={x=0,z=i*.25,t=0} end
+            Q.startRoute(data,path)
+        ''')
+
+    def test_ppc_segment_start_behind_actual_rig_does_not_abort_valid_route(self):
+        self.route()
+        self.lua.execute('''
+            place(0,3.1,0)
+            Q.speed(u)
+            assert(data.path and u.speed==15 and data.liveClear)
+            densityCount=30; g_currentMission.time=201
+            Q.speed(u)
+            assert(not data.path and u.speed==0 and data.reason:find('standing crop',1,true))
+            assert(not Q.targetAvailable(u,{x=0,z=30,t=0}))
+        ''')
+
+    def test_projection_deviation_and_real_obstacle_fail_closed(self):
+        for change in ('place(4,3,0)', 'collision=1'):
+            self.setUp(); self.route()
+            self.lua.execute(change+'; Q.speed(u); assert(u.speed==0 and not data.path)')
+
+    def test_last_waypoint_does_not_claim_unaligned_trailer_is_parked(self):
+        self.route()
+        self.lua.execute('''
+            place(0,30,0); trailer.rootNode.t=math.rad(25)
+            assert(Q.onLast(u) and not data.parkedGoal)
+            assert(data.reason=='whole train not aligned at destination')
+        ''')
+
+    def test_stages_are_frozen_between_deadline_transitions_and_use_queue_speed(self):
+        self.lua.execute('''
+            local points={}
+            for z=0,600 do points[#points+1]={x=0,z=z} end
+            fc=Course(v,points,false); fc.currentWaypoint=401
+            c={vehicle={lastSpeedReal=0},fieldWorkCourse=fc,course=fc,
+                getClosestFieldworkWaypointIx=function() return fc.currentWaypoint end}
+            snapshot={driver=c,vehicle=c.vehicle,position={x=0,z=400},fill=0,capacity=20000,rate=50,callPercent=80}
+            Q.combines={a=snapshot}; data=Q.take(u,'prepare'); data.assignment={combine='a'}
+            local eta=Q.preparationEta(u,snapshot)
+            assert(eta>39) -- capped travel speed plus whole-rig straightening
+            local initial=assert(Q.target(u)); assert(data.stage.phase==1)
+            for i=1,20 do
+                fc.currentWaypoint=401+i; snapshot.fill=i*50
+                assert(Q.target(u)==initial)
+            end
+            snapshot.fill=11000
+            local middle=assert(Q.target(u)); assert(data.stage.phase==2 and middle~=initial)
+            snapshot.fill=14500
+            local near=assert(Q.target(u)); assert(data.stage.phase==3)
+            assert(fc.currentWaypoint-1-near.z>=27 and fc.currentWaypoint-1-near.z<=29)
+            snapshot.fill=14000; assert(Q.target(u)==near)
+            Q.failed(data,'destination occupied'); data.failedGoals={}
+            data.goal=near; Q.failed(data,'destination occupied'); Q.cancel(u)
+            assert(Q.target(u)~=near)
+        ''')
+
+    def test_slots_exclude_ad_access_turn_reservations_and_bends(self):
+        self.lua.execute('''
+            local points={}
+            for z=0,150 do points[#points+1]={x=0,z=z} end
+            local course=Course(v,points,false)
+            assert(Q.stagingCandidate(u,course,81))
+            u.invertedStartPositionMarkerNode={x=0,z=80,t=0}
+            assert(not Q.stagingCandidate(u,course,81))
+            u.invertedStartPositionMarkerNode=nil
+            local previousPrune=Q.pruneTurnReservations
+            Q.pruneTurnReservations=function() end
+            Q.turnTraffic={other={area=function() return true end}}
+            assert(not Q.stagingCandidate(u,course,81))
+            Q.turnTraffic={}
+            Q.pruneTurnReservations=previousPrune
+            course:getWaypoint(85).attributes:setRowEnd(true)
+            assert(not Q.stagingCandidate(u,course,81))
+        ''')
+
+    def test_physical_near_arrival_precedes_configured_triggers_with_search_delay(self):
+        for threshold in (60,80,90):
+            self.setUp()
+            self.lua.globals().threshold=threshold
+            self.lua.execute('''
+                local points={}
+                for z=0,190 do points[#points+1]={x=0,z=z} end
+                local course=Course(v,points,false); course.currentWaypoint=101
+                local harvester={lastSpeedReal=.001}
+                local combine={vehicle=harvester,fieldWorkCourse=course,course=course,
+                    getClosestFieldworkWaypointIx=function() return course.currentWaypoint end}
+                local snapshot={driver=combine,vehicle=harvester,position={x=0,z=100},capacity=20000,
+                    callPercent=threshold,fill=20000*threshold/100-2250,rate=50}
+                Q.combines={a=snapshot}; data=Q.take(u,'prepare'); data.assignment={combine='a'}
+                local goal=assert(Q.target(u)); assert(data.stage.phase==3)
+                Q.request(u,goal)
+                local done,path,reason
+                for i=1,100000 do
+                    done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
+                    if done then break end
+                end
+                assert(done and path,reason)
+                local elapsed=10 -- delayed background search, not charged as a frame cost
+                g_currentMission.time=elapsed*1000; Q.startRoute(data,path)
+                local poses=W.poses(data.world.model)
+                local previous=poses[1]
+                for i=2,#path do
+                    local p=path[i]
+                    elapsed=elapsed+math.sqrt((p.x-previous.x)^2+(p.z-previous.z)^2)/(15/3.6)
+                    poses=H.advance(data.world.model,poses,p)
+                    assert(W.clear(data.world,poses))
+                    place(p.x,p.z,p.t)
+                    trailer.rootNode.x=poses[2].x; trailer.rootNode.z=poses[2].z; trailer.rootNode.t=poses[2].t
+                    local ci=1
+                    for j,k in ipairs(data.courseToPath) do if k<=i then ci=j else break end end
+                    u.ppc.getRelevantWaypointIx=function() return ci end
+                    g_currentMission.time=elapsed*1000; Q.speed(u)
+                    assert(data.path and u.speed==15)
+                    previous=p
+                end
+                assert(elapsed<45,'rig must be aligned before the configured trigger')
+                assert(Q.onLast(u) and data.parkedGoal==goal)
+                assert(145-goal.z>=26 and 145-goal.z<=29)
+                assert(Q.target(u)==goal,'hold the completed stage rather than chase')
+            ''')
+
+    def test_ad_circle_excludes_body_edges_and_containment_even_with_clear_corners(self):
+        self.lua.execute('''
+            u.invertedStartPositionMarkerNode={x=0,z=0,t=0}
+            local model={bodies={{left=2,right=-2,front=2,back=-2.05}},links={}}
+            local poses={{x=0,z=27,t=0}}
+            for _,p in ipairs(W.rectangle(model.bodies[1],poses[1],1)) do
+                assert(math.sqrt(p.x*p.x+p.z*p.z)>24)
+            end
+            assert(not Q.stagingClear(u,poses,model))
+            model.bodies[1].front=50; model.bodies[1].back=-50
+            poses[1].z=0
+            assert(not Q.stagingClear(u,poses,model))
+        ''')
+
+
+class ReplacementTests(unittest.TestCase):
+    def setUp(self):
+        PreparationTests.setUp(self)
+        self.lua.execute('AIDriveStrategyCourse={}; AIDriveStrategyFieldWorkCourse={}')
+        for name in ('AIDriveStrategyUnloadCombine','AIDriveStrategyCombineCourse'):
+            self.lua.execute((ROOT/f'scripts/ai/strategies/{name}.lua').read_text())
+        self.lua.execute('''
+            attempts=0; nativeFailures=0
+            AIDriveStrategyUnloadCombine.startPathfindingToWaitingCombine=function(self,x,z)
+                attempts=attempts+1; lastX=x; lastZ=z
+            end
+            AIDriveStrategyUnloadCombine.onPathfindingFailedToStationaryTarget=function() nativeFailures=nativeFailures+1 end
+        ''')
+        self.lua.execute((ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text())
+        self.lua.execute('''
+            setmetatable(u,AIDriveStrategyUnloadCombine)
+            u.states=AIDriveStrategyUnloadCombine.myStates; u.state=u.states.WAITING_FOR_PATHFINDER
+            waiting=true; reference={x=0,z=40,t=0}
+            cv={getIsCpActive=function() return active end,
+                getCpDriveStrategy=function() return {isWaitingForUnload=function() return waiting end} end}
+            active=true; u.combineToUnload=cv
+            u.getPipeOffsetReferenceNode=function() return reference end
+            u.startWaitingForSomethingToDo=function(self) self.combineToUnload=nil; self.state=self.states.IDLE end
+            ov={rootNode={x=0,z=40,t=0},size={width=3,length=5},getIsCpActive=function() return true end}
+            ot={rootNode={x=0,z=30,t=0},size={width=3,length=10}}
+            ov.getAttachedImplements=function() return {{object=ot}} end
+            outgoing={vehicle=ov,states=u.states,state=u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL}
+            Q.data(outgoing).nativeDeparture=true; Q.data(u)
+        ''')
+
+    def test_occupied_goal_waits_for_whole_outgoing_train_then_calls_native_once(self):
+        self.lua.execute('''
+            u:startPathfindingToWaitingCombine(0,-1)
+            assert(attempts==0 and u.queueData.deferredApproach and u.combineToUnload==cv)
+            ov.rootNode.x=50 -- tractor clear but its trailer still blocks
+            g_currentMission.time=1001; Q.resumeWaitingApproach(u); assert(attempts==0)
+            ot.rootNode.x=50
+            g_currentMission.time=2002; Q.resumeWaitingApproach(u)
+            assert(attempts==1 and lastX==0 and lastZ==-1 and not u.queueData.deferredApproach)
+            assert(u.combineToUnload==cv and u.state==u.states.WAITING_FOR_PATHFINDER)
+        ''')
+
+    def test_occupation_during_search_defers_only_that_failure(self):
+        self.lua.execute('''
+            ov.rootNode.x=50; ot.rootNode.x=50
+            u:startPathfindingToWaitingCombine(0,0); assert(attempts==1)
+            ov.rootNode.x=0; ot.rootNode.x=0
+            u:onPathfindingFailedToStationaryTarget()
+            assert(nativeFailures==0 and u.queueData.deferredApproach)
+            ov.rootNode.x=50; ot.rootNode.x=50; u.queueData.deferredApproach=nil
+            u:onPathfindingFailedToStationaryTarget(); assert(nativeFailures==1)
+        ''')
+
+    def test_timeout_and_changed_assignment_do_not_stop_job_or_resume_stale_goal(self):
+        self.lua.execute('''
+            u:startPathfindingToWaitingCombine(0,0)
+            g_currentMission.time=60001; Q.resumeWaitingApproach(u)
+            assert(not u.combineToUnload and u.state==u.states.IDLE and attempts==0)
+            assert(u.queueData.approachRetryAt==70001)
+            u.combineToUnload=cv; u.state=u.states.WAITING_FOR_PATHFINDER
+            u:startPathfindingToWaitingCombine(0,0)
+            u.combineToUnload={}; Q.resumeWaitingApproach(u)
+            assert(not u.queueData.deferredApproach and attempts==0)
+        ''')
+
+    def test_same_combine_resuming_or_moving_invalidates_stationary_approach(self):
+        for change in ('waiting=false','reference.z=45','reference.t=math.rad(20)'):
+            self.setUp()
+            self.lua.execute('u:startPathfindingToWaitingCombine(0,0); '+change+'''
+                Q.resumeWaitingApproach(u)
+                assert(not u.queueData.deferredApproach and not u.combineToUnload and attempts==0)
+                assert(u.state==u.states.IDLE)
+            ''')
+
+
+if __name__ == '__main__':
+    unittest.main()

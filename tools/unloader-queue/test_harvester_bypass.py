@@ -291,9 +291,16 @@ class HarvesterBypassTests(unittest.TestCase):
             local recovery=c.aiTurn
             outgoing,ov,ot=trafficRig(20,20,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
             ov.stopped=true
+            recovery.queueBypassConstraints.isValidNode=function(_,node)
+                return math.abs(node.x-20)>8 or math.abs(-node.y-20)>8
+            end
             assert(select(4,c:getDriveData(33))==0)
-            assert(recovery.state==recovery.states.PREPARING_RECOVERY)
+            assert(recovery.state==recovery.states.WAITING_FOR_PATHFINDER and c.queueTrailerWait)
             assert(outgoing.queueData.nativeDeparture and not Q.owns(outgoing))
+            for i=1,10 do c:getDriveData(33) end
+            assert(calls==1)
+            g_currentMission.time=g_currentMission.time+5001
+            c:getDriveData(33)
             recovery:getDriveData(33); assert(calls==2)
         ''')
 
