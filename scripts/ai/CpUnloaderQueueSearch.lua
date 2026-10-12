@@ -256,6 +256,35 @@ function S.choices(world,goals,corridor)
     return {world=world,choices=goals,corridor=corridor,index=1}
 end
 
+-- Reserve part of the existing one-second yield budget for local escape.
+-- Otherwise a difficult fixed candidate can consume the entire allowance on
+-- every retry, leaving the alternative searches unreachable. Abandon only
+-- unfinished candidates; never accept an unchecked or partially checked path.
+function S.choicePhase(search)
+    if not search.choices or not search.escape then return end
+    if search.index<=#search.choices then return search.index end
+    if not search.escapeForward then return 'reverse escape' end
+end
+
+function S.chargeChoices(search,elapsed,startedPhase)
+    local phase=S.choicePhase(search)
+    -- A completed candidate may have advanced the search during this frame.
+    -- Never charge its expensive last check to an untried next candidate.
+    if not phase or phase~=startedPhase then return end
+    local limit=type(phase)=='number' and 300/math.max(1,#search.choices) or 200
+    if search.workPhase~=phase then search.workPhase=phase; search.phaseWorkMs=0 end
+    search.phaseWorkMs=search.phaseWorkMs+elapsed
+    if search.phaseWorkMs<limit then return end
+    if type(phase)=='number' then
+        search.active=nil; search.index=search.index+1
+        search.reason='fixed clearance candidate budget exhausted'
+    else
+        search.fallback=nil; search.escapeForward=true
+        search.reason='reverse clearance budget exhausted; trying forward escape'
+    end
+    return search.reason
+end
+
 function S.stepChoices(search,budget)
     if search.index>#search.choices then
         if search.best then return true,search.best end

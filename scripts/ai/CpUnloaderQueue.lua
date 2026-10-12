@@ -607,6 +607,7 @@ function Q.schedule()
     end
     if not selected then return end
     selected.lastAdvance=now()
+    local workPhase=selected.operation=='yield' and S.choicePhase(selected.search)
     local timer=openIntervalTimer()
     local done,path,reason
     repeat done,path,reason=S.step(selected.search,1) until done or readIntervalTimerMs(timer)>=2
@@ -621,6 +622,9 @@ function Q.schedule()
         else Q.failed(selected,reason or 'no safe route') end
     elseif selected.searchWorkMs>(selected.operation=='prepare' and 15000 or 1000) then
         selected.search=nil; Q.failed(selected,'search budget exhausted; retaining CP control')
+    elseif selected.operation=='yield' then
+        local phaseReason=S.chargeChoices(selected.search,elapsed,workPhase)
+        if phaseReason then Q.reason(selected,phaseReason) end
     end
 end
 

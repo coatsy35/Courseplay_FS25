@@ -1,3 +1,32 @@
+## Build 3028 - remove the working-combine queue hold
+
+The 3027 incident showed CR11/319 stalled at waypoint 716 for over 23 minutes
+while T7.300/322 repeatedly exhausted yield searches towards the same reported
+43.7-metre destination. CR11/318 then waited under native convoy spacing.
+The 3026 working-header hook could hold the lead indefinitely throughout those
+failures; the log did not record which speed override was active.
+
+Keep the early full-header clearance request, but remove its unconditional
+speed-zero override. Native proximity braking, collision checks, convoy spacing,
+turn priority and parked-trailer recovery retain control. An unsuccessful
+preparation search no longer provides its own reason to stop a working combine.
+
+Within the unchanged one-second measured yield-search budget, share 300 ms
+across fixed candidates and allow 200 ms for reverse escape before trying
+forward escape with the remaining budget. Completed candidates retain their
+validated results; unfinished candidates cannot become routes. Charge only
+the phase that performed the work, never an untried following destination.
+The existing per-frame scheduler limit and whole-train crop, boundary,
+collision and articulation checks remain.
+
+Regression tests cover repeated failed searches without a combine speed
+override, native obstacle and turn stops, expensive fixed candidates reaching
+validated reverse/forward alternatives, and expensive phase transitions.
+AD-arrival staging, the pocket pause, native departure thresholds and handover,
+finished-combine release, and the earlier turn/bypass corrections are retained.
+The complete source and packaged release suites must pass before publication.
+Unattended completion still needs in-game validation. Monitoring remains paused.
+
 ## Build 3027 - release unloaders after finished combines
 
 The 3025 incident log records CR11/319 completing its final unload, stopping

@@ -90,27 +90,23 @@ local function intersects(area,vehicle)
     return false
 end
 
--- Ask queued traffic to clear while there is still room to steer. Waiting for
--- the native blocking callback lets a working header close to about 1.5 m.
--- Native unloading, departure and the combine's fieldwork course remain owned
--- by their original controllers.
-function Q.holdWorkingQueue(combine)
-    if not combine.states or combine.state~=combine.states.WORKING then return false end
+-- Request clearance early, without overriding native braking. A future sweep
+-- is a preparation request, not proof of a current collision. Holding here
+-- while a trailer cannot find a route also prevents native blocked recovery.
+function Q.requestWorkingClearance(combine)
+    if not combine.states or combine.state~=combine.states.WORKING then return end
     local time=g_currentMission.time
-    local cache=combine.queueWorkingTraffic
-    if cache and time-cache.time<200 then return cache.hold end
+    if combine.queueWorkingTrafficChecked and time-combine.queueWorkingTrafficChecked<200 then return end
+    combine.queueWorkingTrafficChecked=time
     local area
-    local hold=false
     for driver,data in pairs(Q.members) do
         if Q.owns(driver) and (data.operation=='prepare' or data.operation=='yield')
                 and not data.nativeDeparture and not driver.combineToUnload
                 and driver.vehicle:getIsCpActive() then
             area=area or Q.yieldArea(combine.vehicle)
-            if area and intersects(area,driver.vehicle) and Q.priority(driver,combine.vehicle) then hold=true end
+            if area and intersects(area,driver.vehicle) then Q.priority(driver,combine.vehicle) end
         end
     end
-    combine.queueWorkingTraffic={time=time,hold=hold}
-    return hold
 end
 
 -- A centre-entry U-turn/reverse can bring the lead back towards its own

@@ -132,8 +132,9 @@ end
 
 local combineDrive = C.getDriveData
 function C:getDriveData(...)
+    Q.requestWorkingClearance(self)
     local cornerHold=Q.holdHeadlandCorner(self)
-    local hold=Q.checkCombineTurns(self) or Q.checkParkedTrailerTravel(self) or Q.holdWorkingQueue(self) or cornerHold
+    local hold=Q.checkCombineTurns(self) or Q.checkParkedTrailerTravel(self) or cornerHold
     local gx,gz,forwards,speed,acceleration=combineDrive(self,...)
     cornerHold=Q.holdHeadlandCorner(self) or cornerHold
     if cornerHold~=self.queueCornerHold then
@@ -144,7 +145,7 @@ function C:getDriveData(...)
         end
         self.queueCornerHold=cornerHold
     end
-    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or Q.holdWorkingQueue(self) or cornerHold or hold then speed=0 end
+    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or cornerHold or hold then speed=0 end
     return gx,gz,forwards,speed,acceleration
 end
 
