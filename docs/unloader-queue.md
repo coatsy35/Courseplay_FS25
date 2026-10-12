@@ -1,3 +1,55 @@
+## Build 3031 - clear actual arrivals and make room after final unloading
+
+The 3030 log records tractor 324 returning from AD at 21:46:44 on 12 October,
+then selecting an ordinary 80.5 m preparation target at 21:46:47 without an
+arrival flag. It had not started a route by 21:55:32. The queue used the saved
+CP return marker to identify arrival occupancy, although AD handover updates
+field detection without necessarily replacing that marker. The log cannot
+separate a distant marker from failure to find a valid arrival slot.
+
+Capture the actual position once when the unloader strategy starts. Retain the
+native return marker and its access clearance separately. While the full rig
+still occupies the actual arrival area, consider nearby aligned headland or
+centre-row slots only; do not fall through to a distant assigned stage. Arrival
+sampling stays local regardless of fleet index. Check
+all destinations and swept routes with the existing crop, obstacle, boundary
+and articulation protections. Try direct alternatives first, with 50 ms of
+measured work per direct candidate and 100 ms per obstacle-search candidate.
+Arrival searches sit between yielding and ordinary preparation in priority,
+keep the shared 2 ms update allowance, and are bounded by 1,000 ms accumulated
+work and 20 seconds elapsed waiting. Failed attempts exclude their nearby
+candidate batch briefly and retry; incomplete routes never become courses.
+Native unloading calls and configured departure thresholds still pre-empt.
+
+The same run records CR11/319 finishing its final unload at 22:32:02. CR11/318
+was subsequently blocked by the parked combine at 0.3 m at 22:32:40. After its
+own final unload, an empty self-propelled combine with another active worker
+of the same course nearby now attempts a 20-25 m straight forward clearance
+before job completion. Already-empty course completion uses the same path.
+Wait for its assigned unloader to release first; preserve native reversing.
+Do not move a loaded combine's pipe, change the saved fieldwork course, or
+intervene in self-unloading, choppers, towed steering chains or course restart.
+
+Validate the full machine/header envelope on harvested ground inside the
+field, incrementally before starting and again over the live near sweep while
+moving at no more than 5 km/h. Native proximity braking remains active. A
+blocked initial route, route deviation, sustained stop or overall timeout
+returns to normal completion safely. Preserve final-unload identity throughout
+the manoeuvre, disallow new unloading approaches, and restore the native final
+wait state before stopping, retaining the earlier finished-combine release fix.
+An empty combine in this parking phase no longer counts as another load when
+the native unloader decides whether to depart; use each other vehicle's actual
+field position. Other unloading modes keep their original decision.
+
+Regression coverage includes a distant/missing return marker, whole-trailer
+arrival clearance, centre-row alternatives, foreground-search starvation,
+bounded candidate work, normal preparation resumption, final/empty completion,
+both native unload-release paths, header-only obstacles, crop and boundary
+rejection, late obstructions, timeouts and cleanup. Existing departure and
+recovery suites remain required. Tests simulate the engine boundary, not full
+FS25 driving physics; timely entrance clearance and unattended completion still
+need the user's in-game validation. Scheduled monitoring remains paused.
+
 ## Build 3030 - recover after the unloading tractor finishes reversing
 
 The 3029 log confirms CR11/318 stopped at row turn 1620 on 12 October.
@@ -1283,7 +1335,7 @@ source revision, baseline, feature stage and checksum.
 
 ### Build 3009: checked local entry onto a harvester connector
 
-The 7 October 20:26–20:28 build-3008 trace showed CR11/318 spending about
+The 7 October 20:26ï¿½20:28 build-3008 trace showed CR11/318 spending about
 76 seconds on two unsuccessful 40,000-iteration searches. The saved connector
 then started 14.7 m sideways from the combine, facing approximately the opposite
 direction. Native fallback followed that displaced connector without constructing

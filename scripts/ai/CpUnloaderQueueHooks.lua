@@ -4,6 +4,13 @@ local Q = CpUnloaderQueue
 local U = AIDriveStrategyUnloadCombine
 local C = AIDriveStrategyCombineCourse
 
+local setVehicle = U.setAIVehicle
+function U:setAIVehicle(vehicle,...)
+    local result=setVehicle(self,vehicle,...)
+    if Q.enabled(self) then Q.captureArrival(self) end
+    return result
+end
+
 -- Job completion can delete the combine strategy before its unloader updates.
 -- Retain only a successful, empty end-of-course unload, never a manual/error stop.
 if CpAIJob then
@@ -109,6 +116,12 @@ function U:getAllTrailersFull(threshold)
     return fullTrailers(self,threshold)
 end
 
+local remaining = U.areThereAnyCombinesOrLoaderLeftoverOnTheField
+function U:areThereAnyCombinesOrLoaderLeftoverOnTheField(combine,...)
+    if Q.enabled(self) then return Q.hasRemainingCombine(self,combine) end
+    return remaining(self,combine,...)
+end
+
 local find = C.findUnloader
 function C:findUnloader(combine,waypoint)
     if next(Q.members) then
@@ -116,6 +129,50 @@ function C:findUnloader(combine,waypoint)
         if handled then return vehicle,eta end
     end
     return find(self,combine,waypoint)
+end
+
+local combineUnload = C.driveUnloadOnField
+function C:driveUnloadOnField()
+    if self.queueFinishClearance then Q.driveFinishClearance(self); return end
+    if self.unloadState==self.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
+            and self.combineController:getFillLevel()<0.01 and Q.beginFinishClearance(self) then return end
+    return combineUnload(self)
+end
+
+local combineLast = C.onLastWaypointPassed
+function C:onLastWaypointPassed(...)
+    if self.queueFinishClearance then Q.driveFinishClearance(self); return end
+    if self.state==self.states.WORKING and self.course==self.fieldWorkCourse
+            and self.combineController:getFillLevel()<0.01 and Q.beginFinishClearance(self) then return end
+    return combineLast(self,...)
+end
+
+local combineEnded = C.isWaitingForUnloadAfterCourseEnded
+function C:isWaitingForUnloadAfterCourseEnded()
+    return self.queueFinishClearance~=nil or combineEnded(self)
+end
+
+local combineReady = C.isReadyToUnload
+function C:isReadyToUnload(...)
+    if self.queueFinishClearance then return false end
+    return combineReady(self,...)
+end
+
+local cutterOff = C.getCanCutterBeTurnedOff
+function C:getCanCutterBeTurnedOff()
+    return self.queueFinishClearance~=nil or cutterOff(self)
+end
+
+local combineOffset = C.updateFieldworkOffset
+function C:updateFieldworkOffset(course)
+    if self.queueFinishClearance and self.queueFinishClearance.driving then course:setOffset(0,0); return end
+    return combineOffset(self,course)
+end
+
+local combineDelete = C.delete
+function C:delete(...)
+    Q.clearFinishClearance(self)
+    return combineDelete(self,...)
 end
 
 -- Native turn recovery handles trees and other objects, but its vehicle-block

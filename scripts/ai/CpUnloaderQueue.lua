@@ -55,6 +55,19 @@ end
 
 local function goalKey(p) return math.floor(p.x/4)..':'..math.floor(p.z/4) end
 
+-- Capture each job's physical arrival once. The configured native return
+-- marker may belong to an earlier AD destination and must remain unchanged.
+function Q.captureArrival(driver)
+    local origin=W.pose(driver.vehicle:getAIDirectionNode())
+    Q.data(driver).arrivalOrigin=origin
+    driver:debug('Queue: captured arrival position %.1f, %.1f',origin.x,origin.z)
+end
+
+local function arrivalOrigin(driver)
+    return driver.queueData and driver.queueData.arrivalOrigin
+        or (driver.invertedStartPositionMarkerNode and W.pose(driver.invertedStartPositionMarkerNode))
+end
+
 function Q.targetAvailable(driver,p)
     local data=driver.queueData
     if data and data.failedGoals and (data.failedGoals[goalKey(p)] or 0)>now() then return false end
@@ -71,6 +84,9 @@ function Q.failed(data,reason,phase)
         data.failedGoals=data.failedGoals or {}
         for key,expiry in pairs(data.failedGoals) do if expiry<=now() then data.failedGoals[key]=nil end end
         data.failedGoals[goalKey(data.goal)]=now()+15000
+        if data.goal.arrival then
+            for _,goal in ipairs(data.goal.choices or {}) do data.failedGoals[goalKey(goal)]=now()+15000 end
+        end
     end
     Q.reason(data,reason)
     data.nextAttempt=now()+3000
@@ -266,7 +282,7 @@ function Q.refresh()
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         if AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
             local driver=vehicle:getCpDriveStrategy()
-            if driver.combineController then
+            if driver.combineController and not driver.queueFinishClearance then
                 local continuous=driver:alwaysNeedsUnloader()
                 local total=continuous and 0 or driver.combineController:getCapacity()
                 if continuous or total>0 then
@@ -363,20 +379,23 @@ end
 
 function Q.stagingClear(driver,poses,model)
     Q.pruneTurnReservations()
+    local origin=arrivalOrigin(driver)
     local marker=driver.invertedStartPositionMarkerNode
-    local origin=marker and W.pose(marker)
+    local returnOrigin=marker and W.pose(marker)
     for i,body in ipairs(model.bodies) do
         local rectangle=W.rectangle(body,poses[i],1)
-        if origin then
-            -- Closest point on the complete oriented body, including edges
-            -- and containment; checking corners alone misses circle crossings.
-            local pose=poses[i]
-            local dx,dz=origin.x-pose.x,origin.z-pose.z
-            local x=dx*math.cos(pose.t)-dz*math.sin(pose.t)
-            local z=dx*math.sin(pose.t)+dz*math.cos(pose.t)
-            local nearestX=math.max(body.right-1,math.min(body.left+1,x))
-            local nearestZ=math.max(body.back-1,math.min(body.front+1,z))
-            if math.sqrt((x-nearestX)^2+(z-nearestZ)^2)<2*driver.turningRadius+4 then return false end
+        for _,origin in ipairs({origin or false,returnOrigin or false}) do
+            if origin then
+                -- Closest point on the complete oriented body, including edges
+                -- and containment; checking corners alone misses circle crossings.
+                local pose=poses[i]
+                local dx,dz=origin.x-pose.x,origin.z-pose.z
+                local x=dx*math.cos(pose.t)-dz*math.sin(pose.t)
+                local z=dx*math.sin(pose.t)+dz*math.cos(pose.t)
+                local nearestX=math.max(body.right-1,math.min(body.left+1,x))
+                local nearestZ=math.max(body.back-1,math.min(body.front+1,z))
+                if math.sqrt((x-nearestX)^2+(z-nearestZ)^2)<2*driver.turningRadius+4 then return false end
+            end
         end
         for _,reservation in pairs(Q.turnTraffic or {}) do
             if reservation.area(rectangle) then return false end
@@ -424,8 +443,7 @@ function Q.target(driver)
     -- Clear the arrival lane before investing in a distant assigned stage.
     -- A native unloading call may still take ownership immediately.
     if not Q.arrivalClear(driver) then
-        local arrival=Q.poolTarget(driver,true)
-        if arrival then return arrival end
+        return Q.poolTarget(driver,true)
     end
     local assignment=data.assignment
     if not assignment or assignment.future then return end
@@ -472,11 +490,10 @@ function Q.target(driver)
 end
 
 function Q.arrivalClear(driver)
-    local marker=driver.invertedStartPositionMarkerNode
-    if not marker then return true end
+    local origin=arrivalOrigin(driver)
+    if not origin then return true end
     local bodies=W.currentBodies(driver.vehicle)
     if not bodies then return false end
-    local origin=W.pose(marker)
     for _,item in ipairs(bodies) do
         local body,pose=item.body,item.pose
         local dx,dz=origin.x-pose.x,origin.z-pose.z
@@ -492,13 +509,12 @@ end
 function Q.poolTarget(driver,arrival)
     local data=Q.data(driver)
     local parked=data.parkedGoal
-    if parked and Q.targetAvailable(driver,parked) and Q.arrived(driver,parked) then return parked end
+    if not arrival and parked and Q.targetAvailable(driver,parked) and Q.arrived(driver,parked) then return parked end
     -- Stable slots along harvested headland courses, outside the AD start's
     -- turning space. Search and density checks decide whether a slot is usable.
     local index=1
     for other in pairs(Q.members) do if id(other.vehicle)<id(driver.vehicle) then index=index+1 end end
-    local marker=driver.invertedStartPositionMarkerNode
-    local origin=marker and W.pose(marker) or W.pose(driver.vehicle:getAIDirectionNode())
+    local origin=arrivalOrigin(driver) or W.pose(driver.vehicle:getAIDirectionNode())
     local best,score
     local candidates={}
     local visited={}
@@ -508,16 +524,19 @@ function Q.poolTarget(driver,arrival)
             local spacing=math.max(22,AIUtil.getLength(driver.vehicle)+8)
             local accumulated=0
             for i=2,course:getNumberOfWaypoints() do
-                if course:isOnHeadland(i) and course:isOnHeadland(i-1) then
+                if arrival or (course:isOnHeadland(i) and course:isOnHeadland(i-1)) then
                     local p=point(course,i)
                     accumulated=accumulated+distance(p,point(course,i-1))
-                    if accumulated>=index*spacing then
+                    -- Arrival coverage must not get coarser for later fleet
+                    -- members: an index-sized gap can skip the whole local area.
+                    if accumulated>=(arrival and 10 or index*spacing) then
                         accumulated=0
                         local d=distance(p,origin)
                         local key=string.format('%.1f:%.1f:%.2f',p.x,p.z,p.t)
                         local competitive=arrival and (#candidates<6 or d<candidates[#candidates].distance)
                             or (not arrival and (not score or d<score))
-                        if d>2*driver.turningRadius+spacing and competitive and not visited[key] then
+                        local nearby=not arrival or d<=math.max(100,2*driver.turningRadius+2*spacing)
+                        if nearby and d>2*driver.turningRadius+spacing and competitive and not visited[key] then
                             visited[key]=true
                             local candidate=Q.stagingCandidate(driver,course,i)
                             if candidate then
@@ -555,6 +574,7 @@ function Q.request(driver,goal,corridor)
         if data.search then
             data.search.firstValid=goal.firstValid
             data.search.escape=goal.escape
+            data.search.arrival=goal.arrival
         end
     else data.search,reason,phase=S.new(world,goal,corridor) end
     data.searchGeneration=data.generation
@@ -598,16 +618,19 @@ function Q.schedule()
         if d and d.pathfinderController and d.pathfinderController.pathfinder then return end
     end
     local selected
-    local priority={yield=0,prepare=1}
+    local function priority(data)
+        return data.operation=='yield' and 0 or (data.goal and data.goal.arrival and 1 or 2)
+    end
     for _, data in pairs(Q.members) do
         if data.search and Q.owns(data.driver) and data.searchGeneration==data.generation
-                and (not selected or priority[data.operation]<priority[selected.operation]
-                    or (priority[data.operation]==priority[selected.operation]
+                and (not selected or priority(data)<priority(selected)
+                    or (priority(data)==priority(selected)
                         and (data.lastAdvance or 0)<(selected.lastAdvance or 0))) then selected=data end
     end
     if not selected then return end
+    local arrival=selected.goal and selected.goal.arrival
     selected.lastAdvance=now()
-    local workPhase=selected.operation=='yield' and S.choicePhase(selected.search)
+    local workPhase=S.choicePhase(selected.search)
     local timer=openIntervalTimer()
     local done,path,reason
     repeat done,path,reason=S.step(selected.search,1) until done or readIntervalTimerMs(timer)>=2
@@ -620,9 +643,9 @@ function Q.schedule()
         selected.search=nil
         if path then Q.startRoute(selected,path)
         else Q.failed(selected,reason or 'no safe route') end
-    elseif selected.searchWorkMs>(selected.operation=='prepare' and 15000 or 1000) then
+    elseif selected.searchWorkMs>(selected.operation=='prepare' and not arrival and 15000 or 1000) then
         selected.search=nil; Q.failed(selected,'search budget exhausted; retaining CP control')
-    elseif selected.operation=='yield' then
+    elseif selected.operation=='yield' or arrival then
         local phaseReason=S.chargeChoices(selected.search,elapsed,workPhase)
         if phaseReason then Q.reason(selected,phaseReason) end
     end
@@ -675,6 +698,12 @@ function Q.tick(driver)
         -- From here CP owns obstacle clearance and return-marker travel.
         if driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
             Q.release(driver); driver:startUnloadingTrailers(); return
+        end
+        -- A background search can be starved by native searches. Bound elapsed
+        -- arrival waiting as well as measured work; never start a partial path.
+        if data.search and data.goal and data.goal.arrival and now()-data.searchStarted>=20000 then
+            Q.failed(data,'arrival search timed out; trying other nearby waiting positions')
+            Q.cancel(driver)
         end
         if data.operation=='yield' and data.path then
             Q.yieldTarget(driver,true)

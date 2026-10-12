@@ -5,24 +5,149 @@ local G = CpUnloaderQueueGeometry
 local H = HeadlandLoopGeometry
 local function distance(a,b) return math.sqrt((a.x-b.x)^2+(a.z-b.z)^2) end
 
+-- Final parking clearance is deliberately straight and short, and only for a
+-- self-propelled harvester with another worker finishing the same course.
+-- It runs after the final unload, while native CP still owns the machine.
+function Q.beginFinishClearance(combine)
+    if combine.queueFinishAttempted or combine.queueFinishClearance then return false end
+    combine.queueFinishAttempted=true
+    if not combine.vehicle.spec_combine or combine:isAttachedHarvester() or combine:isChopper()
+            or combine.settings.selfUnload:getValue() or combine.combineController:getFillLevel()>=0.01
+            or combine.settings.restartCourseAtEnd:getValue() then return false end
+    local _,steeringLength=AIUtil.getSteeringParameters(combine.vehicle)
+    if steeringLength~=0 then return false end
+    local origin=W.pose(combine.vehicle:getAIDirectionNode())
+    local neighbour=false
+    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if vehicle~=combine.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle)
+                and combine.fieldWorkerProximityController:hasSameCourse(vehicle)
+                and distance(origin,W.pose(vehicle:getAIDirectionNode()))<100 then neighbour=true; break end
+    end
+    if not neighbour then return false end
+    local bodies=W.currentBodies(combine.vehicle)
+    if not bodies then return false end
+    -- Conservatively include the complete attached header in one rigid box.
+    local body={left=-math.huge,right=math.huge,front=-math.huge,back=math.huge}
+    for _,item in ipairs(bodies) do
+        for _,p in ipairs(W.rectangle(item.body,item.pose,0)) do
+            local dx,dz=p.x-origin.x,p.z-origin.z
+            local x,z=dx*math.cos(origin.t)-dz*math.sin(origin.t),dx*math.sin(origin.t)+dz*math.cos(origin.t)
+            body.left=math.max(body.left,x); body.right=math.min(body.right,x)
+            body.front=math.max(body.front,z); body.back=math.min(body.back,z)
+        end
+    end
+    local world,reason=W.new(combine,{root=origin,bodies={body},links={},width=body.left-body.right})
+    if not world then combine:debug('Queue: final clearance unavailable: %s',reason); return false end
+    local length=math.min(25,math.max(20,body.front-body.back+8))
+    local x,z=H.math.position(origin,0,length)
+    combine.queueFinishClearance={world=world,origin=origin,goal={x=x,z=z,t=origin.t},length=length,
+        sample=0,started=g_currentMission.time,progressTime=g_currentMission.time,progress=origin}
+    combine.aiOffsetX=0; combine.aiOffsetZ=0; combine.tightTurnOffset=0
+    combine.state=combine.states.UNLOADING_ON_FIELD
+    combine.unloadState={name='CLEARING_FINAL_UNLOAD',properties={}}
+    combine:raiseImplements()
+    combine:setMaxSpeed(0)
+    combine:debug('Queue: checking %.1f m forward clearance before final parking',length)
+    return true
+end
+
+function Q.clearFinishClearance(combine)
+    local data=combine.queueFinishClearance
+    if data then W.delete(data.world); combine.queueFinishClearance=nil end
+end
+
+function Q.completeFinishClearance(combine,reason)
+    if not combine.queueFinishClearance then return end
+    combine:debug('Queue: final parking clearance %s',reason)
+    Q.clearFinishClearance(combine)
+    -- Preserve the end identity used by native unloader release and job stop.
+    combine.state=combine.states.UNLOADING_ON_FIELD
+    combine.unloadState=combine.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
+    combine:setMaxSpeed(0)
+    AIDriveStrategyFieldWorkCourse.finishFieldWork(combine)
+end
+
+function Q.driveFinishClearance(combine)
+    local data=combine.queueFinishClearance
+    if not data then return end
+    local time=g_currentMission.time
+    if time-data.started>60000 then Q.completeFinishClearance(combine,'timed out safely'); return end
+    local here=W.pose(combine.vehicle:getAIDirectionNode())
+    if data.driving then
+        if distance(here,data.goal)<=1 then Q.completeFinishClearance(combine,'completed'); return end
+        if distance(here,data.progress)>0.5 then data.progress=here; data.progressTime=time end
+        if time-data.progressTime>10000 then Q.completeFinishClearance(combine,'stopped by an obstruction'); return end
+        local dx,dz=here.x-data.origin.x,here.z-data.origin.z
+        local sideways=dx*math.cos(data.origin.t)-dz*math.sin(data.origin.t)
+        if math.abs(sideways)>1 or math.abs(H.math.delta(here.t,data.origin.t))>math.rad(10) then
+            Q.completeFinishClearance(combine,'aborted after route deviation'); return
+        end
+        -- Recheck the live near sweep as well as native proximity braking.
+        -- At 5 km/h this four-metre horizon includes stopping space.
+        if not data.nextCheck or time>=data.nextCheck then
+            data.nextCheck=time+200; data.clear=true
+            for step=0,8 do
+                local x,z=H.math.position(here,0,math.min(step*0.5,distance(here,data.goal)))
+                local clear=W.clear(data.world,{{x=x,z=z,t=here.t}})
+                if not clear then data.clear=false; break end
+            end
+        end
+        combine:setMaxSpeed(data.clear and 5 or 0)
+        return
+    end
+    combine:setMaxSpeed(0)
+    if data.retryAt and time<data.retryAt then return end
+    -- Let the native unloader release and reverse first. Do not take its
+    -- steering or move the pipe whilst it is still unloading alongside us.
+    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        local driver=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+        if driver and driver.combineToUnload==combine.vehicle then return end
+    end
+    local timer=openIntervalTimer()
+    local reason
+    for checked=1,8 do
+        local x,z=H.math.position(data.origin,0,data.sample*0.5)
+        local clear
+        clear,reason=W.clear(data.world,{{x=x,z=z,t=data.origin.t}})
+        if not clear then break end
+        data.sample=data.sample+1
+        if data.sample*0.5>data.length or readIntervalTimerMs(timer)>=2 then break end
+    end
+    closeIntervalTimer(timer)
+    if reason then
+        if reason=='vehicle or obstacle' and time-data.started<15000 then
+            data.sample=0; data.retryAt=time+1000
+        else Q.completeFinishClearance(combine,'unavailable: '..reason) end
+    elseif data.sample*0.5>data.length then
+        local course=Course.createFromNode(combine.vehicle,combine.vehicle:getAIDirectionNode(),0,0,data.length,1,false)
+        data.driving=true; data.progressTime=time
+        combine.ppc:setShortLookaheadDistance()
+        combine:startCourse(course,1)
+        combine:debug('Queue: moving forward %.1f m before final parking',data.length)
+    end
+end
+
 -- Complete the native stopped-unloading transition even when the combine's
 -- successful job stop has already removed its strategy. Keep the vehicle for
 -- native marker-based reverse clearance; releaseCombine cannot retain it once
 -- CP is inactive. Departure and AutoDrive handover remain entirely native.
+function Q.hasRemainingCombine(driver,finished)
+    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if vehicle~=finished and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+            local combine=vehicle:getCpDriveStrategy()
+            local x,_,z=getWorldTranslation(vehicle.rootNode)
+            if not combine.queueFinishClearance and driver:isServingPosition(x,z,10) then return true end
+        end
+    end
+    return false
+end
+
 function Q.releaseFinishedCombine(driver)
     local combine=driver.combineToUnload
     if not Q.enabled(driver) or driver.state~=driver.states.UNLOADING_STOPPED_COMBINE
             or not combine or not combine.queueFinishedEmptyCombine or combine:getIsCpActive() then return false end
     local leave=Q.atDepartureThreshold(driver) or driver:isDriveUnloadNowRequested()
-    if not leave then
-        leave=true
-        for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
-            if vehicle~=combine and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
-                local x,_,z=getWorldTranslation(vehicle.rootNode)
-                if driver:isServingPosition(x,z,10) then leave=false; break end
-            end
-        end
-    end
+    if not leave then leave=not Q.hasRemainingCombine(driver,combine) end
     Q.cancel(driver)
     local data=driver.queueData
     if data then

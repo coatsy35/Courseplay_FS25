@@ -104,8 +104,9 @@ function W.rectangle(body, pose, buffer)
         xOffset=(body.left+body.right)/2, zOffset=(body.front+body.back)/2}, buffer or 0.3)
 end
 
-function W.new(strategy)
-    local model, reason = W.model(strategy.vehicle)
+function W.new(strategy,model)
+    local reason
+    if not model then model,reason=W.model(strategy.vehicle) end
     if not model then return nil, reason end
     local boundary = FieldworkBoundary.forVehicle(strategy.vehicle, 0)
     if not boundary then return nil, 'field boundary unavailable' end

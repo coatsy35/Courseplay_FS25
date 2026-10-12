@@ -261,7 +261,13 @@ end
 -- every retry, leaving the alternative searches unreachable. Abandon only
 -- unfinished candidates; never accept an unchecked or partially checked path.
 function S.choicePhase(search)
-    if not search.choices or not search.escape then return end
+    if not search.choices then return end
+    if search.arrival then
+        if search.index<=#search.choices then return 'direct '..search.index end
+        if search.fallback then return 'arrival '..(search.fallbackIndex-1) end
+        return
+    end
+    if not search.escape then return end
     if search.index<=#search.choices then return search.index end
     if not search.escapeForward then return 'reverse escape' end
 end
@@ -271,11 +277,16 @@ function S.chargeChoices(search,elapsed,startedPhase)
     -- A completed candidate may have advanced the search during this frame.
     -- Never charge its expensive last check to an untried next candidate.
     if not phase or phase~=startedPhase then return end
-    local limit=type(phase)=='number' and 300/math.max(1,#search.choices) or 200
+    local limit=search.arrival and (search.active and 50 or 100)
+        or (type(phase)=='number' and 300/math.max(1,#search.choices) or 200)
     if search.workPhase~=phase then search.workPhase=phase; search.phaseWorkMs=0 end
     search.phaseWorkMs=search.phaseWorkMs+elapsed
     if search.phaseWorkMs<limit then return end
-    if type(phase)=='number' then
+    if search.arrival then
+        if search.active then search.active=nil; search.index=search.index+1
+        else search.fallback=nil end
+        search.reason='arrival candidate budget exhausted; trying next nearby position'
+    elseif type(phase)=='number' then
         search.active=nil; search.index=search.index+1
         search.reason='fixed clearance candidate budget exhausted'
     else
