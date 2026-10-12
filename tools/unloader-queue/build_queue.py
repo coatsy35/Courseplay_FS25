@@ -94,11 +94,12 @@ def check_queue(packager):
         if path == 'modDesc.xml' and {e.attrib['filename'] for e in removed} != MODULES:
             raise RuntimeError('Queue module load inventory incomplete')
     hooks = (release.ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
-    methods = set(re.findall(r'function ([UC]):([A-Za-z]+)\(', hooks))
+    methods = set(re.findall(r'function ([UCJ]):([A-Za-z]+)\(', hooks))
     expected = {('U', name) for name in ('update', 'getDriveData', 'isAllowedToBeCalled', 'call',
         'startUnloadingTrailers', 'onLastWaypointPassed', 'startPathfindingToWaitingCombine',
         'onPathfindingFailedToStationaryTarget', 'onPathfindingDoneToWaitingCombine',
         'onBlockingVehicle', 'delete', 'requestToBackupForReversingCombine', 'getAllTrailersFull')} | {('C', 'findUnloader'), ('C', 'onBlockingVehicle'), ('C', 'getDriveData')}
+    expected |= {('J', 'start'), ('J', 'stop')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
     print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)
@@ -114,6 +115,7 @@ if __name__ == '__main__':
                                 'unloader-queue/test_harvester_turns.py',
                                 'unloader-queue/test_native_connectors.py',
                                 'unloader-queue/test_native_departure.py', 'unloader-queue/test_yield.py',
+                                'unloader-queue/test_finished_combine.py',
                                 'unloader-queue/test_departure_threshold.py',
                                 'unloader-queue/test_harvester_bypass.py',
                                 'unloader-queue/test_combined_recovery.py',

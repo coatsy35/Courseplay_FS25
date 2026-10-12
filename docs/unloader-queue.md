@@ -1,3 +1,27 @@
+## Build 3027 - release unloaders after finished combines
+
+The 3025 incident log records CR11/319 completing its final unload, stopping
+its job and folding at 08:55:17 on 12 October. T7.300/324 then remained in
+UNLOADING_STOPPED_COMBINE, repeatedly waiting for the removed combine strategy.
+
+Retain successful completion only for an empty combine waiting for its final
+unload. Clear that marker on job restart; manual stops, errors and non-empty
+combines do not qualify. An assigned stopped-unloader now releases the finished
+combine and uses native reverse clearance with the retained vehicle markers,
+without calling the deleted combine strategy. After clearance it waits for
+another active combine on the served field, or takes the native departure and
+AD handover when none remains. The configured departure threshold and manual
+unload request still take precedence. Check each remaining combine's actual
+position, not the position of the completed combine.
+
+Regression coverage executes the native job-stop, reverse-clearance, idle and
+marker-departure lifecycle. It checks collision holds, below-threshold final
+loads, other-field combines, adjustable cutoffs, manual/error stops, restart,
+stale preparation cancellation and repeated updates. Build 3026's traffic and
+AD-arrival corrections are included. Automated checks do not establish an
+unattended in-game finish; replaying the course remains necessary. The scheduled
+monitor remains paused.
+
 ## Build 3026 - field arrival and blocked working headers
 
 The 3025 log confirms CR11/318 requested clearance from T7.300/323 at

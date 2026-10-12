@@ -4,8 +4,37 @@ local Q = CpUnloaderQueue
 local U = AIDriveStrategyUnloadCombine
 local C = AIDriveStrategyCombineCourse
 
+-- Job completion can delete the combine strategy before its unloader updates.
+-- Retain only a successful, empty end-of-course unload, never a manual/error stop.
+if CpAIJob then
+    local J = CpAIJob
+    local start = J.start
+    function J:start(...)
+        local vehicle=self.vehicleParameter:getVehicle()
+        if self.isServer and vehicle then vehicle.queueFinishedEmptyCombine=nil end
+        return start(self,...)
+    end
+    local stop = J.stop
+    function J:stop(message,...)
+        local vehicle=self.vehicleParameter:getVehicle()
+        if self.isServer and vehicle then
+            local driver=vehicle:getCpDriveStrategy()
+            local event
+            if message then
+                local _,_,completionEvent=g_infoTextManager:getInfoTextDataByAIMessage(message)
+                event=completionEvent
+            end
+            vehicle.queueFinishedEmptyCombine=event=='onCpFinished' and driver
+                and driver.isWaitingForUnloadAfterCourseEnded and driver:isWaitingForUnloadAfterCourseEnded()
+                and driver:getFillLevelPercentage()<0.1 or nil
+        end
+        return stop(self,message,...)
+    end
+end
+
 local update = U.update
 function U:update(dt)
+    Q.releaseFinishedCombine(self)
     Q.resumeWaitingApproach(self)
     Q.tick(self)
     -- A no-marker/full event can synchronously stop CP and delete this driver.
@@ -15,6 +44,7 @@ end
 
 local drive = U.getDriveData
 function U:getDriveData(...)
+    Q.releaseFinishedCombine(self)
     Q.speed(self)
     local hold=Q.holdIncomingTurn(self)
     local gx,gz,forwards,speed,acceleration=drive(self,...)

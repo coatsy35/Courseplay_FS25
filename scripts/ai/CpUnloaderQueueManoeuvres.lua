@@ -5,6 +5,38 @@ local G = CpUnloaderQueueGeometry
 local H = HeadlandLoopGeometry
 local function distance(a,b) return math.sqrt((a.x-b.x)^2+(a.z-b.z)^2) end
 
+-- Complete the native stopped-unloading transition even when the combine's
+-- successful job stop has already removed its strategy. Keep the vehicle for
+-- native marker-based reverse clearance; releaseCombine cannot retain it once
+-- CP is inactive. Departure and AutoDrive handover remain entirely native.
+function Q.releaseFinishedCombine(driver)
+    local combine=driver.combineToUnload
+    if not Q.enabled(driver) or driver.state~=driver.states.UNLOADING_STOPPED_COMBINE
+            or not combine or not combine.queueFinishedEmptyCombine or combine:getIsCpActive() then return false end
+    local leave=Q.atDepartureThreshold(driver) or driver:isDriveUnloadNowRequested()
+    if not leave then
+        leave=true
+        for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+            if vehicle~=combine and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+                local x,_,z=getWorldTranslation(vehicle.rootNode)
+                if driver:isServingPosition(x,z,10) then leave=false; break end
+            end
+        end
+    end
+    Q.cancel(driver)
+    local data=driver.queueData
+    if data then
+        data.assignment=nil; data.waitingApproach=nil; data.approachRetryAt=nil
+        data.operation=nil; data.yieldRequests=nil; data.priorityCombine=nil
+    end
+    driver.ppc:setNormalLookaheadDistance()
+    driver:releaseCombine()
+    driver:debug('Queue: finished combine released; reversing clear before %s',leave and 'native departure' or 'waiting for another combine')
+    driver:startMovingBackFromCombine(leave and driver.states.MOVING_BACK_WITH_TRAILER_FULL
+        or driver.states.MOVING_BACK,combine,false)
+    return true
+end
+
 -- Give the combine two extra seconds to clear its pocket before a full
 -- unloader starts turning forwards onto its native departure route.
 function Q.holdPocketDeparture(driver,forwards,speed)
