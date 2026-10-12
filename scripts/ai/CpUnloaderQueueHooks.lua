@@ -48,7 +48,6 @@ function U:getDriveData(...)
     Q.speed(self)
     local hold=Q.holdIncomingTurn(self)
     local gx,gz,forwards,speed,acceleration=drive(self,...)
-    if Q.owns(self) then self.queueData.nativeHold=speed==0 end
     if Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
     if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
     return gx,gz,forwards,speed,acceleration
@@ -132,7 +131,6 @@ end
 
 local combineDrive = C.getDriveData
 function C:getDriveData(...)
-    Q.requestWorkingClearance(self)
     local cornerHold=Q.holdHeadlandCorner(self)
     local hold=Q.checkCombineTurns(self) or Q.checkParkedTrailerTravel(self) or cornerHold
     local gx,gz,forwards,speed,acceleration=combineDrive(self,...)

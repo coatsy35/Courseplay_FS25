@@ -1,3 +1,37 @@
+## Build 3029 - complete the early-clearance rollback
+
+The 3028 run loaded at 16:52 on 12 October. Tractor 322 entered queue yield
+at 16:55:58 while CR11/318 was still working, completed a six-metre reverse
+at 16:56:03, then repeatedly failed to find another clearance route. Native
+proximity stopped 318 behind it at 16:57:03; the same yield target remained
+through 18:56. Removing only the combine speed override in 3028 left the
+early ownership intervention intact.
+
+Remove the working-header scan and its proactive yield request completely.
+Restore native blocking callbacks as the trigger for working-combine clearance;
+do not take an otherwise callable preparing tractor into yield merely because
+it overlaps a future header sweep. Native proximity braking, checked yield
+routes, turn reservations and parked-trailer recovery remain active.
+
+Separately, ordinary native speed-zero returns must not refresh a queue route's
+progress clock indefinitely. After ten seconds without positional progress,
+cancel the stalled queue route and use the existing checked retry/backoff.
+Explicit waits for reserved combine turns still pause that clock. This applies
+only to queue-owned preparation/yield, never to native unloading/departure.
+
+Regression coverage fails on 3028 for proactive ownership and repeated stopped
+route recovery, then passes with this correction. Tests also retain native
+blocking requests, call availability, search continuity, actual motion,
+transient stops, turn waits and collision braking. Keep staged AD-arrival
+preparation, finished-empty-combine release, pocket departure pause, configured
+cutoffs/native AD handover, accepted bypass retention and bounded checked escape.
+
+The same log separately records tractor 325 stopping at waypoint 97 on an
+accepted native approach from 18:24:50. Its obstacle is not identified; this
+release does not claim that distinct native-route stall is resolved. Neither
+the log nor engine fixtures establish unattended in-game completion. The full
+source and packaged release checks are required. Monitoring remains paused.
+
 ## Build 3028 - remove the working-combine queue hold
 
 The 3027 incident showed CR11/319 stalled at waypoint 716 for over 23 minutes

@@ -90,25 +90,6 @@ local function intersects(area,vehicle)
     return false
 end
 
--- Request clearance early, without overriding native braking. A future sweep
--- is a preparation request, not proof of a current collision. Holding here
--- while a trailer cannot find a route also prevents native blocked recovery.
-function Q.requestWorkingClearance(combine)
-    if not combine.states or combine.state~=combine.states.WORKING then return end
-    local time=g_currentMission.time
-    if combine.queueWorkingTrafficChecked and time-combine.queueWorkingTrafficChecked<200 then return end
-    combine.queueWorkingTrafficChecked=time
-    local area
-    for driver,data in pairs(Q.members) do
-        if Q.owns(driver) and (data.operation=='prepare' or data.operation=='yield')
-                and not data.nativeDeparture and not driver.combineToUnload
-                and driver.vehicle:getIsCpActive() then
-            area=area or Q.yieldArea(combine.vehicle)
-            if area and intersects(area,driver.vehicle) then Q.priority(driver,combine.vehicle) end
-        end
-    end
-end
-
 -- A centre-entry U-turn/reverse can bring the lead back towards its own
 -- historical trail. During that transition, do not use trail distance to
 -- decide whether a follower may enter a nearby headland corner. Keep the

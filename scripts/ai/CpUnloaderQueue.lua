@@ -684,7 +684,9 @@ function Q.tick(driver)
             local position=W.pose(driver.vehicle:getAIDirectionNode())
             if not data.progressPosition or distance(position,data.progressPosition)>1 then
                 data.progressPosition=position; data.progressTime=now()
-            elseif data.turnHold or data.nativeHold then
+            elseif data.turnHold then
+                -- An explicit turn reservation is a deliberate wait. Ordinary
+                -- proximity stops must still reach the stalled-route retry.
                 data.progressTime=now()
             elseif now()-data.progressTime>10000 then
                 Q.failed(data,'route made no progress; trying another waiting position')

@@ -16,7 +16,20 @@ class ClearanceTests(unittest.TestCase):
     def setUp(self):
         yielding.YieldTests.setUp(self)
 
-    def test_working_header_requests_clearance_before_proximity_and_keeps_course(self):
+    def working_drive_wrapper(self):
+        self.lua.execute('''
+            Q.checkCombineTurns=function() return false end
+            Q.checkParkedTrailerTravel=function() return false end
+            Q.holdHeadlandCorner=function() return false end
+            nativeSpeed=10
+            AIDriveStrategyCombineCourse.getDriveData=function() return 12,34,true,nativeSpeed,0.8 end
+        ''')
+        hooks=(ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
+        wrapper=hooks[hooks.index('local combineDrive ='):hooks.index('-- Preparation ends here.')]
+        self.lua.execute('local Q=CpUnloaderQueue; local C=AIDriveStrategyCombineCourse; '+wrapper)
+
+    def test_working_header_does_not_interrupt_preparation_before_native_request(self):
+        self.working_drive_wrapper()
         self.lua.execute('''
             harvester,c,header=makeHarvester(0,0,0)
             c.states={WORKING={}}; c.state=c.states.WORKING
@@ -24,45 +37,44 @@ class ClearanceTests(unittest.TestCase):
             local course=c.course
             place(0,30,math.pi); c.near=false
             Q.take(u,'prepare')
-            Q.requestWorkingClearance(c)
-            assert(u.queueData.operation=='yield' and c.course==course)
-            local generation=u.queueData.generation
-            g_currentMission.time=201
-            Q.requestWorkingClearance(c); assert(u.queueData.generation==generation)
-            place(0,46,0); g_currentMission.time=402
-            Q.requestWorkingClearance(c); assert(u.queueData.yieldRequests[harvester],'trailing body still in header sweep')
-            place(30,46,0); g_currentMission.time=603
-            Q.requestWorkingClearance(c); assert(c.course==course)
+            local data=u.queueData
+            local search={}; data.search=search
+            local generation=data.generation
+            for i=1,100 do
+                g_currentMission.time=i*5000
+                local x,z,forward,speed,acceleration=c:getDriveData()
+                assert(x==12 and z==34 and forward and speed==10 and acceleration==0.8)
+                assert(data.operation=='prepare' and c.course==course)
+                assert(data.search==search and data.generation==generation)
+                assert(u:isAllowedToBeCalled(),'early clearance removed native availability')
+            end
+            -- Actual native blockage still requests checked whole-train clearance.
+            c.near=true; nativeRequest()
+            assert(data.operation=='yield' and not data.search and c.course==course)
+            assert(not u:isAllowedToBeCalled())
         ''')
 
     def test_native_unloading_and_departure_are_not_seized(self):
+        self.working_drive_wrapper()
         self.lua.execute('''
             c.states={WORKING={}}; c.state=c.states.WORKING
             c.course=Course(harvester,{{x=0,z=12},{x=0,z=-40}},true)
             Q.take(u,'prepare'); u.combineToUnload=harvester
-            Q.requestWorkingClearance(c); assert(u.combineToUnload==harvester and u.queueData.operation=='prepare')
+            c:getDriveData(); assert(u.combineToUnload==harvester and u.queueData.operation=='prepare')
             u.combineToUnload=nil; u.queueData.nativeDeparture=true
             g_currentMission.time=201
-            Q.requestWorkingClearance(c); assert(u.queueData.operation=='prepare')
+            c:getDriveData(); assert(u.queueData.operation=='prepare')
         ''')
 
     def test_failed_yield_does_not_override_native_combine_speed_or_proximity_stop(self):
+        self.working_drive_wrapper()
         self.lua.execute('''
             harvester,c,header=makeHarvester(0,0,0)
             c.states={WORKING={}}; c.state=c.states.WORKING
             c.course=Course(harvester,{{x=0,z=0},{x=0,z=60}},true)
-            place(0,30,math.pi); c.near=false
-            Q.take(u,'prepare')
-            Q.checkCombineTurns=function() return false end
-            Q.checkParkedTrailerTravel=function() return false end
-            Q.holdHeadlandCorner=function() return false end
-            nativeSpeed=10
-            AIDriveStrategyCombineCourse.getDriveData=function() return 12,34,true,nativeSpeed,0.8 end
+            place(0,30,math.pi); c.near=true
+            Q.take(u,'prepare'); nativeRequest()
         ''')
-        # Run the production integration wrapper around the engine speed decision.
-        hooks=(ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
-        wrapper=hooks[hooks.index('local combineDrive ='):hooks.index('-- Preparation ends here.')]
-        self.lua.execute('local Q=CpUnloaderQueue; local C=AIDriveStrategyCombineCourse; '+wrapper)
         self.lua.execute('''
             for i=1,100 do
                 g_currentMission.time=i*5000
@@ -75,6 +87,48 @@ class ClearanceTests(unittest.TestCase):
             local _,_,_,speed=c:getDriveData(); assert(speed==0)
             nativeSpeed=10; Q.checkCombineTurns=function() return true end
             _,_,_,speed=c:getDriveData(); assert(speed==0,'existing turn protection removed')
+        ''')
+
+    def test_stalled_queue_routes_retry_despite_repeated_native_stops(self):
+        for operation in ('prepare', 'yield'):
+            with self.subTest(operation=operation):
+                self.setUp()
+                self.lua.globals().operation=operation
+                self.lua.execute('''
+                    Q.schedule=function() end
+                    Q.yieldTarget=function() end
+                    local data=Q.take(u,operation)
+                    local goal={x=0,z=30,t=0}
+                    data.path={{x=0,z=0,t=0},goal}; data.goal=goal
+                    data.progressPosition=W.pose(v:getAIDirectionNode()); data.progressTime=0
+                    local generation=data.generation
+                    for i=1,10 do
+                        g_currentMission.time=i*1000
+                        data.nativeHold=true -- native speed remains zero behind an obstacle
+                        Q.tick(u)
+                        assert(data.path,'transient stop cancelled the route too early')
+                    end
+                    g_currentMission.time=11000; Q.tick(u)
+                    assert(not data.path and not data.goal and data.generation>generation)
+                    assert(data.reason=='route made no progress; trying another waiting position')
+                    assert(data.nextAttempt==14000 and not Q.targetAvailable(u,goal))
+                    assert(Q.owns(u) and data.operation==operation,'retry stole native ownership')
+                ''')
+
+    def test_progress_and_deliberate_turn_wait_preserve_queue_route(self):
+        self.lua.execute('''
+            Q.schedule=function() end
+            local data=Q.take(u,'prepare')
+            data.path={{x=0,z=0,t=0},{x=0,z=30,t=0}}
+            data.progressPosition=W.pose(v:getAIDirectionNode()); data.progressTime=0
+            place(0,2,0); g_currentMission.time=9000; Q.tick(u)
+            assert(data.path and data.progressTime==9000)
+            data.turnHold=c
+            g_currentMission.time=25000; Q.tick(u)
+            assert(data.path and data.progressTime==25000)
+            data.turnHold=nil
+            g_currentMission.time=34000; Q.tick(u); assert(data.path)
+            g_currentMission.time=36000; Q.tick(u); assert(not data.path)
         ''')
 
     def test_scheduler_reaches_checked_escape_when_fixed_routes_consume_budget(self):
