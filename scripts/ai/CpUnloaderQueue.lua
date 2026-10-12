@@ -35,8 +35,9 @@ function Q.data(driver)
 end
 
 function Q.reason(data,reason)
-    if data.reason~=reason then
+    if data.reason~=reason or (data.operation=='yield' and now()-(data.reasonTime or 0)>=30000) then
         data.reason=reason
+        data.reasonTime=now()
         data.driver:debug('Queue: %s',reason)
     end
 end
@@ -420,6 +421,12 @@ end
 
 function Q.target(driver)
     local data=Q.data(driver)
+    -- Clear the arrival lane before investing in a distant assigned stage.
+    -- A native unloading call may still take ownership immediately.
+    if not Q.arrivalClear(driver) then
+        local arrival=Q.poolTarget(driver,true)
+        if arrival then return arrival end
+    end
     local assignment=data.assignment
     if not assignment or assignment.future then return end
     if assignment.combine then
@@ -464,7 +471,25 @@ function Q.target(driver)
     return Q.poolTarget(driver)
 end
 
-function Q.poolTarget(driver)
+function Q.arrivalClear(driver)
+    local marker=driver.invertedStartPositionMarkerNode
+    if not marker then return true end
+    local bodies=W.currentBodies(driver.vehicle)
+    if not bodies then return false end
+    local origin=W.pose(marker)
+    for _,item in ipairs(bodies) do
+        local body,pose=item.body,item.pose
+        local dx,dz=origin.x-pose.x,origin.z-pose.z
+        local x=dx*math.cos(pose.t)-dz*math.sin(pose.t)
+        local z=dx*math.sin(pose.t)+dz*math.cos(pose.t)
+        local nx=math.max(body.right-1,math.min(body.left+1,x))
+        local nz=math.max(body.back-1,math.min(body.front+1,z))
+        if math.sqrt((x-nx)^2+(z-nz)^2)<2*driver.turningRadius+4 then return false end
+    end
+    return true
+end
+
+function Q.poolTarget(driver,arrival)
     local data=Q.data(driver)
     local parked=data.parkedGoal
     if parked and Q.targetAvailable(driver,parked) and Q.arrived(driver,parked) then return parked end
@@ -475,6 +500,8 @@ function Q.poolTarget(driver)
     local marker=driver.invertedStartPositionMarkerNode
     local origin=marker and W.pose(marker) or W.pose(driver.vehicle:getAIDirectionNode())
     local best,score
+    local candidates={}
+    local visited={}
     for _, combine in pairs(Q.combines or {}) do
         local course=combine.driver.fieldWorkCourse
         if course and driver:isServingPosition(combine.position.x,combine.position.z,10) then
@@ -487,14 +514,30 @@ function Q.poolTarget(driver)
                     if accumulated>=index*spacing then
                         accumulated=0
                         local d=distance(p,origin)
-                        if d>2*driver.turningRadius+spacing and (not score or d<score) then
+                        local key=string.format('%.1f:%.1f:%.2f',p.x,p.z,p.t)
+                        local competitive=arrival and (#candidates<6 or d<candidates[#candidates].distance)
+                            or (not arrival and (not score or d<score))
+                        if d>2*driver.turningRadius+spacing and competitive and not visited[key] then
+                            visited[key]=true
                             local candidate=Q.stagingCandidate(driver,course,i)
-                            if candidate then best,score=candidate,d end
+                            if candidate then
+                                if not score or d<score then best,score=candidate,d end
+                                if arrival then
+                                    candidates[#candidates+1]={goal=candidate,distance=d}
+                                    table.sort(candidates,function(a,b) return a.distance<b.distance end)
+                                    if #candidates>6 then table.remove(candidates) end
+                                end
+                            end
                         end
                     end
                 else accumulated=0 end
             end
         end
+    end
+    if arrival and best then
+        local choices={}
+        for _,candidate in ipairs(candidates) do choices[#choices+1]=candidate.goal end
+        return {x=best.x,z=best.z,t=best.t,choices=choices,firstValid=true,arrival=true}
     end
     return best
 end
@@ -509,12 +552,18 @@ function Q.request(driver,goal,corridor)
     local phase
     if goal.choices then
         data.search,reason,phase=S.choices(world,goal.choices,corridor)
+        if data.search then
+            data.search.firstValid=goal.firstValid
+            data.search.escape=goal.escape
+        end
     else data.search,reason,phase=S.new(world,goal,corridor) end
     data.searchGeneration=data.generation
     data.corridor=corridor
     if not data.search then Q.failed(data,reason,phase) end
     data.searchStarted=now()
     data.searchWorkMs=0
+    driver:debug('Queue: %s target %.1f, %.1f, %.1f m away%s',data.operation,goal.x,goal.z,
+        distance(W.pose(driver.vehicle:getAIDirectionNode()),goal),goal.arrival and ' (clear AD arrival)' or '')
 
 end
 

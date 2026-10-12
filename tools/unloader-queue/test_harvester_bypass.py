@@ -635,6 +635,7 @@ class HarvesterBypassTests(unittest.TestCase):
 
     def headland_corner_fixture(self):
         self.lua.execute('''
+            Q.members={} -- this fixture isolates native combine convoy traffic
             require('FieldWorkerProximityController')
             local points={}
             for z=0,100,5 do points[#points+1]={x=0,z=z} end

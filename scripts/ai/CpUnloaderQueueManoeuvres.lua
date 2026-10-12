@@ -58,6 +58,29 @@ local function intersects(area,vehicle)
     return false
 end
 
+-- Ask queued traffic to clear while there is still room to steer. Waiting for
+-- the native blocking callback lets a working header close to about 1.5 m.
+-- Native unloading, departure and the combine's fieldwork course remain owned
+-- by their original controllers.
+function Q.holdWorkingQueue(combine)
+    if not combine.states or combine.state~=combine.states.WORKING then return false end
+    local time=g_currentMission.time
+    local cache=combine.queueWorkingTraffic
+    if cache and time-cache.time<200 then return cache.hold end
+    local area
+    local hold=false
+    for driver,data in pairs(Q.members) do
+        if Q.owns(driver) and (data.operation=='prepare' or data.operation=='yield')
+                and not data.nativeDeparture and not driver.combineToUnload
+                and driver.vehicle:getIsCpActive() then
+            area=area or Q.yieldArea(combine.vehicle)
+            if area and intersects(area,driver.vehicle) and Q.priority(driver,combine.vehicle) then hold=true end
+        end
+    end
+    combine.queueWorkingTraffic={time=time,hold=hold}
+    return hold
+end
+
 -- A centre-entry U-turn/reverse can bring the lead back towards its own
 -- historical trail. During that transition, do not use trail distance to
 -- decide whether a follower may enter a nearby headland corner. Keep the
@@ -861,6 +884,8 @@ function Q.yieldTarget(driver,checkOnly)
         reverse.t=here.t; reverse.reverse=true; reverse.accept=accepts; reverse.clearance=corridor
         choices[#choices+1]=reverse
     end
-    local target={x=choices[1].x,z=choices[1].z,t=here.t,choices=choices}
+    -- If all fixed destinations are outside the field or obstructed, search
+    -- for a reachable clear footprint instead of repeating those destinations.
+    local target={x=choices[1].x,z=choices[1].z,t=here.t,choices=choices,escape=accepts}
     return target
 end

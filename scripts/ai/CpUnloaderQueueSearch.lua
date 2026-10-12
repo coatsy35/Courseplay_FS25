@@ -48,6 +48,19 @@ local function checkedStart(world,corridor)
     return poses
 end
 
+local function reverseTracking(world,poses)
+    local reference=world.strategy.ppc:getReverserNode(true)
+    local index=reference==world.strategy.vehicle:getAIDirectionNode() and 1 or nil
+    for i,link in ipairs(world.model.links) do
+        if link.node==reference and not link.positionNode then index=i+1 end
+    end
+    if not index then return nil,'unsupported reverse tracking node' end
+    for _,p in ipairs(poses) do
+        if math.abs(H.math.delta(p.t,poses[1].t))>math.rad(2) then return nil,'reverse requires aligned train' end
+    end
+    return index
+end
+
 function S.new(world,goal,corridor)
     local poses,reason,phase=checkedStart(world,corridor)
     if not poses then return nil,reason,phase end
@@ -73,12 +86,8 @@ function S.new(world,goal,corridor)
     end
     local solution=not goal.reverse and DubinsSolver():solve(start,approach,radius)
     if goal.reverse then
-        local reference=world.strategy.ppc:getReverserNode(true)
-        for i,link in ipairs(world.model.links) do
-            if link.node==reference and not link.positionNode then search.trackingIndex=i+1 end
-        end
-        if reference==world.strategy.vehicle:getAIDirectionNode() then search.trackingIndex=1 end
-        if not search.trackingIndex then return nil,'unsupported reverse tracking node' end
+        search.trackingIndex,reason=reverseTracking(world,poses)
+        if not search.trackingIndex then return nil,reason end
         for _,p in ipairs(poses) do
             if math.abs(H.math.delta(p.t,goal.t))>math.rad(2) then return nil,'reverse requires aligned train' end
         end
@@ -95,10 +104,29 @@ function S.new(world,goal,corridor)
 end
 
 local function settled(search,poses)
+    local heading=search.escape and poses[1].t or search.goal.t
     for _,pose in ipairs(poses) do
-        if math.abs(H.math.delta(pose.t,search.goal.t))>math.rad(10) then return false end
+        if math.abs(H.math.delta(pose.t,heading))>math.rad(10) then return false end
     end
+    if search.escape then return search.escape(poses,search.world.model) end
     return not search.goal.accept or search.goal.accept(poses,search.world.model)
+end
+
+function S.escape(world,accept,corridor,reverse)
+    local poses,reason,phase=checkedStart(world,corridor)
+    if not poses then return nil,reason,phase end
+    local radius=H.minimumRadius(world.model,world.strategy.turningRadius)
+    if not radius then return nil,'no supported turning radius' end
+    local root={poses=poses,distance=0,cost=0}
+    -- Uniform-cost, bounded local clearance. No invalid guessed destination is
+    -- required, and every edge uses the ordinary full-train world checks.
+    local search={world=world,goal=poses[1],escape=accept,corridor=corridor,radius=radius,
+        open={root},seen={},expanded=0,root=root,reverse=reverse}
+    if reverse then
+        search.trackingIndex,reason=reverseTracking(world,poses)
+        if not search.trackingIndex then return nil,reason end
+    end
+    return search
 end
 
 local function route(node,search)
@@ -164,7 +192,7 @@ function S.step(search,budget)
                 if edge.step==edge.count then
                     local travelled=edge.parent.distance+distance(a,b)
                     local node={poses=poses,parent=edge.parent,segment=edge.segment,distance=travelled,
-                        cost=travelled+distance(root,search.goal)}
+                        cost=travelled+(search.escape and 0 or distance(root,search.goal))}
                     search.edge=nil
                     if search.direct then
                         search.directNode=node
@@ -175,9 +203,11 @@ function S.step(search,budget)
                             end
                             search.direct=nil
                         end
-                    elseif distance(root,search.goal)<1.5 and math.abs(H.math.delta(root.t,search.goal.t))<math.rad(6)
+                    elseif (search.escape or (distance(root,search.goal)<1.5 and math.abs(H.math.delta(root.t,search.goal.t))<math.rad(6)))
                             and settled(search,poses) then
-                        search.done=true; search.path=route(node,search); return true,search.path
+                        search.done=true; search.path=route(node,search)
+                        if search.escape then search.path.goal={x=root.x,z=root.z,t=root.t,accept=search.escape} end
+                        return true,search.path
                     else
                         local k=key(poses)
                         if not search.seen[k] or travelled<search.seen[k] then
@@ -193,18 +223,20 @@ function S.step(search,budget)
                 beginEdge(search,search.directNode,{x=n.x,z=-n.y,t=CpMathUtil.angleToGame(n.t)})
             end
         else
-            if search.directOnly or search.reverse then search.done=true; return true,nil,search.reason or 'no safe direct clearance' end
-            if not search.parent or search.steer>1 then
+            if search.directOnly or (search.reverse and not search.escape) then search.done=true; return true,nil,search.reason or 'no safe direct clearance' end
+            if not search.parent or search.steer>(search.reverse and 0 or 1) then
                 if #search.open==0 or search.expanded>=6000 then
                     search.done=true; return true,nil,search.reason or 'no safe queue route'
                 end
-                search.parent=pop(search.open); search.steer=-1; search.expanded=search.expanded+1
+                search.parent=pop(search.open); search.steer=search.reverse and 0 or -1; search.expanded=search.expanded+1
             end
             local a=search.parent.poses[1]
             local turn=search.steer*2/search.radius
             local t=a.t+turn
             local target
-            if search.steer==0 then target={x=a.x+2*math.sin(a.t),z=a.z+2*math.cos(a.t),t=t}
+            if search.steer==0 then
+                local step=search.reverse and -2 or 2
+                target={x=a.x+step*math.sin(a.t),z=a.z+step*math.cos(a.t),t=t}
             else
                 local r=search.radius/search.steer
                 target={x=a.x+r*(math.cos(a.t)-math.cos(t)),z=a.z+r*(math.sin(t)-math.sin(a.t)),t=t}
@@ -227,6 +259,22 @@ end
 function S.stepChoices(search,budget)
     if search.index>#search.choices then
         if search.best then return true,search.best end
+        if search.escape then
+            if not search.fallback then
+                search.fallback,search.reason=S.escape(search.world,search.escape,search.corridor,not search.escapeForward)
+                if not search.fallback and not search.escapeForward then
+                    search.escapeForward=true
+                    return false
+                end
+                if not search.fallback then return true,nil,search.reason end
+            end
+            local done,path,reason=S.step(search.fallback,budget)
+            if done and not path and not search.escapeForward then
+                search.fallback=nil; search.escapeForward=true
+                return false
+            end
+            return done,path,reason
+        end
         -- If no simple manoeuvre fits, try a bounded obstacle-avoiding forward
         -- search. It retains precisely the same crop and whole-train checks.
         search.fallbackIndex=search.fallbackIndex or 1

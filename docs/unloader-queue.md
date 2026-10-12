@@ -1,3 +1,37 @@
+## Build 3026 - field arrival and blocked working headers
+
+The 3025 log confirms CR11/318 requested clearance from T7.300/323 at
+23:23:49 on 11 October. The queue reported a field-boundary destination
+failure, and repeated proximity blocks without waypoint progress persisted
+into the following morning. Fixed clearance endpoints could all be invalid
+although nearer clear ground might be reachable.
+
+Working combines now request clearance from queue-owned preparation/yield
+traffic within their 30-metre full-header route sweep, holding while the whole
+rig moves clear. Native unloading and departures keep their controllers. If
+fixed yield destinations fail, a bounded local search can choose a reachable,
+aligned, clear whole-train footprint. Every edge retains the existing boundary,
+crop, obstacle, articulation and self-overlap checks. The fallback tries checked straight reversing and forward steering; it cannot
+guarantee recovery from an already physically trapped train.
+
+T7.300/324 returned from AD at 08:18:26 on 12 October and exhausted its queue
+search budget at 08:23:38. The old log does not identify that search's target;
+a distant assigned target is a code-supported inference, not a proved trace.
+Preparation now prioritises nearby checked headland slots while any part of the
+rig occupies the AD clearance area. It tries several nearby destinations before
+an obstacle-avoiding search, then resumes assigned staged preparation after
+clearing the entrance. Native urgent unloading calls can still pre-empt it.
+Target coordinates and distance are logged; unchanged failed yield reasons
+are repeated only every 30 seconds to expose persistent unsuccessful recovery.
+
+Regression tests cover early full-header holds, trailing-body clearance, native
+ownership, invalid fixed endpoints with nearer reachable space, crop/obstacle/
+articulation rejection, and arrival priority over a distant assignment. The
+four 3025 corrections and previous native protections remain. Automated checks
+are not evidence of unattended completion in FS25; that still needs the run.
+The scheduled monitor remains paused. Incident evidence is retained under
+out/incident-3025-header.
+
 ## Build 3025 - combined unattended-run corrections
 
 One release combines the four findings from the 3024 field run. The scheduled
