@@ -1,3 +1,36 @@
+## Build 3030 - recover after the unloading tractor finishes reversing
+
+The 3029 log confirms CR11/318 stopped at row turn 1620 on 12 October.
+At 20:19:03 its detour failed the final route-clearance check while tractor
+322 was still reversing after emptying it. At 20:19:06 the tractor returned
+to queue preparation, but the combine remained waiting through 20:24.
+
+Re-evaluate the blocking rig's live ownership when a detour fails and while
+waiting for its reserved turn to clear. Once native reversing has finished
+and the rig is stopped in preparation, issue one checked clearance request.
+Use the original turn clearance area and prefer forward clearance. Existing
+yield requests retain their route/search, other combines and clear timers;
+repeated updates must not restart the manoeuvre or postpone retries.
+
+Allow a newly issued request five seconds to start. Retry the checked detour
+when the actual blockers are stationary, regardless of queue/native ownership.
+Check the original waiting area as well as current turn traffic: the rejected
+detour's reservation need not cover the original blocker. Moving clearance
+and departures retain priority. A clear tractor alone is insufficient: require
+the whole rig clear for two seconds, then replan to the same row entry.
+
+Three regression scenarios fail on 3029 and pass with this change: return to
+preparation after failure, return while search is pending, and whole-rig
+clearance followed by resumption. Coverage also exercises request continuity,
+native reverse preservation, movement before retry, bounded retries and a
+subsequently accepted route. Existing native departure, other-combine requests,
+route validation and earlier fixes remain covered by the release suites.
+
+This repairs the observed recovery lifecycle; it does not weaken the final
+collision check or establish why that particular route was rejected. Full
+source and packaged checks are required, and unattended completion still needs
+in-game validation. Scheduled monitoring remains paused.
+
 ## Build 3029 - complete the early-clearance rollback
 
 The 3028 run loaded at 16:52 on 12 October. Tractor 322 entered queue yield

@@ -354,6 +354,24 @@ local function resumeBypass(combine,wait)
     wait.turn.state=wait.turn.states.PREPARING_RECOVERY
 end
 
+-- A native reverse can finish while the combine searches or waits. Use the
+-- rig's current ownership, not its classification when the detour started.
+-- An existing request must keep its search, progress and clearance timer.
+local function requestTurnClearance(combine,driver,area)
+    local data=driver.queueData
+    if not data or not Q.owns(driver)
+            or (data.operation~='yield' and not parkedQueueTrailer(driver)) then return false end
+    local request=data.yieldRequests and data.yieldRequests[combine.vehicle]
+    if data.operation=='yield' and request and request.turnClearance==area then return false end
+    if not Q.priority(driver,combine.vehicle) then return false end
+    request=data.yieldRequests and data.yieldRequests[combine.vehicle]
+    if not request then return false end -- an incoming turn hold retained control
+    request.turnClearance=area; request.preferForward=true
+    request.checked=nil
+    data.nextAttempt=0
+    return true
+end
+
 function Q.checkParkedTrailerTravel(combine)
     local stale=combine.queueBypass
     if stale and (stale.turn~=combine.aiTurn or not ordinaryTravelTurn(combine)) then
@@ -383,12 +401,20 @@ function Q.checkParkedTrailerTravel(combine)
     local wait=combine.queueTrailerWait
     if wait and wait.turn~=turn then combine.queueTrailerWait=nil; wait=nil end
     if wait then
-        if intersects(wait.area,wait.driver.vehicle) or traffic then
+        local blocked=intersects(wait.area,wait.driver.vehicle)
+        if blocked or traffic then
             wait.clearSince=nil
-            -- Native traffic retains its job. Retry a checked route if it
-            -- remains stationary; never wait forever for a coupled manoeuvre.
-            if (not Q.owns(wait.driver) or (traffic and AIUtil.isStopped(traffic.vehicle)))
-                    and g_currentMission.time>=(wait.retryAt or 0) then
+            if blocked and requestTurnClearance(combine,wait.driver,wait.area) then
+                -- Allow the newly requested clearance to start before retrying
+                -- the detour. Later updates must not postpone this deadline.
+                wait.retryAt=g_currentMission.time+5000
+            end
+            -- The frozen clearance area can differ from the rejected route's
+            -- reservation. Its blocker must remain eligible for retries after
+            -- returning to the queue, but moving clearance/departures go first.
+            local stationary=(not blocked or AIUtil.isStopped(wait.driver.vehicle))
+                and (not traffic or AIUtil.isStopped(traffic.vehicle))
+            if stationary and g_currentMission.time>=(wait.retryAt or 0) then
                 wait.retryAt=g_currentMission.time+5000
                 combine.queueTrailerWait=nil
                 resumeBypass(combine,wait)
@@ -608,13 +634,7 @@ function Q.tryHarvesterBypass(combine,vehicle,isBack,area)
         Q.clearHarvesterBypass(driver)
         combine.queueBypass=nil
         combine.queueTrailerWait={turn=self,driver=driver,area=area,retryAt=g_currentMission.time+5000}
-        if parked and Q.priority(driver,combine.vehicle) then
-            local request=driver.queueData.yieldRequests and driver.queueData.yieldRequests[combine.vehicle]
-            if not request then return end
-            request.turnClearance=area
-            request.preferForward=true
-            driver.queueData.nextAttempt=0
-        end
+        requestTurnClearance(combine,driver,area)
     end
     local completed=recovery.onPathfindingDone
     recovery.queueBypassFailed=failed

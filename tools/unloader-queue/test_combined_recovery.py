@@ -117,6 +117,89 @@ class AcceptedRouteTests(unittest.TestCase):
         self.travel_fixture=lambda *args,**kwargs: bypass.HarvesterBypassTests.travel_fixture(self,*args,**kwargs)
         bypass.HarvesterBypassTests.traffic_fixture(self)
 
+    def native_reverse_failure(self, prepare_before_failure=False):
+        self.lua.execute('''
+            tv.rootNode.x=0; trailer.rootNode.x=0
+            u.state=u.states.MOVING_BACK; u.combineToUnload=hv
+            reverseState=u.state; reverseCourse=u.course
+            c:getDriveData(); c.aiTurn:getDriveData(33)
+            recovery=c.aiTurn
+            assert(calls==1 and not Q.owns(u))
+            recovery.queueBypassConstraints.isValidNode=function(_,node) return node.x<5 end
+        ''')
+        if prepare_before_failure:
+            self.lua.execute("u.combineToUnload=nil; Q.take(u,'prepare')")
+        self.lua.execute('''
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=20,y=-10,t=0},{x=20,y=-30,t=0}})
+            assert(c.queueTrailerWait and not c.queueBypass)
+        ''')
+
+    def test_native_reverse_to_preparation_requests_clearance_once_then_retries(self):
+        self.native_reverse_failure()
+        self.lua.execute('''
+            local wait=c.queueTrailerWait
+            for i=1,30 do
+                g_currentMission.time=g_currentMission.time+100
+                assert(select(4,c:getDriveData())==0)
+                assert(u.state==reverseState and u.course==reverseCourse and u.combineToUnload==hv)
+                assert(not Q.owns(u) and not u.queueData.yieldRequests)
+            end
+            -- The native reverse ends before the first retry becomes eligible.
+            u.combineToUnload=nil; Q.take(u,'prepare')
+            -- An old request record alone is not an active yield operation.
+            u.queueData.yieldRequests={[hv]={turnClearance=wait.area}}
+            c:getDriveData()
+            local data=u.queueData
+            local request=assert(data.yieldRequests and data.yieldRequests[hv], 'reverse completion lost clearance request')
+            assert(data.operation=='yield' and request.turnClearance==wait.area and request.preferForward)
+            assert(wait.retryAt==g_currentMission.time+5000 and data.nextAttempt==0)
+            local generation=data.generation
+            local search={}; data.search=search
+            for i=1,40 do
+                g_currentMission.time=g_currentMission.time+100
+                c:getDriveData()
+                assert(data.generation==generation and data.search==search and data.yieldRequests[hv]==request)
+                assert(c.queueTrailerWait==wait and calls==1)
+            end
+            -- A rig actually moving clear gets to finish its movement.
+            tv.stopped=false; g_currentMission.time=wait.retryAt+1
+            c:getDriveData(); assert(c.queueTrailerWait==wait and calls==1)
+            tv.stopped=true
+            c:getDriveData(); recovery:getDriveData(33)
+            assert(calls==2 and not c.queueTrailerWait and c.queueBypass)
+            assert(data.search==search and data.yieldRequests[hv]==request)
+            c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=20,y=-10,t=0},{x=20,y=-30,t=0}})
+            for i=1,30 do c:getDriveData() end
+            assert(recovery.state==recovery.states.TURNING and calls==2)
+            assert(context.turnEndWpIx==953 and not stopped)
+        ''')
+
+    def test_reverse_finished_during_search_uses_live_state_at_failure(self):
+        self.native_reverse_failure(prepare_before_failure=True)
+        self.lua.execute('''
+            local request=assert(u.queueData.yieldRequests and u.queueData.yieldRequests[hv])
+            assert(u.queueData.operation=='yield' and request.turnClearance==c.queueTrailerWait.area)
+            assert(request.preferForward)
+        ''')
+
+    def test_reverse_completion_clearance_waits_for_whole_rig_then_resumes_same_row(self):
+        self.native_reverse_failure()
+        self.lua.execute('''
+            u.combineToUnload=nil; Q.take(u,'prepare'); c:getDriveData()
+            assert(u.queueData.operation=='yield')
+            tv.rootNode.x=40
+            c:getDriveData(); assert(c.queueTrailerWait and not c.queueTrailerWait.clearSince)
+            trailer.rootNode.x=40
+            c:getDriveData(); assert(c.queueTrailerWait)
+            g_currentMission.time=g_currentMission.time+1999
+            c:getDriveData(); assert(c.queueTrailerWait)
+            g_currentMission.time=g_currentMission.time+2
+            c:getDriveData(); assert(not c.queueTrailerWait and c.queueBypass)
+            assert(u.queueData.operation=='prepare' and not u.queueData.yieldRequests)
+            recovery:getDriveData(33)
+            assert(calls==2 and context.turnEndWpIx==953 and not stopped)
+        ''')
+
     def test_stationary_traffic_does_not_restart_checked_detour_every_frame(self):
         self.lua.execute('''
             tv.rootNode.x=0; trailer.rootNode.x=0
