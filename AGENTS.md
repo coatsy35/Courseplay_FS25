@@ -25,10 +25,16 @@
 - Preserve each tractor's adjustable CP departure threshold and native departure
   and AD handover. Do not hard-code 80% or 85%, change combine courses, or weaken
   crop/collision protections to achieve preparation targets.
-- Preserve build 3020 (commit 28b1bd6a8c19f04e4905bb21b997839788a74a00) as the
-  user's currently working traffic/unloading baseline. Implement subsequent
-  preparation changes as separate commits/builds; retain its ZIP unchanged.
-  The staged-preparation requirements are not yet verified as working in 3020.
+- Preserve build 3031 (commit 03a903c11b0ae39cdf7b2bad228ed792c3df6e12) as the
+  completed-field milestone, confirmed by the user on 13 October 2026. Its tag is
+  `unloader-queue-3031-field-complete`. Retain its ZIP and release receipt unchanged.
+  Build subsequent fixes on this baseline in separate commits/builds, preserving
+  the previous fixes. Final parking clearance and the remaining unload are still
+  open issues; whole-field harvesting is the completed milestone, not acceptance
+  of every queue requirement. See `docs/unloader-queue.md` for the evidence.
+- Also retain build 3020 (commit 28b1bd6a8c19f04e4905bb21b997839788a74a00) and its
+  ZIP as the historical traffic/unloading baseline. Staged preparation was not
+  verified as working in that build.
 - Retain `FS25_Courseplay_UnloaderCoordinatorTest.zip` and the in-game title
   `CoursePlay - Unloader Coordinator Test` for this feature. Keep the live ZIP
   separate. Every release needs a new commit and its own full-commit-SHA folder

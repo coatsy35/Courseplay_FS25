@@ -1,3 +1,38 @@
+## Completed milestone - whole-field harvesting in build 3031
+
+On 13 October 2026 the user confirmed that the current release completed the
+entire field and requested that it be committed, pushed and preserved as a
+completed milestone. Build **8.1.0.3031** is now the baseline for subsequent fixes.
+
+- Release commit: `03a903c11b0ae39cdf7b2bad228ed792c3df6e12`.
+- Branch: `codex/unloader-queue`.
+- Annotated release tag: `unloader-queue-3031-field-complete`, pointing to the
+  release commit, not the later documentation commit recording this milestone.
+- Preserved ZIP: `dist/unloader-coordinator/history/03a903c11b0ae39cdf7b2bad228ed792c3df6e12/FS25_Courseplay_UnloaderCoordinatorTest.zip`
+  in the repository root, alongside its original `build.json` receipt.
+- ZIP SHA-256: `cc51b821985100221a3f008ce22be48adecb5a1690424d6e72b2a62073611706`.
+
+The log confirms 3031 loaded at 10:54:38. Both CR11s reached their course ends:
+319 at 12:50:06 and 318 at 12:51:34. Source and extracted-package release checks
+passed before publication. The milestone audit rechecked the ZIP checksum and
+all 261 packaged Lua files against the release source, with no discrepancies.
+This record changes no runtime code and does not rebuild or renumber the ZIP.
+
+Final parking clearance and the remaining unload are separate, open follow-up
+issues. At 12:51:31, 319's attempted 22 m clearance was rejected as `standing crop`
+and it completed its job in place. The user confirms there was no crop ahead.
+Tractor 323 released and reversed normally, then switched to the final pipe
+approach for 318 at 12:52:01. That final unload had not completed by 13:05:53.
+The rejection log lacks the crop/sample detail needed to establish its exact
+cause; it must not be described as proof of actual crop ahead. Follow-up work
+must preserve the successful harvesting, native release and previous fixes.
+
+Local evidence is retained in `out/incident-3031-finish/`, including
+`log-20261013-130553.txt` and `diagnosis.json`; the original release-check record
+is `out/release-3031-checks.txt`. These local evidence files are not tracked.
+Scheduled monitoring remains paused. Build 3020 remains preserved as an older
+baseline. The release-time validation notes below are retained as history.
+
 ## Build 3031 - clear actual arrivals and make room after final unloading
 
 The 3030 log records tractor 324 returning from AD at 21:46:44 on 12 October,
