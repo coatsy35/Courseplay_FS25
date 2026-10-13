@@ -323,6 +323,7 @@ Q.nativeMoveAway=function(driver,vehicle)
     return result
 end
 function U:onBlockingVehicle(vehicle,isBack)
+    if not Q.enabled(self) then return blocking(self,vehicle,isBack) end
     if isBack then return blocking(self,vehicle,isBack) end
     if Q.nativeClearanceActive(self) then return end
     if Q.deferTrailerYield(self,vehicle) then return end

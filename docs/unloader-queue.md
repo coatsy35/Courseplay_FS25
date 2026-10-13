@@ -16,7 +16,8 @@ retain native clearance and its proximity protection. Do not interrupt native
 move-away, backing-up or headland-turn clearance. Retire a superseded native
 search only after native control accepts the move-away; a held/no-op callback
 retains its search. This prevents stale callbacks installing a different course
-or reporting failure against the new state.
+or reporting failure against the new state. Auger-wagon, field-unload and
+GIANTS-unload modes retain their original native blocking callback.
 
 A queue yield with failed searches and no actual movement for 15 seconds
 hands clearance back to native CP. A search which cannot advance or obtain a

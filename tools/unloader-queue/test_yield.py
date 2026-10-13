@@ -87,6 +87,19 @@ class YieldTests(unittest.TestCase):
         ''')
 
 
+    def test_excluded_unloading_modes_keep_original_blocking_callback(self):
+        for mode in ('augerWagon', 'fieldUnloadPositionNode', 'useGiantsUnload'):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.lua.execute('''
+                    u.state=u.states.MOVING_BACK
+                    u.pathfinderController={pathfinder={}}; local search=u.pathfinderController.pathfinder
+                '''+f'u.{mode}=true'+'''
+                    u:onBlockingVehicle(harvester,false)
+                    assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
+                    assert(not u.queueData and u.pathfinderController.pathfinder==search)
+                ''')
+
     def test_working_combine_invalid_start_returns_to_native_clearance(self):
         for obstacle in ('densityCount=20', 'collision=1'):
             with self.subTest(obstacle=obstacle):
