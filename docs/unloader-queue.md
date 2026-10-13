@@ -1,3 +1,68 @@
+## Build 3034 - yield handover and recovery lifecycle audit
+
+The retained 13 October build-3032 trace shows tractor 325 accepting queue
+yield at 20:42:50 after mutual proximity stops with combine 319. Its first
+whole-rig check rejected the starting footprint as a vehicle or obstacle;
+the same yield persisted through 21:45 without useful progress. Tractor 324
+also lost a native move-away manoeuvre to queue yield at 20:04:13, followed
+by repeated start-crop rejection. These classifications do not prove physical
+overlap or crop underneath the rig. Evidence is retained locally in
+out/incident-3032-yield-blockage/. Build 3033's rear-entry correction did not
+address this yield ownership failure.
+
+Before taking clearance control, check the actual complete rig in every
+combine state, including straight fieldwork. If the start cannot be validated,
+retain native clearance and its proximity protection. Do not interrupt native
+move-away, backing-up or headland-turn clearance. Retire a superseded native
+search only after native control accepts the move-away; a held/no-op callback
+retains its search. This prevents stale callbacks installing a different course
+or reporting failure against the new state.
+
+A queue yield with failed searches and no actual movement for 15 seconds
+hands clearance back to native CP. A search which cannot advance or obtain a
+usable clearance envelope has a 60-second no-movement bound. Actual movement
+resets the watchdog; deliberate native holds are respected. A 15-second
+handover cooldown prevents immediate queue takeover. These are elapsed
+recovery limits, not computation or frame-rate measurements. Native proximity,
+crop controls and checked queue routes remain active; a handback does not
+promise that a physically boxed-in vehicle can escape.
+
+The wider audit found and corrects three related lifecycle faults:
+
+- Bind frozen turn clearance to its requesting turn/context. After that turn
+  ends or is replaced, use live clearance and its two-second clear interval;
+  retain independent requests from other combines.
+- Retain an accepted manual departure request while a checked/native reverse
+  completes, even after the native one-second button flag expires. Preserve
+  the intent if the target finishes, is cancelled or stops with an error.
+- Bind stopped/final approach recovery to the original pathfinder controller
+  and context through native obstacle-at-start reversing. Preserve checked
+  rear entry, attempt counts and timeout. A finished/cancelled target retires
+  its pending retry and assignment; successful completion first lets an
+  already-running native reverse reach its endpoint.
+
+Audit coverage and remaining limits:
+
+| Interaction | Result |
+| --- | --- |
+| Queue yield/native clearance/search callbacks | Confirmed ownership faults fixed; no further concrete cycle found in targeted review. |
+| Multiple blockers and crossing combine turns | Keep independent requests and stable priority; remove stale turn identity only. Existing order/whole-header regressions remain required. |
+| Approach/reverse/combine completion | Context-bound recovery, finite attempts/timeouts and target-loss cleanup covered. |
+| Reservations, replacement trailers and partial loads | No additional concrete ownership fault established; retain valid reservations and partial-load priority. |
+| AD arrival/search scheduling | Retain 3033's resumable candidate work and foreground precedence; no new arrival defect established by this audit. |
+| Configured cutoff, native departure and AD handover | Retain existing threshold and native departure suites; no threshold or AD setting changes. |
+
+The bypass fixtures now provide actual single-trailer geometry and engine-boundary
+crop/collision data for takeover preflight, rather than omitting those inputs.
+Regression coverage also exercises native callbacks, held searches, remaining
+requesters, foreground starvation, stale turns, expiring manual requests,
+unrelated backup contexts and target cancellation. Full source and extracted
+package release checks are required. This is a code and regression audit,
+not proof that every possible multi-vehicle/map/physics deadlock is eliminated.
+The next unattended field run must validate live clearance, arrival staging,
+final unloading and AD departure together. Previous fixes and the unchanged
+3031 milestone remain preserved. Scheduled monitoring stays paused.
+
 ## Build 3033 - stopped-combine rear entry and resumable arrival searches
 
 The 13 October 3032 incident left CR11/318 at 99.52% with tractor 322

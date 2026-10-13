@@ -80,6 +80,7 @@ function Q.targetAvailable(driver,p)
 end
 
 function Q.failed(data,reason,phase)
+    if data.operation=='yield' then data.yieldFailed=true end
     if data.goal and phase~='start' and phase~='world' then
         data.failedGoals=data.failedGoals or {}
         for key,expiry in pairs(data.failedGoals) do if expiry<=now() then data.failedGoals[key]=nil end end
@@ -108,6 +109,7 @@ function Q.take(driver,operation)
     local data=Q.data(driver)
     Q.cancel(driver)
     data.operation=operation
+    data.yieldProgress=nil; data.yieldProgressTime=now(); data.yieldFailed=nil
     -- Like native MOVING_AWAY_FROM_OTHER_VEHICLE, yielding must not wait on
     -- the future path conflict it is clearing. Live proximity and full-train
     -- route/obstacle validation remain active.
@@ -701,10 +703,7 @@ function Q.tick(driver)
         end
         -- Arrival searches retain partial work while native pathfinding owns
         -- the frame. The measured work budget in schedule remains bounded.
-        if data.operation=='yield' and data.path then
-            Q.yieldTarget(driver,true)
-            if not Q.owns(driver) or data.operation~='yield' then return end
-        end
+        if data.operation=='yield' and Q.updateYieldRecovery(driver) then return end
         if data.path then
             local position=W.pose(driver.vehicle:getAIDirectionNode())
             if not data.progressPosition or distance(position,data.progressPosition)>1 then

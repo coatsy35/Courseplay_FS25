@@ -18,7 +18,7 @@ class FinalApproachTests(unittest.TestCase):
             for _,collection in ipairs({AIDriveStrategyUnloadCombine.myStates,AIDriveStrategyUnloadCombine.myCombineUnloadStates}) do
                 for name,properties in pairs(collection) do u.states[name]={name=name,properties=properties} end
             end
-            u.setNewState=function(self,state) self.state=state end
+            u.setNewState=function(self,state) self.lastState=self.state; self.state=state end
             u.state=u.states.UNLOADING_STOPPED_COMBINE
             u.combineToUnload=harvester
             final=true; fill=1000; full=false; manual=false
@@ -41,6 +41,9 @@ class FinalApproachTests(unittest.TestCase):
             u.startPathfindingToWaitingCombine=function(self,x,z)
                 assert(self.state==self.states.WAITING_FOR_PATHFINDER and self.combineToUnload==harvester)
                 replan={x=x,z=z}
+                if self.queueFinalUnload and self.pathfinderController then
+                    self.queueFinalUnload.context=self.pathfinderController.currentContext
+                end
             end
             u.releaseCombine=function(self) self.combineJustUnloaded=self.combineToUnload; self.combineToUnload=nil end
             u.startMovingBackFromCombine=function(self,state,combine)
@@ -51,6 +54,18 @@ class FinalApproachTests(unittest.TestCase):
             AIMessageCpErrorNoPathFound={new=function() return 'no safe path' end}
             pipe={x=0,z=15,t=0}
             place(0,0,0)
+            function nativeBackupFixture()
+                v.size.lengthOffset=0; trailer.size.lengthOffset=0
+                trailer.getName=function() return "trailer" end
+                local context={}
+                local course={adjustForReversing=function() end,getDistanceToLastWaypoint=function() return 0 end}
+                u.pathfinderController={currentContext=context,retry=function(self,cx)
+                    assert(cx==context); retried=(retried or 0)+1
+                    u:onPathfindingDoneToWaitingCombine(self,true,course,false)
+                end}
+                AIUtil.getDirectionNodeToReverserNodeOffset=function() return 0 end
+                return context,course
+            end
             function tick(ms)
                 g_currentMission.time=g_currentMission.time+(ms or 100)
                 Q.updateFinalUnload(u)
@@ -139,6 +154,92 @@ class FinalApproachTests(unittest.TestCase):
                     finishReverse()
                     assert(nativeDeparture and not replan and not u.queueFinalUnload)
                     assert(u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL and not u.combineToUnload)
+                ''')
+
+    def test_expiring_manual_request_survives_checked_reverse(self):
+        self.lua.execute('''
+            local expiry=0
+            u.driveUnloadNowRequested={set=function(_,value,ms) expiry=g_currentMission.time+ms end}
+            u.isDriveUnloadNowRequested=function() return g_currentMission.time<expiry end
+            stall(); reverseReady()
+            u:requestDriveUnloadNow(); tick()
+            assert(u.queueFinalUnload.departing and not nativeDeparture)
+            tick(2000); assert(not u:isDriveUnloadNowRequested())
+            assert(u.queueFinalUnload.departing)
+            finishReverse()
+            assert(nativeDeparture and not replan and not u.queueFinalUnload)
+            assert(u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL and not u.combineToUnload)
+        ''')
+
+    def test_native_obstacle_backup_preserves_final_attempts_and_checked_lane(self):
+        self.lua.execute('''
+            local context=nativeBackupFixture()
+            stall(); reverseReady(); finishReverse()
+            local data=u.queueFinalUnload; local started=data.started
+            assert(data.attempts==1 and data.phase=='replanning')
+            u:onPathfindingObstacleAtStart(u.pathfinderController,context,1,false,0,0)
+            tick(2000)
+            assert(u.queueFinalUnload==data and data.attempts==1 and data.started==started)
+            u:onLastWaypointPassed()
+            assert(retried==1 and u.state==u.states.DRIVING_TO_COMBINE)
+            atRunIn(); assert(Q.deferFinalPipeApproach(u))
+            assert(data.phase=='checkingLane' and data.attempts==1)
+        ''')
+
+    def test_unrelated_native_backup_cannot_retain_final_recovery(self):
+        self.lua.execute('''
+            local context=nativeBackupFixture()
+            stall(); reverseReady(); finishReverse()
+            local unrelated={}; u.pathfinderController.currentContext=unrelated
+            u:onPathfindingObstacleAtStart(u.pathfinderController,unrelated,1,false,0,0)
+            tick(); assert(not u.queueFinalUnload)
+        ''')
+
+    def test_expiring_manual_intent_after_native_backup_and_finished_target(self):
+        for finished in (False, True):
+            with self.subTest(finished=finished):
+                self.setUp()
+                self.lua.execute('''
+                    local context=nativeBackupFixture(); local expiry=0
+                    u.driveUnloadNowRequested={set=function(_,value,ms) expiry=g_currentMission.time+ms end}
+                    u.isDriveUnloadNowRequested=function() return g_currentMission.time<expiry end
+                    stall(); reverseReady(); finishReverse()
+                    u:onPathfindingObstacleAtStart(u.pathfinderController,context,1,false,0,0)
+                    u:requestDriveUnloadNow(); tick(); tick(2000)
+                '''+('harvester.active=false; harvester.queueFinishedEmptyCombine=true; tick()' if finished else '')+'''
+                    u:onLastWaypointPassed(); tick()
+                    assert(nativeDeparture and not u.queueFinalUnload and not u.combineToUnload)
+                    assert(u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL)
+                ''')
+
+    def test_cancelled_target_keeps_expired_manual_intent_through_idle(self):
+        self.lua.execute('''
+            local context=nativeBackupFixture(); local expiry=0
+            u.driveUnloadNowRequested={set=function(_,value,ms) expiry=g_currentMission.time+ms end}
+            u.isDriveUnloadNowRequested=function() return g_currentMission.time<expiry end
+            stall(); reverseReady(); finishReverse()
+            u:onPathfindingObstacleAtStart(u.pathfinderController,context,1,false,0,0)
+            u:requestDriveUnloadNow(); tick(); tick(2000)
+            assert(not u:isDriveUnloadNowRequested() and u.queueFinalUnload.departing)
+            harvester.active=false; tick()
+            assert(u.state==u.states.IDLE and not u.combineToUnload and not u.queueFinalUnload)
+            u.startUnloadingTrailers=function(self)
+                assert(self:isDriveUnloadNowRequested() and not full); nativeDeparture=true
+            end
+            Q.tick(u); assert(nativeDeparture and not Q.owns(u))
+        ''')
+
+    def test_target_stop_during_replanning_retires_retry_and_assignment(self):
+        for finished in (False, True):
+            with self.subTest(finished=finished):
+                self.setUp()
+                self.lua.execute('''
+                    nativeBackupFixture(); stall(); reverseReady(); finishReverse()
+                    u.pathfinderController.pathfinder={}; harvester.active=false
+                '''+('harvester.queueFinishedEmptyCombine=true' if finished else '')+'''
+                    tick()
+                    assert(not u.pathfinderController.pathfinder and not u.queueFinalUnload)
+                    assert(not u.combineToUnload)
                 ''')
 
     def test_final_lane_checks_trailer_and_does_not_bypass_pending_validation(self):

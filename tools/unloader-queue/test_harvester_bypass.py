@@ -2,7 +2,6 @@
 from pathlib import Path
 import sys
 import unittest
-from lupa.lua52 import LuaRuntime
 
 SOURCE=Path(__file__).resolve().parents[2]
 ROOT=Path(sys.argv.pop(1)).resolve() if len(sys.argv)>1 and not sys.argv[1].startswith('-') else SOURCE
@@ -13,9 +12,7 @@ runtime.ROOT=ROOT
 
 class HarvesterBypassTests(unittest.TestCase):
     def setUp(self):
-        self.lua=LuaRuntime(unpack_returned_tuples=True)
-        self.lua.globals().ROOT=ROOT.as_posix()
-        self.lua.execute((SOURCE/'tools/straight-entry/engine-boundary.lua').read_text())
+        runtime.EngineBoundaryTests.setUp(self)
         self.lua.execute('AIDriveStrategyCourse={}; AIDriveStrategyFieldWorkCourse={}')
         for name in ('AIDriveStrategyUnloadCombine','AIDriveStrategyCombineCourse'):
             self.lua.execute((ROOT/f'scripts/ai/strategies/{name}.lua').read_text())
@@ -43,8 +40,9 @@ class HarvesterBypassTests(unittest.TestCase):
                 getIsCpActive=function(self) return self.active end,
                 getAIDirectionNode=function() return {x=0,z=0,t=0} end,
                 stopCurrentAIJob=function() stopped=true end}
-            tv={stopped=true,getIsCpActive=function() return true end}
+            tv=v; tv.stopped=true
             AIUtil.isStopped=function(v) return v.stopped end
+            AIUtil.getTurningRadius=function() return 9 end
             AIUtil.getSteeringParameters=function() return nil,0 end
             AIUtil.hasChainedAttachments=function() return false end
             AIUtil.getDirectionNodeToReverserNodeOffset=function() return 0 end
@@ -104,9 +102,15 @@ class HarvesterBypassTests(unittest.TestCase):
             hv.getCpDriveStrategy=function() return c end
             local header={rootNode={x=0,z=5,t=0},size={width=15.2,length=2}}
             hv.getAttachedImplements=function() return {{object=header}} end
-            tv.rootNode={x=0,z=40,t=0}; tv.size={width=3,length=5}
+            tv.rootNode.x=0; tv.rootNode.z=40; tv.rootNode.t=0; tv.size={width=3,length=5}
             tv.getAIDirectionNode=function() return tv.rootNode end
-            trailer={rootNode={x=0,z=30,t=0},size={width=3,length=10}}
+            trailer.rootNode.x=0; trailer.rootNode.z=30; trailer.rootNode.t=0
+            trailer.size={width=3,length=10}
+            trailer.getActiveInputAttacherJoint=function(self)
+                self.joint.node.x=tv.rootNode.x; self.joint.node.z=tv.rootNode.z-3.3
+                self.joint.node.t=tv.rootNode.t
+                return self.joint
+            end
             tv.getAttachedImplements=function() return {{object=trailer}} end
             c.getCurrentCourse=function() return installed or old.turnCourse end
             c.ppc.getRelevantWaypointIx=function() return 1 end
@@ -395,6 +399,31 @@ class HarvesterBypassTests(unittest.TestCase):
             recovery:getDriveData(33)
             assert(calls==2 and args[3]==targetNode and context.turnEndWpIx==953)
         '''.replace('args[3]==targetNode', 'args[3].x==20 and args[3].z==30'))
+
+    def test_failed_detour_with_invalid_queue_start_keeps_native_clearance(self):
+        self.travel_fixture()
+        self.lua.execute('''
+            u.states={}
+            for _,collection in ipairs({AIDriveStrategyUnloadCombine.myStates,AIDriveStrategyUnloadCombine.myCombineUnloadStates}) do
+                for name,properties in pairs(collection) do u.states[name]={name=name,properties=properties} end
+            end
+            u.isBeingHeld=function() return false end
+            u.setNewState=function(self,state) self.state=state end
+            u.createMoveAwayCourse=function(self)
+                return Course(self.vehicle,{{x=0,z=40},{x=0,z=30,rev=true}},true)
+            end
+            u.startCourse=function(self,course) self.course=course end
+            AIUtil.isOtherVehicleAhead=function() return true end
+            AIUtil.getImplementOrVehicleWithSpecialization=function() return trailer end
+            CpMathUtil.isOppositeDirection=function() return false end
+            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
+            densityCount=20
+            c.callback(c.callbackOwner,nil)
+            assert(c.queueTrailerWait and not stopped and not Q.owns(u))
+            assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE and not u.queueData.search)
+            local course=u.course
+            c:getDriveData(33); assert(u.course==course)
+        ''')
 
     def test_reverse_disabled_still_plans_before_any_movement(self):
         self.travel_fixture()

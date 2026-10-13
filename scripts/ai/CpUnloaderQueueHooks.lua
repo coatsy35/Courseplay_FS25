@@ -132,7 +132,14 @@ function U:startPathfindingToWaitingCombine(x,z)
     if Q.deferWaitingApproach(self,x,z) then return end
     if self.queueData then self.queueData.waitingApproach={combine=self.combineToUnload,x=x,z=z} end
     x,z=Q.stoppedApproachGoal(self,x,z)
-    return waitingPath(self,x,z)
+    local result=waitingPath(self,x,z)
+    -- The native context is created inside waitingPath and can synchronously
+    -- install a backup. Bind it after that call, before the next update.
+    local recovery=self.queueStoppedApproach or self.queueFinalUnload
+    if recovery and recovery.combine==self.combineToUnload and self.pathfinderController then
+        recovery.controller=self.pathfinderController; recovery.context=self.pathfinderController.currentContext
+    end
+    return result
 end
 
 local stationaryFailed = U.onPathfindingFailedToStationaryTarget
@@ -289,6 +296,7 @@ end
 
 local last = U.onLastWaypointPassed
 function U:onLastWaypointPassed(...)
+    if Q.finishRecoveryBackup(self) then return end
     if Q.stoppedApproachLast(self) then return end
     if Q.finishFinalReverse(self) then return end
     if Q.owns(self) then Q.onLast(self); return end
@@ -296,10 +304,30 @@ function U:onLastWaypointPassed(...)
 end
 
 local blocking = U.onBlockingVehicle
+Q.nativeMoveAway=function(driver,vehicle)
+    local previous=driver.state
+    local result=blocking(driver,vehicle,false)
+    if driver.state~=previous and Q.nativeClearanceActive(driver) then
+        -- Native callback accepted control. Its old coroutine must not later
+        -- replace the clearance course or report failure against the new state.
+        if driver.pathfinderController then driver.pathfinderController.pathfinder=nil end
+        Q.clearStoppedApproach(driver); Q.clearFinalUnload(driver)
+        Q.cancel(driver)
+        local data=driver.queueData
+        if data then
+            data.operation=nil; data.waitingApproach=nil; data.deferredApproach=nil
+            data.yieldRequests=nil; data.priorityCombine=nil
+            data.nativeYieldUntil=g_currentMission.time+15000
+        end
+    end
+    return result
+end
 function U:onBlockingVehicle(vehicle,isBack)
+    if isBack then return blocking(self,vehicle,isBack) end
+    if Q.nativeClearanceActive(self) then return end
     if Q.deferTrailerYield(self,vehicle) then return end
     if Q.priority(self,vehicle) then return end
-    return blocking(self,vehicle,isBack)
+    return Q.nativeMoveAway(self,vehicle)
 end
 
 local remove = U.delete

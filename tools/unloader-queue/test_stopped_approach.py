@@ -55,6 +55,32 @@ class StoppedApproachTests(unittest.TestCase):
             end
         ''')
 
+    def test_native_backup_retry_retains_checked_stopped_entry(self):
+        self.lua.execute('''
+            local context=nativeBackupFixture()
+            u.state=u.states.WAITING_FOR_PATHFINDER
+            local x,z=Q.stoppedApproachGoal(u,0,-8)
+            local data=u.queueStoppedApproach; local started=data.started; data.context=context
+            u:onPathfindingObstacleAtStart(u.pathfinderController,context,1,false,0,0)
+            g_currentMission.time=2000; Q.updateStoppedApproach(u)
+            assert(u.queueStoppedApproach==data and data.started==started)
+            u:onLastWaypointPassed()
+            assert(retried==1 and data.phase=='approaching' and u.state==u.states.DRIVING_TO_COMBINE)
+            place(x,pipe.z+z,0)
+            u:onLastWaypointPassed()
+            assert(data.phase=='checking' and not u:isOkToStartUnloadingCombine())
+        ''')
+
+    def test_native_backup_keeps_recovery_timeout(self):
+        self.lua.execute('''
+            local context=nativeBackupFixture()
+            u.state=u.states.WAITING_FOR_PATHFINDER
+            Q.stoppedApproachGoal(u,0,-8); u.queueStoppedApproach.context=context
+            u:onPathfindingObstacleAtStart(u.pathfinderController,context,1,false,0,0)
+            g_currentMission.time=91000; Q.updateStoppedApproach(u)
+            assert(stopped and not u.queueStoppedApproach)
+        ''')
+
     def test_initial_admission_requires_trailer_heading_lateral_and_fill_node(self):
         self.lua.execute('''
             assert(u:isOkToStartUnloadingCombine())

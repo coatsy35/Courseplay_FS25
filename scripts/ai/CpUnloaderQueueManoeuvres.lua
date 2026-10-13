@@ -485,10 +485,17 @@ local function requestTurnClearance(combine,driver,area)
             or (data.operation~='yield' and not parkedQueueTrailer(driver)) then return false end
     local request=data.yieldRequests and data.yieldRequests[combine.vehicle]
     if data.operation=='yield' and request and request.turnClearance==area then return false end
-    if not Q.priority(driver,combine.vehicle) then return false end
+    if not Q.priority(driver,combine.vehicle) then
+        if Q.owns(driver) and (data.nativeYieldUntil or 0)>g_currentMission.time and Q.nativeMoveAway then
+            Q.nativeMoveAway(driver,combine.vehicle)
+            return Q.nativeClearanceActive(driver)
+        end
+        return false
+    end
     request=data.yieldRequests and data.yieldRequests[combine.vehicle]
     if not request then return false end -- an incoming turn hold retained control
     request.turnClearance=area; request.preferForward=true
+    request.turn=combine.aiTurn; request.turnContext=combine.turnContext
     request.checked=nil
     data.nextAttempt=0
     return true
@@ -907,18 +914,61 @@ function Q.resumeAfterYield(driver)
     Q.reason(data,'clear of harvester manoeuvre; resuming prepare')
 end
 
+-- Preserve native clearance until it finishes, regardless of the combine's state.
+function Q.nativeClearanceActive(driver)
+    local state,states=driver.state,driver.states
+    if not state then return false end
+    for _,name in ipairs({'MOVING_AWAY_FROM_OTHER_VEHICLE','BACKING_UP_FOR_REVERSING_COMBINE',
+            'MOVING_BACK','MOVING_BACK_WITH_TRAILER_FULL','MOVING_BACK_BEFORE_PATHFINDING','MOVING_BACK_FOR_HEADLAND_TURN'}) do
+        if states[name] and state==states[name] then return true end
+    end
+    return false
+end
+
+-- A failed queue search must not monopolise clearance. Native proximity and
+-- move-away steering remain responsible for the handback; never skip W.clear.
+function Q.updateYieldRecovery(driver)
+    local data=driver.queueData
+    if not data or data.operation~='yield' or not Q.owns(driver) then return false end
+    Q.yieldTarget(driver,true)
+    if data.operation~='yield' or not Q.owns(driver) then return false end
+    local time=g_currentMission.time
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    if not data.yieldProgress then
+        data.yieldProgress=here; data.yieldProgressTime=data.yieldProgressTime or time
+    elseif distance(here,data.yieldProgress)>1 then
+        data.yieldProgress=here; data.yieldProgressTime=time; data.yieldFailed=nil
+    end
+    local timeout=data.yieldFailed and 15000 or 60000
+    if time-data.yieldProgressTime<timeout or not Q.nativeMoveAway
+            or (driver.isBeingHeld and driver:isBeingHeld()) then return false end
+    local vehicle=data.priorityCombine
+    if not vehicle or not (data.yieldRequests and data.yieldRequests[vehicle])
+            or not AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+        vehicle=nil
+        for other in pairs(data.yieldRequests or {}) do
+            if AIDriveStrategyCombineCourse.isActiveCpCombine(other) then vehicle=other; break end
+        end
+    end
+    if not vehicle then return false end
+    Q.reason(data,'yield made no progress; returning clearance to native CP')
+    Q.release(driver)
+    data.priorityCombine=nil; data.yieldRequests=nil
+    data.nativeYieldUntil=time+15000
+    Q.nativeMoveAway(driver,vehicle)
+    return true
+end
+
 function Q.priority(driver,combine)
     if (driver.queueData and driver.queueData.nativeDeparture)
             or driver.state==driver.states.MOVING_BACK_WITH_TRAILER_FULL then return false end
     if not Q.enabled(driver) or not combine or not driver.vehicle:getIsCpActive()
             or not AIDriveStrategyCombineCourse.isActiveCpCombine(combine) then return false end
     if Q.atDepartureThreshold(driver) or driver:isDriveUnloadNowRequested() then return false end
+    if Q.nativeClearanceActive(driver) or (driver.queueData
+            and (driver.queueData.nativeYieldUntil or 0)>g_currentMission.time) then return false end
     local strategy=combine:getCpDriveStrategy()
-    if ordinaryTravelTurn(strategy) then
-        if Q.holdIncomingTurn(driver) then return true end
-        if driver.state==driver.states.BACKING_UP_FOR_REVERSING_COMBINE
-                or driver.state==driver.states.MOVING_AWAY_FROM_OTHER_VEHICLE then return false end
-    end
+    if ordinaryTravelTurn(strategy) and Q.holdIncomingTurn(driver) then return true end
     -- Native continuous-harvester following already handles its own harvester's proximity
     -- and turns. Other queued/approaching trailers still yield to it normally.
     if driver.combineToUnload==combine and combine:getCpDriveStrategy():alwaysNeedsUnloader() and not Q.owns(driver) then
@@ -932,18 +982,16 @@ function Q.priority(driver,combine)
         data.yieldRequests[combine].clearSince=nil
         return true
     end
-    if not Q.owns(driver) and ordinaryTravelTurn(strategy) then
-        -- A native manoeuvre must survive a queue start that is already
-        -- invalid (for example standing crop). Probe before releasing the
-        -- assignment or cancelling its native pathfinder.
-        local probe=setmetatable({queueData={operation='yield'}},{__index=driver})
-        local world,reason=W.new(probe)
-        local clear=false
-        if world then clear,reason=W.clear(world,W.poses(world.model)); W.delete(world) end
-        if not clear then
-            Q.reason(data,'native clearance retained: '..tostring(reason))
-            return false
-        end
+    -- Preflight every takeover, including straight fieldwork and queue parking.
+    -- An invalid start prevents all search candidates, not just the first goal.
+    local probe=setmetatable({queueData={operation='yield'}},{__index=driver})
+    local world,reason=W.new(probe)
+    local clear=false
+    if world then clear,reason=W.clear(world,W.poses(world.model)); W.delete(world) end
+    if not clear then
+        data.nativeYieldUntil=g_currentMission.time+15000
+        Q.reason(data,'native clearance retained: '..tostring(reason))
+        return false
     end
     -- Native searches are advanced synchronously by this controller; removing
     -- its runner prevents a superseded callback after clearance. The next native
@@ -968,6 +1016,11 @@ function Q.yieldTarget(driver,checkOnly)
             data.yieldRequests[vehicle]=nil
         else
             local strategy=vehicle:getCpDriveStrategy()
+            if request.turnClearance and request.turn and (strategy.aiTurn~=request.turn
+                    or strategy.turnContext~=request.turnContext or not ordinaryTravelTurn(strategy)) then
+                request.turnClearance=nil; request.turn=nil; request.turnContext=nil
+                request.preferForward=nil; request.checked=nil; request.area=nil; request.clearSince=nil
+            end
             preferForward=preferForward or request.preferForward
             if not request.checked or time-request.checked>=200 then
                 if request.turnClearance then request.area=request.turnClearance
@@ -1152,6 +1205,9 @@ function Q.finishFinalReverse(driver)
     local here=W.pose(driver.vehicle:getAIDirectionNode())
     if distance(here,data.goal)>2 then stopFinalUnload(driver,'reverse ended before clearance'); return true end
     W.delete(data.world); data.world=nil; data.course=nil
+    -- The native button request expires after one second. Retain the accepted
+    -- intent while finishing our checked reverse, then re-enter native departure.
+    if data.departing and not finalDeparting(driver) then driver:requestDriveUnloadNow() end
     local combine,fill=finalUnloadTarget(driver)
     if not combine then
         Q.clearFinalUnload(driver)
@@ -1175,10 +1231,50 @@ function Q.finishFinalReverse(driver)
     -- to settle. A second attempt uses a longer run-in, never the same goal.
     z=math.min(z-15-10*(data.attempts-1),-driver:getCombinesMeasuredBackDistance()-10)
     data.phase='replanning'; data.started=g_currentMission.time
+    data.controller=driver.pathfinderController
     driver:setNewState(driver.states.WAITING_FOR_PATHFINDER)
     driver:debug('Queue: final unload recovery %d/2, native replan at pipe offset %.1f, %.1f',data.attempts,x,z)
     driver:startPathfindingToWaitingCombine(x,z)
     return true
+end
+
+-- Native obstacle-at-start retries temporarily reverse with the same controller
+-- and context. Retain only that recovery, never an unrelated manoeuvre.
+function Q.isRecoveryBackup(driver,data)
+    local properties=driver.state and driver.state.properties
+    local controller=data.controller
+    return (data.phase=='pathfinding' or data.phase=='replanning')
+        and controller and controller==driver.pathfinderController
+        and driver.state==driver.states.MOVING_BACK_BEFORE_PATHFINDING and properties
+        and properties.pathfinderController==controller and properties.pathfinderContext
+        and properties.pathfinderContext==data.context and data.context==controller.currentContext
+end
+
+-- A completed or stopped target must not survive as a pending retry. A
+-- successful finish may wait for the current native reverse to reach its end.
+function Q.releaseLostRecoveryTarget(driver,data)
+    if data.combine~=driver.combineToUnload then return false end
+    if data.combine:getIsCpActive() then return false end
+    if data.controller and driver.pathfinderController==data.controller then driver.pathfinderController.pathfinder=nil end
+    local properties=driver.state and driver.state.properties
+    if properties and properties.pathfinderController==data.controller then
+        properties.pathfinderController=nil; properties.pathfinderContext=nil
+    end
+    if driver.queueData then driver.queueData.waitingApproach=nil; driver.queueData.deferredApproach=nil end
+    Q.clearStoppedApproach(driver); Q.clearFinalUnload(driver)
+    driver:setMaxSpeed(0)
+    if data.departing and not finalDeparting(driver) then driver:requestDriveUnloadNow() end
+    if data.combine.queueFinishedEmptyCombine then
+        driver:setNewState(driver.states.UNLOADING_STOPPED_COMBINE)
+        Q.releaseFinishedCombine(driver)
+    else driver:startWaitingForSomethingToDo() end
+    return true
+end
+
+function Q.finishRecoveryBackup(driver)
+    local data=driver.queueStoppedApproach or driver.queueFinalUnload
+    if data and Q.isRecoveryBackup(driver,data) then return Q.releaseLostRecoveryTarget(driver,data) end
+    return false
 end
 
 function Q.updateFinalUnload(driver)
@@ -1188,7 +1284,16 @@ function Q.updateFinalUnload(driver)
     local phase=data.phase
     local watching=driver.state==driver.states.UNLOADING_STOPPED_COMBINE
     local reversing=driver.state==driver.states.MOVING_BACK_BEFORE_PATHFINDING and driver.course==data.course
-    local approaching=driver.state==driver.states.WAITING_FOR_PATHFINDER or driver.state==driver.states.DRIVING_TO_COMBINE
+    local nativeBackup=phase=='replanning' and Q.isRecoveryBackup(driver,data)
+    if data.combine==driver.combineToUnload and not data.combine:getIsCpActive() and not reversing then
+        if nativeBackup and data.combine.queueFinishedEmptyCombine then
+            data.departing=data.departing or finalDeparting(driver)
+            if g_currentMission.time-data.started>90000 then stopFinalUnload(driver,'recovery timed out') end
+        else Q.releaseLostRecoveryTarget(driver,data) end
+        return
+    end
+    local approaching=nativeBackup or driver.state==driver.states.WAITING_FOR_PATHFINDER
+        or driver.state==driver.states.DRIVING_TO_COMBINE
     -- A successful job stop may remove the combine strategy mid-reverse.
     -- Finish the already checked course before native release/departure.
     local finishedWhileReversing=not combine and reversing and data.combine==driver.combineToUnload
@@ -1202,10 +1307,12 @@ function Q.updateFinalUnload(driver)
             or (phase=='replanning' or phase=='checkingLane') and not approaching then
         Q.clearFinalUnload(driver); return
     end
-    data.departing=finalDeparting(driver)
+    data.departing=data.departing or finalDeparting(driver)
     if phase=='watching' then return end
     local time=g_currentMission.time
     if time-data.started>90000 then stopFinalUnload(driver,'recovery timed out'); return end
+    if nativeBackup then return end -- finish native clearance before acting on latched departure
+    if phase~='reversing' and data.departing and not finalDeparting(driver) then driver:requestDriveUnloadNow() end
     if phase=='replanning' then
         if data.departing then
             -- The controller coroutine only resumes in the subsequent native
@@ -1346,7 +1453,7 @@ function Q.stoppedApproachGoal(driver,x,z)
     local rearZ=math.min(z or 0,-driver:getCombinesMeasuredBackDistance()-5)
     local runIn=math.max(12,3*length)
     data={combine=driver.combineToUnload,phase='pathfinding',x=x or 0,rearZ=rearZ,
-        farZ=rearZ-runIn,started=g_currentMission.time}
+        farZ=rearZ-runIn,started=g_currentMission.time,controller=driver.pathfinderController}
     driver.queueStoppedApproach=data
     driver:debug('Queue: stopped-combine rear entry %.1f, %.1f; %.1f m whole-rig run-in',data.x,data.farZ,runIn)
     return data.x,data.farZ
@@ -1398,8 +1505,20 @@ function Q.updateStoppedApproach(driver)
     local data=driver.queueStoppedApproach
     if not data then return end
     local state=driver.state
+    local nativeBackup=data.phase=='pathfinding' and Q.isRecoveryBackup(driver,data)
+    if data.combine==driver.combineToUnload and not data.combine:getIsCpActive() then
+        if nativeBackup and data.combine.queueFinishedEmptyCombine then
+            data.departing=data.departing or finalDeparting(driver)
+            if g_currentMission.time-data.started>90000 then stoppedApproachFailed(driver,'rear entry timed out') end
+        else Q.releaseLostRecoveryTarget(driver,data) end
+        return
+    end
     if data.combine~=driver.combineToUnload or (state~=driver.states.WAITING_FOR_PATHFINDER
-            and state~=driver.states.DRIVING_TO_COMBINE) then Q.clearStoppedApproach(driver); return end
+            and state~=driver.states.DRIVING_TO_COMBINE and not nativeBackup) then Q.clearStoppedApproach(driver); return end
+    if g_currentMission.time-data.started>90000 then stoppedApproachFailed(driver,'rear entry timed out'); return end
+    data.departing=data.departing or finalDeparting(driver)
+    if nativeBackup then return end
+    if data.departing and not finalDeparting(driver) then driver:requestDriveUnloadNow() end
     if finalDeparting(driver) or not Q.stationaryGrainTarget(driver) then
         if state==driver.states.WAITING_FOR_PATHFINDER and driver.pathfinderController then
             driver.pathfinderController.pathfinder=nil
@@ -1413,7 +1532,6 @@ function Q.updateStoppedApproach(driver)
         else driver:startWaitingForSomethingToDo() end
         return
     end
-    if g_currentMission.time-data.started>90000 then stoppedApproachFailed(driver,'rear entry timed out'); return end
     if data.phase=='checking' then
         driver:setMaxSpeed(0)
         local timer=openIntervalTimer()
