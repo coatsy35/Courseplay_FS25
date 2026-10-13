@@ -1443,7 +1443,7 @@ function Q.updateStoppedApproach(driver)
             data.world.model=model
             local poses=W.poses(model)
             data.clear=W.clear(data.world,poses)
-            if data.clear then data.clear=Q.routeClear(data,poses,driver.ppc:getCurrentWaypointIx()) end
+            if data.clear then data.clear=Q.routeClear(data,poses,driver.ppc:getRelevantWaypointIx()) end
         end
     end
 end

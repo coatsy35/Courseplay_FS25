@@ -25,6 +25,7 @@ class StoppedApproachTests(unittest.TestCase):
             v.stopCurrentAIJob=function(_,message)
                 stopped=message; Q.clearStoppedApproach(u); Q.clearFinalUnload(u); u.state=u.states.IDLE
             end
+            u.ppc.getRelevantWaypointIx=function() return 1 end
             function bendTrailer(angle)
                 local joint=trailer.joint.node
                 trailer.rootNode.x=joint.x-6.5*math.sin(angle)
@@ -128,7 +129,9 @@ class StoppedApproachTests(unittest.TestCase):
 
     def test_live_obstacle_holds_run_in_then_times_out_safely(self):
         self.lua.execute('''
-            checkedRunIn(); Q.updateStoppedApproach(u)
+            checkedRunIn()
+            u.ppc.getCurrentWaypointIx=function() return 30 end -- look-ahead is well ahead of tractor
+            Q.updateStoppedApproach(u)
             assert(Q.stoppedApproachSpeed(u,15)==5)
             collision=1; g_currentMission.time=g_currentMission.time+201; Q.updateStoppedApproach(u); assert(Q.stoppedApproachSpeed(u,15)==0)
             g_currentMission.time=g_currentMission.time+12001; Q.updateStoppedApproach(u)
