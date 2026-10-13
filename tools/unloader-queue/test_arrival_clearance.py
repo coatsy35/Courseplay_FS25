@@ -388,7 +388,7 @@ class ArrivalTests(unittest.TestCase):
             assert(goal.arrival and goal.z>=45 and goal.z<=85)
         ''')
 
-    def test_arrival_watchdog_retries_without_consuming_native_search_or_using_partial_route(self):
+    def test_native_search_pause_keeps_arrival_progress_without_partial_route(self):
         self.lua.execute('''
             Q.refresh=function() end
             local native={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
@@ -396,15 +396,63 @@ class ArrivalTests(unittest.TestCase):
             Q.captureArrival(u); local data=Q.take(u,'prepare')
             local goal={x=0,z=60,t=0,arrival=true,choices={{x=0,z=60,t=0},{x=0,z=80,t=0}}}
             Q.request(u,goal); local search=data.search; assert(search)
-            g_currentMission.time=19999; Q.tick(u); assert(data.search==search and data.searchWorkMs==0)
-            g_currentMission.time=20000; Q.tick(u)
-            assert(not data.search and not data.path and not u.course)
-            assert(data.nextAttempt==23000 and Q.owns(u))
-            assert(not Q.targetAvailable(u,goal.choices[1]) and not Q.targetAvailable(u,goal.choices[2]))
-            -- This elapsed limit is specific to arrival; ordinary preparation
-            -- still charges measured computation, not native foreground delays.
-            Q.request(u,{x=0,z=90,t=0}); search=data.search
-            g_currentMission.time=100000; Q.tick(u); assert(data.search==search)
+            g_currentMission.time=100000; Q.tick(u)
+            assert(data.search==search and data.searchWorkMs==0 and not data.path and not u.course)
+            g_currentMission.vehicleSystem.vehicles={}
+            g_updateLoopIndex=(g_updateLoopIndex or 0)+1; Q.schedule(); assert(data.searchWorkMs>0 or data.path)
+        ''')
+
+    def test_costly_valid_arrival_resumes_without_restarting_checked_edges(self):
+        self.lua.execute('''
+            local S=CpUnloaderQueueSearch
+            local goals={{x=0,z=60,t=0},{x=0,z=80,t=0}}
+            local search=assert(S.choices(world,goals)); search.arrival=true
+            local original=S.new; local starts=0
+            S.new=function(...) starts=starts+1; return original(...) end
+            local done,path,work=false,nil,0
+            for i=1,2000 do
+                local phase=S.choicePhase(search)
+                done,path=S.step(search,1)
+                work=work+0.5 -- injected expensive whole-rig query budget
+                if done then break end
+                S.chargeChoices(search,0.5,phase)
+            end
+            assert(done and path and work>100 and work<1000,'valid route lost its validation progress')
+            assert(starts<=#goals,'candidate restarted after time slice')
+            local poses=W.poses(world.model)
+            for i=2,#path do poses=H.advance(world.model,poses,path[i]); assert(W.clear(world,poses)) end
+        ''')
+
+    def test_scheduler_resumes_finite_fallback_after_its_quantum(self):
+        self.lua.execute('''
+            local S=CpUnloaderQueueSearch
+            Q.refresh=function() end
+            g_currentMission.vehicleSystem.vehicles={}
+            local starts,work,frameWork=0,0,0
+            local new,step=S.new,S.step
+            S.new=function(...)
+                starts=starts+1
+                local state=assert(new(...))
+                state.direct=nil -- actual A* fallback after a rejected direct candidate
+                return state
+            end
+            S.step=function(s,budget)
+                if not s.choices then frameWork=frameWork+0.1; work=work+0.1 end
+                return step(s,budget)
+            end
+            openIntervalTimer=function() frameWork=0; return 1 end
+            readIntervalTimerMs=function() return frameWork end
+            Q.take(u,'prepare')
+            Q.request(u,{x=0,z=60,t=0,arrival=true,choices={{x=0,z=60,t=0}}})
+            local data=u.queueData; local search=data.search
+            for i=1,1000 do
+                g_updateLoopIndex=i; g_currentMission.time=i*30; Q.schedule()
+                if not data.search then break end
+            end
+            assert(data.path and work>100 and work<1000,'finite fallback did not survive its quantum: '..work)
+            assert(starts==1 and search.slots[1].fallback,'fallback recreated direct candidate')
+            local poses=W.poses(data.world.model)
+            for i=2,#data.path do poses=H.advance(data.world.model,poses,data.path[i]); assert(W.clear(data.world,poses)) end
         ''')
 
     def test_expensive_arrival_candidate_cannot_starve_next_valid_route(self):

@@ -1,3 +1,57 @@
+## Build 3033 - stopped-combine rear entry and resumable arrival searches
+
+The 13 October 3032 incident left CR11/318 at 99.52% with tractor 322
+assigned. The native moving-unload mode persisted after the combine stopped;
+the screenshot showed an angled trailer ahead of the pipe and a negative
+forward-speed correction clamped to zero. The user confirms the combine had
+been stopped well before the trailer physically arrived. A mode transition
+in the log does not establish the time of physical arrival or alignment.
+
+Stationary grain-combine admission now checks the complete rig's heading,
+tractor lateral alignment and actual fill-node position (allowing the native
+0.5 m alignment tolerance). A nearby wrong-angle rig must still replan.
+Native pathfinding targets farther behind the pipe, reserving three measured
+trailer steering lengths, with a 12 m minimum, for straightening. At that
+point, the queue validates a complete articulated route to the rear entry,
+retaining every checked sample in the driven course. Native pathfinding,
+crop checks, collision/proximity controls and the combine assignment remain.
+Live checks cover the whole train and a seven-metre stopping horizon. A
+blocked, deviating or stalled route fails safely; no collision bypass is used.
+
+Actual stationary waiting, including full-tank waits with stop-for-unload off,
+starts the native stopped pipe approach. Once the combine resumes, an aligned
+rig returns to native moving follow. A moving rendezvous which has become a
+stationary wait with neither movement nor grain transfer for 12 seconds gets
+up to two rear-entry replans while retaining its assignment. Existing final
+reverse recovery, configured full/manual departure and native AD handover
+remain in place. Forage and auto-aim service retain native admission.
+
+Tractor 324 repeatedly discarded unfinished arrival route candidates after
+50/100 ms of computation. Each arrival candidate now retains sampled edges
+and its open search list across fair scheduling quanta. A rejected direct
+candidate continues into obstacle search without replaying the same direct
+path. Native foreground delays pause the search instead of discarding it at
+20 seconds elapsed. The shared 2 ms update allowance and 1,000 ms measured
+work ceiling remain; failed complete attempts still try alternative slots.
+These are computation limits, not frame-rate measurements.
+
+The manual straightening report has a separate explanation: 322's job stopped
+at 19:57:26.914; 318 assigned 325 at 19:57:28.383; 322 restarted at 19:57:39.
+Its 66% load was below the 85% departure threshold, but the combine was already
+reserved. After 325 released, 322 was called at 19:58:23.193 and resumed grain
+transfer before departing at its cutoff at 19:59:14.759. The fix does not steal
+another tractor's valid reservation based solely on distance. Evidence is in
+local out/incident-3032-unload-arrival/; monitoring stays paused.
+
+Regression coverage includes physically articulated entry, fill-node overshoot,
+manual alignment, close-range replan, checked course fidelity, live obstacles,
+stationary/moving transitions, full/manual departure, assignment cleanup and
+finite costly arrival fallback through the real scheduler. Timing is injected
+in tests; engine transforms, density and collision queries are adapters.
+Source and extracted-package release checks are required. Real steering,
+arrival clearance and uninterrupted whole-field completion still need the
+user's in-game test; retain the 3031 milestone and all previous releases.
+
 ## Build 3032 - final clearance geometry and stalled final unloading
 
 Follow-up to the preserved 3031 whole-field milestone. The 13 October log

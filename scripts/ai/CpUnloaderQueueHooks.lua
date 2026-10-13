@@ -42,6 +42,7 @@ end
 local update = U.update
 function U:update(dt)
     Q.releaseFinishedCombine(self)
+    Q.updateStoppedApproach(self)
     Q.updateFinalUnload(self)
     if self.vehicle:getCpDriveStrategy()~=self then return end
     Q.resumeWaitingApproach(self)
@@ -60,11 +61,19 @@ function U:getDriveData(...)
     if Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
     if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
     speed=Q.finalUnloadSpeed(self,speed)
+    speed=Q.stoppedApproachSpeed(self,speed)
     return gx,gz,forwards,speed,acceleration
 end
 
 local stoppedUnload = U.unloadStoppedCombine
 function U:unloadStoppedCombine()
+    if self.queueStationaryPipe==self.combineToUnload and not Q.stationaryGrainTarget(self) then
+        self.queueStationaryPipe=nil
+        local c=self.combineToUnload and self.combineToUnload:getCpDriveStrategy()
+        if c and not c:willWaitForUnloadToFinish() and not c:isUnloadFinished() then
+            self:startCourseFollowingCombine(); self:setMaxSpeed(0); return
+        end
+    end
     if Q.watchFinalUnload(self) then return end
     return stoppedUnload(self)
 end
@@ -73,6 +82,36 @@ local stoppedApproach = U.startUnloadingStoppedCombine
 function U:startUnloadingStoppedCombine()
     if Q.deferFinalPipeApproach(self) then return end
     return stoppedApproach(self)
+end
+
+local admission = U.isOkToStartUnloadingCombine
+function U:isOkToStartUnloadingCombine()
+    if Q.stoppedAdmission(self)==false then return false end
+    return admission(self)
+end
+
+local needsPath = U.isPathfindingNeeded
+function U:isPathfindingNeeded(vehicle,target,...)
+    if vehicle==self.vehicle and Q.stationaryGrainTarget(self)
+            and target==self:getPipeOffsetReferenceNode() and Q.pipeEntryAligned(self)==false then
+        return true -- nearby but misaligned still needs the checked rear entry
+    end
+    return needsPath(self,vehicle,target,...)
+end
+
+local startUnload = U.startUnloadingCombine
+function U:startUnloadingCombine()
+    if Q.stationaryGrainTarget(self) then
+        self.queueStationaryPipe=self.combineToUnload
+        self:startUnloadingStoppedCombine(); return
+    end
+    return startUnload(self)
+end
+
+local movingUnload = U.unloadMovingCombine
+function U:unloadMovingCombine()
+    if Q.watchStoppedMovingUnload(self) then return end
+    return movingUnload(self)
 end
 
 local allowed = U.isAllowedToBeCalled
@@ -88,6 +127,7 @@ end
 -- its exact final goal. Other failures retain native retry/error handling.
 local waitingPath = U.startPathfindingToWaitingCombine
 function U:startPathfindingToWaitingCombine(x,z)
+    x,z=Q.stoppedApproachGoal(self,x,z)
     if Q.deferWaitingApproach(self,x,z) then return end
     if self.queueData then self.queueData.waitingApproach={combine=self.combineToUnload,x=x,z=z} end
     return waitingPath(self,x,z)
@@ -106,6 +146,7 @@ function U:onPathfindingDoneToWaitingCombine(controller,success,course,invalid)
     if not success and attempt and attempt.combine==self.combineToUnload
             and Q.deferWaitingApproach(self,attempt.x,attempt.z) then return false end
     if self.queueData then self.queueData.waitingApproach=nil end
+    Q.stoppedApproachPath(self,success,course)
     return waitingDone(self,controller,success,course,invalid)
 end
 
@@ -223,6 +264,8 @@ end
 -- full-job event consumed by AD. Do not impose a second handover gate.
 local unload = U.startUnloadingTrailers
 function U:startUnloadingTrailers(...)
+    Q.clearStoppedApproach(self)
+    self.queueStationaryPipe=nil; self.queueStoppedWatch=nil
     Q.clearFinalUnload(self)
     if Q.enabled(self) then
         -- Remember a pocket departure only after native reverse clearance.
@@ -244,6 +287,7 @@ end
 
 local last = U.onLastWaypointPassed
 function U:onLastWaypointPassed(...)
+    if Q.stoppedApproachLast(self) then return end
     if Q.finishFinalReverse(self) then return end
     if Q.owns(self) then Q.onLast(self); return end
     return last(self,...)
@@ -258,6 +302,8 @@ end
 
 local remove = U.delete
 function U:delete(...)
+    Q.clearStoppedApproach(self)
+    self.queueStationaryPipe=nil; self.queueStoppedWatch=nil
     Q.clearFinalUnload(self)
     local result=remove(self,...)
     Q.remove(self)

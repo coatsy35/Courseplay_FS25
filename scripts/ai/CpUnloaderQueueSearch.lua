@@ -263,9 +263,8 @@ end
 function S.choicePhase(search)
     if not search.choices then return end
     if search.arrival then
-        if search.index<=#search.choices then return 'direct '..search.index end
-        if search.fallback then return 'arrival '..(search.fallbackIndex-1) end
-        return
+        local slot=search.slots and search.slots[search.index]
+        return (slot and slot.fallback and 'arrival ' or 'direct ')..search.index
     end
     if not search.escape then return end
     if search.index<=#search.choices then return search.index end
@@ -277,15 +276,20 @@ function S.chargeChoices(search,elapsed,startedPhase)
     -- A completed candidate may have advanced the search during this frame.
     -- Never charge its expensive last check to an untried next candidate.
     if not phase or phase~=startedPhase then return end
-    local limit=search.arrival and (search.active and 50 or 100)
+    local slot=search.slots and search.slots[search.index]
+    local limit=search.arrival and ((slot and slot.fallback and 100 or 50)*2^math.min(slot and slot.round or 0,2))
         or (type(phase)=='number' and 300/math.max(1,#search.choices) or 200)
     if search.workPhase~=phase then search.workPhase=phase; search.phaseWorkMs=0 end
     search.phaseWorkMs=search.phaseWorkMs+elapsed
     if search.phaseWorkMs<limit then return end
     if search.arrival then
-        if search.active then search.active=nil; search.index=search.index+1
-        else search.fallback=nil end
-        search.reason='arrival candidate budget exhausted; trying next nearby position'
+        -- Yield fairly without throwing away sampled edges or the open list.
+        -- Increase the next quantum so a valid but costly route can finish.
+        local slot=search.slots and search.slots[search.index]
+        if slot then slot.round=(slot.round or 0)+1 end
+        search.index=search.index%#search.choices+1
+        search.workPhase=nil; search.phaseWorkMs=0
+        return
     elseif type(phase)=='number' then
         search.active=nil; search.index=search.index+1
         search.reason='fixed clearance candidate budget exhausted'
@@ -296,7 +300,40 @@ function S.chargeChoices(search,elapsed,startedPhase)
     return search.reason
 end
 
+-- Arrival candidates retain their exact validation/search state between turns.
+-- A rejected direct path proceeds from the existing root/open list, without
+-- recreating and rechecking the same Dubins path on every fallback.
+function S.stepArrival(search,budget)
+    search.slots=search.slots or {}
+    local index=search.index
+    local slot=search.slots[index]
+    if not slot then
+        slot={}; search.slots[index]=slot
+        slot.state,search.reason=S.new(search.world,search.choices[index],search.corridor)
+        slot.failed=not slot.state
+        if slot.state then slot.state.directOnly=true end
+    end
+    if not slot.failed then
+        local done,path,reason=S.step(slot.state,budget)
+        if path then path.goal=search.choices[index]; return true,path end
+        if not done then return false end
+        search.reason=reason
+        if not slot.fallback and not search.choices[index].reverse then
+            slot.fallback=true; slot.round=0
+            slot.state.done=nil; slot.state.directOnly=nil; slot.state.direct=nil
+            slot.state.edge=nil
+        else slot.failed=true end
+    end
+    search.index=index%#search.choices+1
+    search.workPhase=nil; search.phaseWorkMs=0
+    for i=1,#search.choices do
+        if not search.slots[i] or not search.slots[i].failed then return false end
+    end
+    return true,nil,search.reason
+end
+
 function S.stepChoices(search,budget)
+    if search.arrival then return S.stepArrival(search,budget) end
     if search.index>#search.choices then
         if search.best then return true,search.best end
         if search.escape then

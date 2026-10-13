@@ -1295,3 +1295,189 @@ function Q.finalUnloadSpeed(driver,speed)
     if data.phase=='reversing' then return data.clear and math.min(speed,5) or 0 end
     return speed
 end
+
+-- A grain combine can be physically waiting with stop-for-unload disabled.
+-- Admission depends on that actual state, not its promise to remain stopped
+-- until the tank is empty. Forage/auto-aim service keeps its native behaviour.
+function Q.stationaryGrainTarget(driver)
+    local vehicle=driver.combineToUnload
+    if not Q.enabled(driver) or not vehicle or not vehicle.getIsCpActive or not vehicle:getIsCpActive() then return end
+    local c=vehicle:getCpDriveStrategy()
+    if c and c.isWaitingForUnload and c:isWaitingForUnload()
+            and not c:alwaysNeedsUnloader() and not c:hasAutoAimPipe()
+            and (vehicle.lastSpeedReal or 0)*3600<0.5 then return c end
+end
+
+function Q.pipeEntryAligned(driver)
+    local model=W.model(driver.vehicle)
+    if not model then return false end
+    local reference=driver:getPipeOffsetReferenceNode()
+    local heading=H.math.heading(reference)
+    for _,pose in ipairs(W.poses(model)) do
+        if math.abs(H.math.delta(pose.t,heading))>math.rad(10) then return false end
+    end
+    local x=localToLocal(driver.vehicle:getAIDirectionNode(),reference,0,0,0)
+    local offset=driver:getPipeOffset(driver.combineToUnload)
+    local dz=driver:getBestTargetNodeDistanceFromPipe()
+    return math.abs(x-offset)<=1 and dz~=nil and dz>=-0.5 and dz<=40
+end
+
+function Q.clearStoppedApproach(driver)
+    local data=driver.queueStoppedApproach
+    if data then W.delete(data.world); driver.queueStoppedApproach=nil end
+end
+
+local function stoppedApproachFailed(driver,reason)
+    driver:debug('Queue: stopped-combine approach stopped safely: %s',reason)
+    Q.clearStoppedApproach(driver); driver:setMaxSpeed(0)
+    driver.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+end
+
+function Q.stoppedApproachGoal(driver,x,z)
+    -- Existing final-unload reverse recovery already owns its checked lane.
+    if driver.queueFinalUnload or not Q.stationaryGrainTarget(driver) then return x,z end
+    local data=driver.queueStoppedApproach
+    if data and data.combine==driver.combineToUnload then return data.x,data.farZ end
+    Q.clearStoppedApproach(driver)
+    local model=W.model(driver.vehicle)
+    if not model then return x,z end -- native path remains available for unsupported rigs
+    local length=0
+    for _,link in ipairs(model.links) do length=length+math.abs(link.length) end
+    local rearZ=math.min(z or 0,-driver:getCombinesMeasuredBackDistance()-5)
+    local runIn=math.max(12,3*length)
+    data={combine=driver.combineToUnload,phase='pathfinding',x=x or 0,rearZ=rearZ,
+        farZ=rearZ-runIn,started=g_currentMission.time}
+    driver.queueStoppedApproach=data
+    driver:debug('Queue: stopped-combine rear entry %.1f, %.1f; %.1f m whole-rig run-in',data.x,data.farZ,runIn)
+    return data.x,data.farZ
+end
+
+function Q.stoppedApproachPath(driver,success,course)
+    local data=driver.queueStoppedApproach
+    if not data then return end
+    if not success or data.combine~=driver.combineToUnload or driver.state~=driver.states.WAITING_FOR_PATHFINDER then
+        Q.clearStoppedApproach(driver); return
+    end
+    data.course=course; data.phase='approaching'
+end
+
+function Q.stoppedAdmission(driver)
+    local data=driver.queueStoppedApproach
+    if data and data.combine==driver.combineToUnload and data.phase~='ready' then return false end
+    if Q.stationaryGrainTarget(driver) then return Q.pipeEntryAligned(driver) end
+end
+
+function Q.stoppedApproachLast(driver)
+    local data=driver.queueStoppedApproach
+    if not data or driver.course~=data.course or driver.state~=driver.states.DRIVING_TO_COMBINE then return false end
+    driver:setMaxSpeed(0)
+    if data.phase=='driving' then
+        if not Q.arrived(driver,data.goal) or not Q.pipeEntryAligned(driver) then
+            stoppedApproachFailed(driver,'whole rig did not reach the checked pipe entry'); return true
+        end
+        data.phase='ready'
+        if driver:isOkToStartUnloadingCombine() then
+            Q.clearStoppedApproach(driver); driver:startUnloadingCombine()
+        else stoppedApproachFailed(driver,'combine no longer ready at pipe entry') end
+        return true
+    end
+    if data.phase~='approaching' then return true end
+    local world,reason=W.new(driver)
+    if not world then stoppedApproachFailed(driver,reason); return true end
+    data.world=world
+    local reference=driver:getPipeOffsetReferenceNode()
+    local x,_,z=localToWorld(reference,data.x,0,data.rearZ)
+    data.goal={x=x,z=z,t=H.math.heading(reference)}
+    data.search,reason=CpUnloaderQueueSearch.new(world,data.goal)
+    if not data.search then stoppedApproachFailed(driver,reason); return true end
+    data.phase='checking'; data.work=0
+    return true
+end
+
+function Q.updateStoppedApproach(driver)
+    local data=driver.queueStoppedApproach
+    if not data then return end
+    local state=driver.state
+    if data.combine~=driver.combineToUnload or (state~=driver.states.WAITING_FOR_PATHFINDER
+            and state~=driver.states.DRIVING_TO_COMBINE) then Q.clearStoppedApproach(driver); return end
+    if finalDeparting(driver) or not Q.stationaryGrainTarget(driver) then
+        if state==driver.states.WAITING_FOR_PATHFINDER and driver.pathfinderController then
+            driver.pathfinderController.pathfinder=nil
+        end
+        if driver.queueData then driver.queueData.waitingApproach=nil; driver.queueData.deferredApproach=nil end
+        Q.clearStoppedApproach(driver); driver:setMaxSpeed(0)
+        if finalDeparting(driver) then driver:changeToUnloadWhenTrailerFull()
+        elseif state==driver.states.DRIVING_TO_COMBINE and Q.pipeEntryAligned(driver)
+                and driver:isOkToStartUnloadingCombine() then
+            driver:startCourseFollowingCombine()
+        else driver:startWaitingForSomethingToDo() end
+        return
+    end
+    if g_currentMission.time-data.started>90000 then stoppedApproachFailed(driver,'rear entry timed out'); return end
+    if data.phase=='checking' then
+        driver:setMaxSpeed(0)
+        local timer=openIntervalTimer()
+        local done,path,reason
+        repeat done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
+        until done or readIntervalTimerMs(timer)>=2
+        data.work=data.work+readIntervalTimerMs(timer); closeIntervalTimer(timer)
+        if not done and data.work<1000 then return end
+        if not path then stoppedApproachFailed(driver,reason or 'run-in search budget exhausted'); return end
+        local points={}
+        -- Retain every checked point: thinning a curve introduces unchecked chords.
+        for _,p in ipairs(path) do points[#points+1]={x=p.x,z=p.z} end
+        data.path=path; data.search=nil; data.phase='driving'
+        data.course=Course(driver.vehicle,points,true)
+        data.progress=W.pose(driver.vehicle:getAIDirectionNode()); data.progressTime=g_currentMission.time
+        driver.ppc:setShortLookaheadDistance(); driver:startCourse(data.course,1)
+    elseif data.phase=='driving' then
+        local here=W.pose(driver.vehicle:getAIDirectionNode())
+        if distance(here,data.progress)>0.5 then data.progress=here; data.progressTime=g_currentMission.time end
+        if g_currentMission.time-data.progressTime>12000 then stoppedApproachFailed(driver,'checked run-in made no progress'); return end
+        -- Reuse the live whole-train and seven-metre stopping horizon. Native
+        -- proximity remains enabled between these bounded periodic checks.
+        if not data.liveChecked or g_currentMission.time-data.liveChecked>=200 then
+            data.liveChecked=g_currentMission.time
+            local model,reason=W.model(driver.vehicle)
+            if not model then stoppedApproachFailed(driver,reason); return end
+            data.world.model=model
+            local poses=W.poses(model)
+            data.clear=W.clear(data.world,poses)
+            if data.clear then data.clear=Q.routeClear(data,poses,driver.ppc:getCurrentWaypointIx()) end
+        end
+    end
+end
+
+function Q.stoppedApproachSpeed(driver,speed)
+    local data=driver.queueStoppedApproach
+    if not data then return speed end
+    if data.phase=='checking' then return 0 end
+    if data.phase=='driving' then return data.clear and math.min(speed,5) or 0 end
+    return speed
+end
+
+-- A moving rendezvous can become a stationary full-tank wait before transfer.
+-- Keep ownership while replanning behind it; never issue negative forward speed.
+function Q.watchStoppedMovingUnload(driver)
+    local c=Q.stationaryGrainTarget(driver)
+    if not c or finalDeparting(driver) or not c.combineController then driver.queueStoppedWatch=nil; return false end
+    local fill=c.combineController:getFillLevel()
+    if fill<0.01 then driver.queueStoppedWatch=nil; return false end
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    local data=driver.queueStoppedWatch
+    if not data or data.combine~=driver.combineToUnload then
+        data={combine=driver.combineToUnload,pose=here,fill=fill,time=g_currentMission.time,attempts=0}
+        driver.queueStoppedWatch=data
+    end
+    if distance(here,data.pose)>0.5 or data.fill-fill>1 then
+        data.pose=here; data.fill=fill; data.time=g_currentMission.time
+    end
+    if g_currentMission.time-data.time<12000 then return false end
+    if data.attempts>=2 then stoppedApproachFailed(driver,'two stopped rendezvous retries made no progress'); return true end
+    data.attempts=data.attempts+1; data.time=g_currentMission.time
+    local x,z=driver:getPipeOffset(driver.combineToUnload)
+    driver:setMaxSpeed(0); driver:setNewState(driver.states.WAITING_FOR_PATHFINDER)
+    driver:debug('Queue: stopped rendezvous made no transfer or movement; replan rear entry %d/2',data.attempts)
+    driver:startPathfindingToWaitingCombine(x,z)
+    return true
+end

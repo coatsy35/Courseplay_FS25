@@ -699,12 +699,8 @@ function Q.tick(driver)
         if driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
             Q.release(driver); driver:startUnloadingTrailers(); return
         end
-        -- A background search can be starved by native searches. Bound elapsed
-        -- arrival waiting as well as measured work; never start a partial path.
-        if data.search and data.goal and data.goal.arrival and now()-data.searchStarted>=20000 then
-            Q.failed(data,'arrival search timed out; trying other nearby waiting positions')
-            Q.cancel(driver)
-        end
+        -- Arrival searches retain partial work while native pathfinding owns
+        -- the frame. The measured work budget in schedule remains bounded.
         if data.operation=='yield' and data.path then
             Q.yieldTarget(driver,true)
             if not Q.owns(driver) or data.operation~='yield' then return end
