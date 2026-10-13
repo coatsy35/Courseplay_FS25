@@ -127,9 +127,11 @@ end
 -- its exact final goal. Other failures retain native retry/error handling.
 local waitingPath = U.startPathfindingToWaitingCombine
 function U:startPathfindingToWaitingCombine(x,z)
-    x,z=Q.stoppedApproachGoal(self,x,z)
+    -- Reserve the original unloading entry before moving the pathfinder goal
+    -- farther back; an outgoing trailer still owns that final space.
     if Q.deferWaitingApproach(self,x,z) then return end
     if self.queueData then self.queueData.waitingApproach={combine=self.combineToUnload,x=x,z=z} end
+    x,z=Q.stoppedApproachGoal(self,x,z)
     return waitingPath(self,x,z)
 end
 

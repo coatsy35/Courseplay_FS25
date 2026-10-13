@@ -1303,8 +1303,8 @@ function Q.stationaryGrainTarget(driver)
     local vehicle=driver.combineToUnload
     if not Q.enabled(driver) or not vehicle or not vehicle.getIsCpActive or not vehicle:getIsCpActive() then return end
     local c=vehicle:getCpDriveStrategy()
-    if c and c.isWaitingForUnload and c:isWaitingForUnload()
-            and not c:alwaysNeedsUnloader() and not c:hasAutoAimPipe()
+    if c and c.isWaitingForUnload and c.alwaysNeedsUnloader and c.hasAutoAimPipe
+            and c:isWaitingForUnload() and not c:alwaysNeedsUnloader() and not c:hasAutoAimPipe()
             and (vehicle.lastSpeedReal or 0)*3600<0.5 then return c end
 end
 

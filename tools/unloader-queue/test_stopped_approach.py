@@ -171,6 +171,17 @@ class StoppedApproachTests(unittest.TestCase):
             assert(u.state==u.states.UNLOADING_MOVING_COMBINE and u.speed==0)
         ''')
 
+    def test_outgoing_trailer_guard_precedes_rear_goal_and_retains_assignment(self):
+        self.lua.execute('''
+            Q.deferWaitingApproach=function(driver,x,z)
+                assert(driver==u and x==0 and z==-8)
+                deferred=true; return true
+            end
+            Q.stoppedApproachGoal=function() error('outgoing trailer guard bypassed') end
+            AIDriveStrategyUnloadCombine.startPathfindingToWaitingCombine(u,0,-8)
+            assert(deferred and u.combineToUnload==harvester and not replan)
+        ''')
+
     def test_target_change_cannot_accept_stale_approach_callback(self):
         self.lua.execute('''
             u.state=u.states.WAITING_FOR_PATHFINDER; Q.stoppedApproachGoal(u,0,-8)
