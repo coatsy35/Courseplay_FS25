@@ -118,7 +118,7 @@ function W.new(strategy,model)
         if desc.terrainDataPlaneId and desc.terrainDataPlaneId ~= 0 and desc.numStateChannels and desc.numStateChannels > 0 then
             local modifier = DensityMapModifier.new(desc.terrainDataPlaneId, desc.startStateChannel, desc.numStateChannels,
                 g_currentMission.terrainRootNode)
-            local item = {modifier=modifier, filter=DensityMapFilter.new(modifier), cut={},
+            local item = {name=desc.name, modifier=modifier, filter=DensityMapFilter.new(modifier), cut={},
                 grass=desc.name=='GRASS' or desc.name=='MEADOW'}
             for state, isCut in pairs(desc.cutStates or {}) do
                 if isCut == true and type(state) == 'number' and state >= 0 and state % 1 == 0 then
@@ -138,27 +138,39 @@ function W.delete(world)
 end
 
 function W.cropFree(world, rectangle, grassVerge)
+    world.densityFailure=nil
     local a,b,d = rectangle[1],rectangle[2],rectangle[4]
+    local function reject(item,reason,count,total,states)
+        world.densityFailure=string.format('%s: crop=%s positive=%s total=%s cut={%s} at %.1f,%.1f',
+            reason,tostring(item.name),tostring(count),tostring(total),table.concat(states or {},','),a.x,a.z)
+        return false,reason
+    end
     for _, item in ipairs(world.fruit) do
         if not (grassVerge and item.grass) then
         item.modifier:setParallelogramWorldCoords(a.x,a.z,b.x,b.z,d.x,d.z,DensityCoordType.POINT_POINT_POINT)
         item.filter:setValueCompareParams(DensityValueCompareType.GREATER,0)
         local _, count, total = item.modifier:executeGet(item.filter)
-        if not H.math.finite(count) or not H.math.finite(total) or total<=0 or count<0 then return false end
-        local standing = count
+        if not H.math.finite(count) or not H.math.finite(total) or total<=0 or count<0 or count>total then
+            return reject(item,'invalid crop density',count,total)
+        end
+        local standing,states = count,{}
         for state in pairs(item.cut) do
             item.filter:setValueCompareParams(DensityValueCompareType.EQUAL,state)
             local _, cut, pixels = item.modifier:executeGet(item.filter)
-            if not H.math.finite(cut) or pixels~=total or cut<0 then return false end
+            states[#states+1]=tostring(state)..':'..tostring(cut)
+            if not H.math.finite(cut) or pixels~=total or cut<0 or cut>standing then
+                return reject(item,'inconsistent crop density',count,total,states)
+            end
             standing = standing-cut
         end
-        if standing > 0 then return false end
+        if standing > 0 then return reject(item,'standing crop',count,total,states) end
         end
     end
     return true
 end
 
 function W.bodyClear(world, body, pose, corridor, perimeterConnector)
+    world.densityFailure=nil
     local rectangle = W.rectangle(body, pose)
     local contained=G.within(rectangle,world.boundary.polygon,world.boundary.islands)
     local entrance=not contained and inEntrance(world,rectangle)
@@ -167,7 +179,8 @@ function W.bodyClear(world, body, pose, corridor, perimeterConnector)
         if G.overlap(rectangle,island) then return false,'island' end
     end
     if corridor and not corridor(rectangle) then return false, 'outside harvested exit corridor' end
-    if not W.cropFree(world, rectangle,entrance or perimeterConnector) then return false, 'standing crop' end
+    local cropFree,cropReason=W.cropFree(world,rectangle,entrance or perimeterConnector)
+    if not cropFree then return false,cropReason end
     PathfinderUtil.setWorldPositionAndRotationOnTerrain(world.node,pose.x,pose.z,pose.t,0.5)
     -- Reuse native collision filtering, without appending every background
     -- rejection to PathfinderUtil's global debug-box array.
@@ -211,11 +224,63 @@ function W.currentBodies(vehicle)
         seen[object]=true
         local body = object.rootNode and H.getBody(object,object.rootNode)
         if not body then return false end
-        result[#result+1] = {body=body,pose=W.pose(object.rootNode)}
+        result[#result+1] = {body=body,pose=W.pose(object.rootNode),object=object}
         for _, attachment in ipairs(object.getAttachedImplements and object:getAttachedImplements() or {}) do
             if not collect(attachment.object) then return false end
         end
         return true
     end
     return collect(vehicle) and result or nil
+end
+
+-- Mounted combine/header parts move as one rigid vehicle, but empty space
+-- between their footprints is not swept by a header-width chassis rectangle.
+function W.rigidModel(vehicle)
+    local bodies=W.currentBodies(vehicle)
+    if not bodies then return nil,'harvester body geometry unavailable' end
+    local origin=W.pose(vehicle:getAIDirectionNode())
+    local model={root=origin,bodies={},links={},relative={},width=0,front=-math.huge,back=math.huge}
+    for i,item in ipairs(bodies) do
+        -- A vehicle's AI markers may describe the attached work width. The
+        -- chassis uses its own dimensions; each mounted part retains its full
+        -- unfolded marker extents below, so header coverage is not discarded.
+        local body=item.object==vehicle and item.body.collision or item.body
+        local dx,dz=item.pose.x-origin.x,item.pose.z-origin.z
+        model.relative[i]={x=dx*math.cos(origin.t)-dz*math.sin(origin.t),
+            z=dx*math.sin(origin.t)+dz*math.cos(origin.t),t=H.math.delta(item.pose.t,origin.t)}
+        model.bodies[i]=body
+        model.width=math.max(model.width,body.left-body.right)
+        for _,point in ipairs(W.rectangle(body,item.pose,0)) do
+            local along=(point.x-origin.x)*math.sin(origin.t)+(point.z-origin.z)*math.cos(origin.t)
+            model.front=math.max(model.front,along); model.back=math.min(model.back,along)
+        end
+    end
+    return model
+end
+
+function W.rigidClear(world,root)
+    for i,body in ipairs(world.model.bodies) do
+        local relative=world.model.relative[i]
+        local x,z=H.math.position(root,relative.x,relative.z)
+        local clear,reason=W.bodyClear(world,body,{x=x,z=z,t=root.t+relative.t})
+        if not clear then
+            world.failureDetail=string.format('component=%d at %.1f,%.1f: %s',i,x,z,world.densityFailure or reason)
+            return false,reason
+        end
+    end
+    world.failureDetail=nil
+    return true
+end
+
+function W.sameRigidShape(a,b)
+    if #a.bodies~=#b.bodies then return false end
+    for i,body in ipairs(a.bodies) do
+        for _,key in ipairs({'left','right','front','back'}) do
+            if math.abs(body[key]-b.bodies[i][key])>0.01 then return false end
+        end
+        local x,y=a.relative[i],b.relative[i]
+        if math.abs(x.x-y.x)>0.01 or math.abs(x.z-y.z)>0.01
+                or math.abs(H.math.delta(x.t,y.t))>math.rad(0.1) then return false end
+    end
+    return true
 end

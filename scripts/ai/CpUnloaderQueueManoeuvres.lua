@@ -24,21 +24,12 @@ function Q.beginFinishClearance(combine)
                 and distance(origin,W.pose(vehicle:getAIDirectionNode()))<100 then neighbour=true; break end
     end
     if not neighbour then return false end
-    local bodies=W.currentBodies(combine.vehicle)
-    if not bodies then return false end
-    -- Conservatively include the complete attached header in one rigid box.
-    local body={left=-math.huge,right=math.huge,front=-math.huge,back=math.huge}
-    for _,item in ipairs(bodies) do
-        for _,p in ipairs(W.rectangle(item.body,item.pose,0)) do
-            local dx,dz=p.x-origin.x,p.z-origin.z
-            local x,z=dx*math.cos(origin.t)-dz*math.sin(origin.t),dx*math.sin(origin.t)+dz*math.cos(origin.t)
-            body.left=math.max(body.left,x); body.right=math.min(body.right,x)
-            body.front=math.max(body.front,z); body.back=math.min(body.back,z)
-        end
-    end
-    local world,reason=W.new(combine,{root=origin,bodies={body},links={},width=body.left-body.right})
+    local model,reason=W.rigidModel(combine.vehicle)
+    if not model then return false end
+    local world
+    world,reason=W.new(combine,model)
     if not world then combine:debug('Queue: final clearance unavailable: %s',reason); return false end
-    local length=math.min(25,math.max(20,body.front-body.back+8))
+    local length=math.min(25,math.max(20,model.front-model.back+8))
     local x,z=H.math.position(origin,0,length)
     combine.queueFinishClearance={world=world,origin=origin,goal={x=x,z=z,t=origin.t},length=length,
         sample=0,started=g_currentMission.time,progressTime=g_currentMission.time,progress=origin}
@@ -73,6 +64,12 @@ function Q.driveFinishClearance(combine)
     local time=g_currentMission.time
     if time-data.started>60000 then Q.completeFinishClearance(combine,'timed out safely'); return end
     local here=W.pose(combine.vehicle:getAIDirectionNode())
+    -- Raising an implement can change its horizontal footprint. Use live parts
+    -- on each update; keep the validated route's original frame and heading.
+    local model=W.rigidModel(combine.vehicle)
+    if not model then Q.completeFinishClearance(combine,'geometry unavailable'); return end
+    if not data.driving and not W.sameRigidShape(data.world.model,model) then data.sample=0 end
+    data.world.model=model
     if data.driving then
         if distance(here,data.goal)<=1 then Q.completeFinishClearance(combine,'completed'); return end
         if distance(here,data.progress)>0.5 then data.progress=here; data.progressTime=time end
@@ -88,7 +85,7 @@ function Q.driveFinishClearance(combine)
             data.nextCheck=time+200; data.clear=true
             for step=0,8 do
                 local x,z=H.math.position(here,0,math.min(step*0.5,distance(here,data.goal)))
-                local clear=W.clear(data.world,{{x=x,z=z,t=here.t}})
+                local clear=W.rigidClear(data.world,{x=x,z=z,t=here.t})
                 if not clear then data.clear=false; break end
             end
         end
@@ -108,7 +105,7 @@ function Q.driveFinishClearance(combine)
     for checked=1,8 do
         local x,z=H.math.position(data.origin,0,data.sample*0.5)
         local clear
-        clear,reason=W.clear(data.world,{{x=x,z=z,t=data.origin.t}})
+        clear,reason=W.rigidClear(data.world,{x=x,z=z,t=data.origin.t})
         if not clear then break end
         data.sample=data.sample+1
         if data.sample*0.5>data.length or readIntervalTimerMs(timer)>=2 then break end
@@ -117,7 +114,7 @@ function Q.driveFinishClearance(combine)
     if reason then
         if reason=='vehicle or obstacle' and time-data.started<15000 then
             data.sample=0; data.retryAt=time+1000
-        else Q.completeFinishClearance(combine,'unavailable: '..reason) end
+        else Q.completeFinishClearance(combine,'unavailable: '..(data.world.failureDetail or reason)) end
     elseif data.sample*0.5>data.length then
         local course=Course.createFromNode(combine.vehicle,combine.vehicle:getAIDirectionNode(),0,0,data.length,1,false)
         data.driving=true; data.progressTime=time
@@ -1042,4 +1039,259 @@ function Q.yieldTarget(driver,checkOnly)
     -- for a reachable clear footprint instead of repeating those destinations.
     local target={x=choices[1].x,z=choices[1].z,t=here.t,choices=choices,escape=accepts}
     return target
+end
+
+-- A final, stationary unload has no harvesting progress to rescue a failed pipe
+-- approach. Recover only after both the rig and the grain transfer stop.
+function Q.clearFinalUnload(driver)
+    local data=driver.queueFinalUnload
+    if data then W.delete(data.world); driver.queueFinalUnload=nil end
+end
+
+local function finalUnloadTarget(driver)
+    local vehicle=driver.combineToUnload
+    if not Q.enabled(driver) or not vehicle or not vehicle:getIsCpActive() then return nil end
+    local combine=vehicle:getCpDriveStrategy()
+    if not combine or not combine.isWaitingForUnloadAfterCourseEnded
+            or not combine:isWaitingForUnloadAfterCourseEnded()
+            or not combine.combineController then return nil end
+    return combine,combine.combineController:getFillLevel()
+end
+
+local function stopFinalUnload(driver,reason)
+    driver:debug('Queue: final unload recovery stopped safely: %s',reason)
+    Q.clearFinalUnload(driver)
+    driver:setMaxSpeed(0)
+    driver.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+end
+
+local function finalDeparting(driver)
+    return driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver)
+end
+
+local function beginFinalReverse(driver,data)
+    if data.attempts>=2 then stopFinalUnload(driver,'two approaches made no progress'); return end
+    W.delete(data.world)
+    local world,reason=W.new(driver)
+    if not world then stopFinalUnload(driver,reason); return end
+    data.world=world
+    local origin=world.model.root
+    local x,z=H.math.position(origin,0,-15)
+    data.search,reason=CpUnloaderQueueSearch.new(world,{x=x,z=z,t=origin.t,reverse=true})
+    if not data.search then stopFinalUnload(driver,'reverse clearance: '..reason); return end
+    data.attempts=data.attempts+1; data.phase='checkingReverse'; data.started=g_currentMission.time
+    data.origin=origin; data.goal={x=x,z=z,t=origin.t}
+    driver:debug('Queue: final unload made no movement or transfer for 12 s; checking reverse recovery %d/2',data.attempts)
+end
+
+function Q.watchFinalUnload(driver)
+    if not driver.state or driver.state~=driver.states.UNLOADING_STOPPED_COMBINE then return false end
+    local combine,fill=finalUnloadTarget(driver)
+    if not combine or fill<0.01 or finalDeparting(driver) then
+        Q.clearFinalUnload(driver); return false
+    end
+    local time=g_currentMission.time
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    local data=driver.queueFinalUnload
+    if not data or data.combine~=driver.combineToUnload then
+        Q.clearFinalUnload(driver)
+        data={combine=driver.combineToUnload,phase='watching',attempts=0,progress=here,fill=fill,progressTime=time}
+        driver.queueFinalUnload=data
+    end
+    if data.phase=='checkingReverse' then driver:setMaxSpeed(0); return true end
+    if data.phase~='watching' then return false end
+    if distance(here,data.progress)>0.5 or data.fill-fill>1 then
+        data.progress=here; data.fill=fill; data.progressTime=time
+    end
+    if time-data.progressTime>=12000 then
+        beginFinalReverse(driver,data); driver:setMaxSpeed(0); return true
+    end
+    return false
+end
+
+-- A recovery must reach its checked run-in before native CP resumes the final
+-- straight pipe approach. Check the whole articulated rig, including headers
+-- of neighbouring combines through the ordinary native collision detector.
+function Q.deferFinalPipeApproach(driver)
+    local data=driver.queueFinalUnload
+    if not data or data.combine~=driver.combineToUnload then return false end
+    if data.phase=='checkingLane' then driver:setMaxSpeed(0); return true end
+    if data.phase~='replanning' then return false end
+    if driver.course:getDistanceToLastWaypoint(driver.ppc:getCurrentWaypointIx())>3 then return true end
+    if finalDeparting(driver) then
+        Q.clearFinalUnload(driver); driver:changeToUnloadWhenTrailerFull(); return true
+    end
+    local world,reason=W.new(driver)
+    if not world then stopFinalUnload(driver,reason); return true end
+    data.world=world
+    local reference=driver:getPipeOffsetReferenceNode()
+    local offsetX=driver:getPipeOffset(driver.combineToUnload)
+    local _,_,z=localToLocal(driver.vehicle:getAIDirectionNode(),reference,0,0,0)
+    local remaining=driver:getBestTargetNodeDistanceFromPipe()
+    if not remaining or remaining<0 or remaining>40 then
+        stopFinalUnload(driver,'final fill-node alignment unavailable'); return true
+    end
+    local x,_,gz=localToWorld(reference,offsetX,0,z+remaining)
+    data.laneOrigin=world.model.root; data.laneGoal={x=x,z=gz,t=H.math.heading(reference)}
+    data.lanePoses=W.poses(world.model)
+    for _,pose in ipairs(data.lanePoses) do
+        if math.abs(H.math.delta(pose.t,data.laneGoal.t))>math.rad(10) then
+            stopFinalUnload(driver,'complete rig not aligned for final pipe approach'); return true
+        end
+    end
+    data.laneCount=math.max(1,math.ceil(distance(data.laneOrigin,data.laneGoal)/0.25))
+    data.laneStep=0; data.phase='checkingLane'; data.started=g_currentMission.time
+    driver:setMaxSpeed(0)
+    return true
+end
+
+function Q.finishFinalReverse(driver)
+    local data=driver.queueFinalUnload
+    if not data or data.phase~='reversing' or driver.state~=driver.states.MOVING_BACK_BEFORE_PATHFINDING
+            or driver.course~=data.course then return false end
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    if distance(here,data.goal)>2 then stopFinalUnload(driver,'reverse ended before clearance'); return true end
+    W.delete(data.world); data.world=nil; data.course=nil
+    local combine,fill=finalUnloadTarget(driver)
+    if not combine then
+        Q.clearFinalUnload(driver)
+        if data.combine.queueFinishedEmptyCombine then
+            driver:setNewState(driver.states.UNLOADING_STOPPED_COMBINE)
+            Q.releaseFinishedCombine(driver)
+        else driver:startWaitingForSomethingToDo() end
+        return true
+    end
+    if finalDeparting(driver) then
+        Q.clearFinalUnload(driver)
+        driver:changeToUnloadWhenTrailerFull()
+        return true
+    end
+    if fill<0.01 then
+        Q.clearFinalUnload(driver); driver:setNewState(driver.states.UNLOADING_STOPPED_COMBINE)
+        driver:unloadStoppedCombine(); return true
+    end
+    local x,z=driver:getPipeOffset(driver.combineToUnload)
+    -- Negative local Z is behind the pipe reference, with room for the trailer
+    -- to settle. A second attempt uses a longer run-in, never the same goal.
+    z=math.min(z-15-10*(data.attempts-1),-driver:getCombinesMeasuredBackDistance()-10)
+    data.phase='replanning'; data.started=g_currentMission.time
+    driver:setNewState(driver.states.WAITING_FOR_PATHFINDER)
+    driver:debug('Queue: final unload recovery %d/2, native replan at pipe offset %.1f, %.1f',data.attempts,x,z)
+    driver:startPathfindingToWaitingCombine(x,z)
+    return true
+end
+
+function Q.updateFinalUnload(driver)
+    local data=driver.queueFinalUnload
+    if not data then return end
+    local combine=finalUnloadTarget(driver)
+    local phase=data.phase
+    local watching=driver.state==driver.states.UNLOADING_STOPPED_COMBINE
+    local reversing=driver.state==driver.states.MOVING_BACK_BEFORE_PATHFINDING and driver.course==data.course
+    local approaching=driver.state==driver.states.WAITING_FOR_PATHFINDER or driver.state==driver.states.DRIVING_TO_COMBINE
+    -- A successful job stop may remove the combine strategy mid-reverse.
+    -- Finish the already checked course before native release/departure.
+    local finishedWhileReversing=not combine and reversing and data.combine==driver.combineToUnload
+        and data.combine.queueFinishedEmptyCombine
+    if not combine and data.combine==driver.combineToUnload and reversing and not finishedWhileReversing then
+        Q.clearFinalUnload(driver); driver:setMaxSpeed(0); driver:startWaitingForSomethingToDo(); return
+    end
+    if data.combine~=driver.combineToUnload or not combine and not finishedWhileReversing
+            or (phase=='watching' or phase=='checkingReverse') and not watching
+            or phase=='reversing' and not reversing
+            or (phase=='replanning' or phase=='checkingLane') and not approaching then
+        Q.clearFinalUnload(driver); return
+    end
+    data.departing=finalDeparting(driver)
+    if phase=='watching' then return end
+    local time=g_currentMission.time
+    if time-data.started>90000 then stopFinalUnload(driver,'recovery timed out'); return end
+    if phase=='replanning' then
+        if data.departing then
+            -- The controller coroutine only resumes in the subsequent native
+            -- update. Retire this owned replan before native departure starts.
+            if driver.pathfinderController then driver.pathfinderController.pathfinder=nil end
+            if driver.queueData then
+                driver.queueData.waitingApproach=nil; driver.queueData.deferredApproach=nil
+            end
+            Q.clearFinalUnload(driver)
+            driver:changeToUnloadWhenTrailerFull()
+        end
+        return
+    end
+    if phase=='checkingReverse' or phase=='checkingLane' then
+        driver:setMaxSpeed(0)
+        if data.departing then
+            Q.clearFinalUnload(driver); driver:changeToUnloadWhenTrailerFull(); return
+        end
+        local timer=openIntervalTimer()
+        local done,path,reason
+        for i=1,8 do
+            if phase=='checkingReverse' then
+                done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
+            else
+                local a,b=data.laneOrigin,data.laneGoal
+                local f=data.laneStep/data.laneCount
+                local pose={x=a.x+(b.x-a.x)*f,z=a.z+(b.z-a.z)*f,t=a.t+H.math.delta(b.t,a.t)*f}
+                local poses=H.advance(data.world.model,data.lanePoses,pose)
+                local clear
+                clear,reason=W.clear(data.world,poses)
+                if not clear then done=true else
+                    data.lanePoses=poses; data.laneStep=data.laneStep+1
+                    done=data.laneStep>data.laneCount; path=done and true or nil
+                end
+            end
+            if done or readIntervalTimerMs(timer)>=2 then break end
+        end
+        closeIntervalTimer(timer)
+        if done and not path then stopFinalUnload(driver,'checked '..phase..': '..(reason or 'unavailable')); return end
+        if not done then return end
+        if phase=='checkingLane' then
+            W.delete(data.world); data.world=nil
+            data.phase='watching'; data.progress=W.pose(driver.vehicle:getAIDirectionNode())
+            data.fill=combine.combineController:getFillLevel(); data.progressTime=time
+            driver:startUnloadingStoppedCombine()
+            return
+        end
+        local points={}
+        for i,p in ipairs(path) do
+            if i==1 or i==#path or i%4==0 then points[#points+1]={x=p.trackX,z=p.trackZ,rev=true} end
+        end
+        data.search=nil; data.phase='reversing'; data.started=time
+        data.progressTime=time; data.progress=W.pose(driver.vehicle:getAIDirectionNode())
+        data.course=Course(driver.vehicle,points,true)
+        driver.ppc:setShortLookaheadDistance()
+        driver:startCourse(data.course,1)
+        driver:setNewState(driver.states.MOVING_BACK_BEFORE_PATHFINDING)
+        return
+    end
+    -- Live reverse sweep and native proximity are both required. Never reverse
+    -- further on the basis of the old search if another vehicle has arrived.
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    if distance(here,data.progress)>0.5 then data.progress=here; data.progressTime=time end
+    if time-data.progressTime>12000 then stopFinalUnload(driver,'reverse made no progress'); return end
+    local dx,dz=here.x-data.origin.x,here.z-data.origin.z
+    if math.abs(dx*math.cos(data.origin.t)-dz*math.sin(data.origin.t))>1
+            or math.abs(H.math.delta(here.t,data.origin.t))>math.rad(2) then
+        stopFinalUnload(driver,'reverse deviated from checked route'); return
+    end
+    local model,reason=W.model(driver.vehicle)
+    if not model then stopFinalUnload(driver,reason); return end
+    data.world.model=model
+    local poses=W.poses(model)
+    data.clear=true
+    for step=0,8 do
+        local x,z=H.math.position(here,0,-math.min(step*0.5,distance(here,data.goal)))
+        poses=H.advance(model,poses,{x=x,z=z,t=here.t})
+        local clear=W.clear(data.world,poses)
+        if not clear then data.clear=false; break end
+    end
+end
+
+function Q.finalUnloadSpeed(driver,speed)
+    local data=driver.queueFinalUnload
+    if not data then return speed end
+    if data.phase=='checkingReverse' or data.phase=='checkingLane' then return 0 end
+    if data.phase=='reversing' then return data.clear and math.min(speed,5) or 0 end
+    return speed
 end

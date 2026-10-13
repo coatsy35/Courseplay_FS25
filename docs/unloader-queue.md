@@ -1,3 +1,43 @@
+## Build 3032 - final clearance geometry and stalled final unloading
+
+Follow-up to the preserved 3031 whole-field milestone. The 13 October log
+proved a final parking rejection and a prolonged final pipe approach, but did
+not identify the crop sample or prove which body caused the obstruction.
+
+Final parking now sweeps the combine and mounted header as separate rigid
+footprints, preserving each component's position and heading. Use the chassis
+dimensions and retain unfolded marker extents on mounted parts. This removes
+the header-width rectangle along the entire chassis, including work markers
+forwarded through the parent vehicle.
+Changing component geometry restarts initial validation; live checks, native
+proximity braking, field boundaries and crop protection remain in force.
+Invalid or inconsistent density readings are reported separately from standing
+crop, with crop name, positive/cut counts, component and sample coordinates.
+Unknown readings still prevent movement.
+
+Preserve the first native final approach. Only a stationary end-of-course
+unload with grain remaining gets a watchdog: actual movement above 0.5 m or a
+source-tank reduction above 1 litre resets its 12-second no-progress timer.
+A stalled attempt checks a 15 m straight reverse for the complete rig before
+moving, then asks native pathfinding for a longer run-in behind the pipe.
+The re-approach checks the complete articulated rig before native pipe
+following resumes. Searches advance in bounded slices; native proximity and
+live reverse checks remain active. Keep the existing assignment throughout.
+
+Limit recovery to two attempts with different run-in distances. An unsupported
+reverse, blocked sweep, deviation, prolonged stop or timeout stops safely with
+the native no-path message; there is no unchecked escape. Full/manual departure
+and a combine that empties during recovery retain native completion and AD
+handover. Normal harvesting, ordinary unloading and arrival preparation retain
+the 3031 behaviour. Scheduled monitoring stays paused.
+
+Regression coverage includes crop beside the chassis outside the real sweep,
+cut canola, invalid readings, rotated/asymmetric and changing component poses,
+real header obstructions, motion/transfer progress, complete-trailer reverse
+tracking, late obstacles, bounded retries, cancellation and native departure.
+Automated checks do not establish in-game acceptance: repeat the successful
+course and inspect the final clearance and final load on build 3032.
+
 ## Completed milestone - whole-field harvesting in build 3031
 
 On 13 October 2026 the user confirmed that the current release completed the

@@ -104,6 +104,8 @@ def check_queue(packager):
     # Authorised 3031 final-unload parking: native method bodies remain intact.
     expected |= {('C', name) for name in ('driveUnloadOnField', 'onLastWaypointPassed',
         'isWaitingForUnloadAfterCourseEnded', 'isReadyToUnload', 'getCanCutterBeTurnedOff', 'updateFieldworkOffset', 'delete')}
+    # Final-only stalled unload recovery; normal native method bodies are intact.
+    expected |= {('U', 'unloadStoppedCombine'), ('U', 'startUnloadingStoppedCombine')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
     print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)
@@ -121,6 +123,7 @@ if __name__ == '__main__':
                                 'unloader-queue/test_native_departure.py', 'unloader-queue/test_yield.py',
                                 'unloader-queue/test_finished_combine.py',
                                 'unloader-queue/test_finish_clearance.py',
+                                'unloader-queue/test_final_approach.py',
                                 'unloader-queue/test_departure_threshold.py',
                                 'unloader-queue/test_harvester_bypass.py',
                                 'unloader-queue/test_combined_recovery.py',

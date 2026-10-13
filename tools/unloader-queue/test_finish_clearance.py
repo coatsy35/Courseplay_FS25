@@ -194,4 +194,74 @@ class FinishClearanceTests(unittest.TestCase):
         ''')
 
 
+    def test_crop_in_empty_gap_beside_chassis_does_not_block_header_move(self):
+        self.lua.execute('''
+            -- A small patch behind the header and outside the chassis. The old
+            -- union box covers it at the starting pose; neither real part does.
+            harvester.getAIMarkers=function()
+                return {x=7.6,z=5,t=0},{x=-7.6,z=5,t=0},{x=0,z=-4,t=0}
+            end
+            DensityMapModifier.new=function()
+                return {setParallelogramWorldCoords=function(self,ax,az,bx,bz,dx,dz)
+                    self.rectangle={{x=ax,z=az},{x=bx,z=bz},{x=bx+dx-ax,z=bz+dz-az},{x=dx,z=dz}}
+                end,executeGet=function(self,filter)
+                    local hit=G.inside(self.rectangle,{x=6,z=-2})
+                    return 0,(filter.mode==1 and hit) and 1 or 0,100
+                end}
+            end
+            advance(); plan()
+            assert(c.queueFinishClearance and c.queueFinishClearance.driving and not finishes)
+        ''')
+
+    def test_cut_canola_is_clear_and_invalid_density_has_distinct_diagnosis(self):
+        self.lua.execute('''
+            g_fruitTypeManager.getFruitTypes=function()
+                return {{name='CANOLA',terrainDataPlaneId=1,startStateChannel=0,numStateChannels=4,cutStates={[11]=true}}}
+            end
+            densityStates={[11]=100}
+            advance(); plan(); assert(c.queueFinishClearance.driving)
+            Q.clearFinishClearance(c); c.queueFinishAttempted=nil; densityTotal=0
+            c.unloadState=c.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
+            local message
+            c.debug=function(_,format,...) message=string.format(format,...) end
+            advance(); plan()
+            assert(finishes==1 and message:find('invalid crop density',1,true))
+            assert(message:find('crop=CANOLA',1,true) and not message:find('standing crop',1,true))
+        ''')
+
+    def test_header_geometry_change_restarts_initial_sweep(self):
+        self.lua.execute('''
+            advance(); advance()
+            assert(c.queueFinishClearance.sample==8)
+            header.rootNode.x=header.rootNode.x+0.5
+            advance()
+            assert(c.queueFinishClearance.sample==8 and not starts)
+            plan(); assert(c.queueFinishClearance.driving)
+        ''')
+
+    def test_separate_rotated_offset_components_preserve_world_footprints(self):
+        self.lua.execute('''
+            harvester.rootNode={x=31,z=-14,t=1.2}
+            header.rootNode={x=37,z=-9,t=1.45}
+            header.size.widthOffset=1.4
+            local originals=W.currentBodies(harvester)
+            local model=W.rigidModel(harvester)
+            assert(#model.bodies==2)
+            local world={model=model}
+            local checked=0
+            local native=W.bodyClear
+            W.bodyClear=function(_,body,pose)
+                checked=checked+1
+                local actual=W.rectangle(body,pose,0)
+                local expected=W.rectangle(originals[checked].body,originals[checked].pose,0)
+                for i=1,4 do
+                    assert(math.abs(actual[i].x-expected[i].x)<0.0001)
+                    assert(math.abs(actual[i].z-expected[i].z)<0.0001)
+                end
+                return true
+            end
+            assert(W.rigidClear(world,model.root) and checked==2)
+            W.bodyClear=native
+        ''')
+
 if __name__=='__main__': unittest.main()

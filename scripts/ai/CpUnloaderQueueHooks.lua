@@ -42,6 +42,8 @@ end
 local update = U.update
 function U:update(dt)
     Q.releaseFinishedCombine(self)
+    Q.updateFinalUnload(self)
+    if self.vehicle:getCpDriveStrategy()~=self then return end
     Q.resumeWaitingApproach(self)
     Q.tick(self)
     -- A no-marker/full event can synchronously stop CP and delete this driver.
@@ -57,7 +59,20 @@ function U:getDriveData(...)
     local gx,gz,forwards,speed,acceleration=drive(self,...)
     if Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
     if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
+    speed=Q.finalUnloadSpeed(self,speed)
     return gx,gz,forwards,speed,acceleration
+end
+
+local stoppedUnload = U.unloadStoppedCombine
+function U:unloadStoppedCombine()
+    if Q.watchFinalUnload(self) then return end
+    return stoppedUnload(self)
+end
+
+local stoppedApproach = U.startUnloadingStoppedCombine
+function U:startUnloadingStoppedCombine()
+    if Q.deferFinalPipeApproach(self) then return end
+    return stoppedApproach(self)
 end
 
 local allowed = U.isAllowedToBeCalled
@@ -208,6 +223,7 @@ end
 -- full-job event consumed by AD. Do not impose a second handover gate.
 local unload = U.startUnloadingTrailers
 function U:startUnloadingTrailers(...)
+    Q.clearFinalUnload(self)
     if Q.enabled(self) then
         -- Remember a pocket departure only after native reverse clearance.
         -- Pathfinding can take longer than the pause, so start its clock when
@@ -228,6 +244,7 @@ end
 
 local last = U.onLastWaypointPassed
 function U:onLastWaypointPassed(...)
+    if Q.finishFinalReverse(self) then return end
     if Q.owns(self) then Q.onLast(self); return end
     return last(self,...)
 end
@@ -241,6 +258,7 @@ end
 
 local remove = U.delete
 function U:delete(...)
+    Q.clearFinalUnload(self)
     local result=remove(self,...)
     Q.remove(self)
     return result
