@@ -1403,14 +1403,15 @@ function Q.finalUnloadSpeed(driver,speed)
     return speed
 end
 
--- A grain combine can be physically waiting with stop-for-unload disabled.
--- Admission depends on that actual state, not its promise to remain stopped
--- until the tank is empty. Forage/auto-aim service keeps its native behaviour.
-function Q.stationaryGrainTarget(driver)
+-- Extra alignment/recovery belongs only to the remaining end-of-course load.
+-- An ordinary pocket/full-tank wait must retain the 3031 native approach,
+-- admission and retries, even when the combine is stationary for a long time.
+function Q.finalApproachTarget(driver)
     local vehicle=driver.combineToUnload
     if not Q.enabled(driver) or not vehicle or not vehicle.getIsCpActive or not vehicle:getIsCpActive() then return end
     local c=vehicle:getCpDriveStrategy()
-    if c and c.isWaitingForUnload and c.alwaysNeedsUnloader and c.hasAutoAimPipe
+    if c and c.isWaitingForUnloadAfterCourseEnded and c:isWaitingForUnloadAfterCourseEnded()
+            and c.isWaitingForUnload and c.alwaysNeedsUnloader and c.hasAutoAimPipe
             and c:isWaitingForUnload() and not c:alwaysNeedsUnloader() and not c:hasAutoAimPipe()
             and (vehicle.lastSpeedReal or 0)*3600<0.5 then return c end
 end
@@ -1442,7 +1443,7 @@ end
 
 function Q.stoppedApproachGoal(driver,x,z)
     -- Existing final-unload reverse recovery already owns its checked lane.
-    if driver.queueFinalUnload or not Q.stationaryGrainTarget(driver) then return x,z end
+    if driver.queueFinalUnload or not Q.finalApproachTarget(driver) then return x,z end
     local data=driver.queueStoppedApproach
     if data and data.combine==driver.combineToUnload then return data.x,data.farZ end
     Q.clearStoppedApproach(driver)
@@ -1455,7 +1456,7 @@ function Q.stoppedApproachGoal(driver,x,z)
     data={combine=driver.combineToUnload,phase='pathfinding',x=x or 0,rearZ=rearZ,
         farZ=rearZ-runIn,started=g_currentMission.time,controller=driver.pathfinderController}
     driver.queueStoppedApproach=data
-    driver:debug('Queue: stopped-combine rear entry %.1f, %.1f; %.1f m whole-rig run-in',data.x,data.farZ,runIn)
+    driver:debug('Queue: final-combine rear entry %.1f, %.1f; %.1f m whole-rig run-in',data.x,data.farZ,runIn)
     return data.x,data.farZ
 end
 
@@ -1469,14 +1470,21 @@ function Q.stoppedApproachPath(driver,success,course)
 end
 
 function Q.stoppedAdmission(driver)
+    if not Q.finalApproachTarget(driver) then return end
     local data=driver.queueStoppedApproach
     if data and data.combine==driver.combineToUnload and data.phase~='ready' then return false end
-    if Q.stationaryGrainTarget(driver) then return Q.pipeEntryAligned(driver) end
+    return Q.pipeEntryAligned(driver)
 end
 
 function Q.stoppedApproachLast(driver)
     local data=driver.queueStoppedApproach
     if not data or driver.course~=data.course or driver.state~=driver.states.DRIVING_TO_COMBINE then return false end
+    if data.combine~=driver.combineToUnload then Q.clearStoppedApproach(driver); return false end
+    if not Q.finalApproachTarget(driver) then
+        -- The native endpoint can arrive before update. Hand back with the
+        -- same departure intent and native mode selection as the update path.
+        Q.updateStoppedApproach(driver); return true
+    end
     driver:setMaxSpeed(0)
     if data.phase=='driving' then
         if not Q.arrived(driver,data.goal) or not Q.pipeEntryAligned(driver) then
@@ -1515,11 +1523,17 @@ function Q.updateStoppedApproach(driver)
     end
     if data.combine~=driver.combineToUnload or (state~=driver.states.WAITING_FOR_PATHFINDER
             and state~=driver.states.DRIVING_TO_COMBINE and not nativeBackup) then Q.clearStoppedApproach(driver); return end
-    if g_currentMission.time-data.started>90000 then stoppedApproachFailed(driver,'rear entry timed out'); return end
     data.departing=data.departing or finalDeparting(driver)
-    if nativeBackup then return end
+    if nativeBackup then
+        -- Do not interrupt an accepted native reverse when the target resumes.
+        -- Its callback retains the intent until the next update/endpoint.
+        if Q.finalApproachTarget(driver) and g_currentMission.time-data.started>90000 then
+            stoppedApproachFailed(driver,'rear entry timed out')
+        end
+        return
+    end
     if data.departing and not finalDeparting(driver) then driver:requestDriveUnloadNow() end
-    if finalDeparting(driver) or not Q.stationaryGrainTarget(driver) then
+    if finalDeparting(driver) or not Q.finalApproachTarget(driver) then
         if state==driver.states.WAITING_FOR_PATHFINDER and driver.pathfinderController then
             driver.pathfinderController.pathfinder=nil
         end
@@ -1528,10 +1542,11 @@ function Q.updateStoppedApproach(driver)
         if finalDeparting(driver) then driver:changeToUnloadWhenTrailerFull()
         elseif state==driver.states.DRIVING_TO_COMBINE and Q.pipeEntryAligned(driver)
                 and driver:isOkToStartUnloadingCombine() then
-            driver:startCourseFollowingCombine()
+            driver:startUnloadingCombine()
         else driver:startWaitingForSomethingToDo() end
         return
     end
+    if g_currentMission.time-data.started>90000 then stoppedApproachFailed(driver,'rear entry timed out'); return end
     if data.phase=='checking' then
         driver:setMaxSpeed(0)
         local timer=openIntervalTimer()
@@ -1568,16 +1583,16 @@ end
 
 function Q.stoppedApproachSpeed(driver,speed)
     local data=driver.queueStoppedApproach
-    if not data then return speed end
+    if not data or not Q.finalApproachTarget(driver) then return speed end
     if data.phase=='checking' then return 0 end
     if data.phase=='driving' then return data.clear and math.min(speed,5) or 0 end
     return speed
 end
 
--- A moving rendezvous can become a stationary full-tank wait before transfer.
--- Keep ownership while replanning behind it; never issue negative forward speed.
+-- A rendezvous may reach the last waypoint before its remaining grain transfers.
+-- Ordinary moving/full-tank unloading remains entirely with native CP.
 function Q.watchStoppedMovingUnload(driver)
-    local c=Q.stationaryGrainTarget(driver)
+    local c=Q.finalApproachTarget(driver)
     if not c or finalDeparting(driver) or not c.combineController then driver.queueStoppedWatch=nil; return false end
     local fill=c.combineController:getFillLevel()
     if fill<0.01 then driver.queueStoppedWatch=nil; return false end

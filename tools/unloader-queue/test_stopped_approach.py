@@ -1,4 +1,4 @@
-"""Stopped grain-combine rear entry and ordinary rendezvous recovery."""
+"""End-of-course grain-combine rear entry; ordinary approaches stay native."""
 from pathlib import Path
 import sys
 import unittest
@@ -12,7 +12,7 @@ class StoppedApproachTests(unittest.TestCase):
     def setUp(self):
         final.FinalApproachTests.setUp(self)
         self.lua.execute('''
-            final=false; waiting=true; harvester.lastSpeedReal=0
+            final=true; waiting=true; harvester.lastSpeedReal=0
             c.isWaitingForUnload=function() return waiting end
             c.hasAutoAimPipe=function() return false end
             c.willWaitForUnloadToFinish=function() return false end
@@ -80,6 +80,38 @@ class StoppedApproachTests(unittest.TestCase):
             g_currentMission.time=91000; Q.updateStoppedApproach(u)
             assert(stopped and not u.queueStoppedApproach)
         ''')
+
+    def test_leaving_final_scope_finishes_native_backup_and_retains_departure_intent(self):
+        for depart in (False, True):
+            with self.subTest(depart=depart):
+                self.setUp()
+                self.lua.execute('''
+                    local context=nativeBackupFixture()
+                    u.state=u.states.WAITING_FOR_PATHFINDER
+                    x,z=Q.stoppedApproachGoal(u,0,-8); u.queueStoppedApproach.context=context
+                    u:onPathfindingObstacleAtStart(u.pathfinderController,context,1,false,0,0)
+                    u.requestDriveUnloadNow=function() manual=true end
+                '''+('manual=true' if depart else '')+'''
+                    Q.updateStoppedApproach(u)
+                    local data=u.queueStoppedApproach; local course=u.course
+                    final=false; manual=false; g_currentMission.time=91000
+                    Q.updateStoppedApproach(u)
+                    assert(not stopped and u.queueStoppedApproach==data and u.course==course)
+                    assert(u.state==u.states.MOVING_BACK_BEFORE_PATHFINDING)
+                    u:onLastWaypointPassed()
+                    assert(retried==1 and u.queueStoppedApproach==data)
+                    assert(u.state==u.states.DRIVING_TO_COMBINE)
+                    place(x,pipe.z+z,0)
+                    c.willWaitForUnloadToFinish=function() return true end
+                    -- Exercise the endpoint before the next update as well.
+                    u:onLastWaypointPassed()
+                    assert(not stopped and not u.queueStoppedApproach)
+                '''+('''
+                    assert(nativeDeparture and u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL)
+                ''' if depart else '''
+                    assert(u.state==u.states.UNLOADING_STOPPED_COMBINE and not following)
+                    assert(u.combineToUnload==harvester and not u.queueStationaryPipe)
+                '''))
 
     def test_initial_admission_requires_trailer_heading_lateral_and_fill_node(self):
         self.lua.execute('''

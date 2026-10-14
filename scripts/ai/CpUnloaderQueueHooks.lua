@@ -67,7 +67,7 @@ end
 
 local stoppedUnload = U.unloadStoppedCombine
 function U:unloadStoppedCombine()
-    if self.queueStationaryPipe==self.combineToUnload and not Q.stationaryGrainTarget(self) then
+    if self.queueStationaryPipe and self.queueStationaryPipe==self.combineToUnload and not Q.finalApproachTarget(self) then
         self.queueStationaryPipe=nil
         local c=self.combineToUnload and self.combineToUnload:getCpDriveStrategy()
         if c and not c:willWaitForUnloadToFinish() and not c:isUnloadFinished() then
@@ -92,7 +92,7 @@ end
 
 local needsPath = U.isPathfindingNeeded
 function U:isPathfindingNeeded(vehicle,target,...)
-    if vehicle==self.vehicle and Q.stationaryGrainTarget(self)
+    if vehicle==self.vehicle and Q.finalApproachTarget(self)
             and target==self:getPipeOffsetReferenceNode() and Q.pipeEntryAligned(self)==false then
         return true -- nearby but misaligned still needs the checked rear entry
     end
@@ -101,7 +101,7 @@ end
 
 local startUnload = U.startUnloadingCombine
 function U:startUnloadingCombine()
-    if Q.stationaryGrainTarget(self) then
+    if Q.finalApproachTarget(self) then
         self.queueStationaryPipe=self.combineToUnload
         self:startUnloadingStoppedCombine(); return
     end

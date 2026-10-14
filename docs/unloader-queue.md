@@ -1,3 +1,44 @@
+## Build 3035 - restore milestone unloading during ordinary harvesting
+
+The 13 October 3034 run failed in an ordinary unloading pocket, before course
+completion. Tractor 322 exhausted the added 90-second rear-entry timer at
+23:17:57 while native pathfinding was still active. Tractor 325 reached the
+new rear goal, then stopped when the added run-in destination check rejected
+a vehicle or obstacle. Tractors 324 and 323 subsequently failed at the occupied
+rear goal; 323 explicitly detected 325. All four jobs stopped within ten
+seconds. The full combine then had no idle unloader and the following combine
+remained under native convoy spacing. The first approach's exact admission
+rejection and 325's precise obstruction are not identified by the log.
+Evidence is retained in local out/incident-3034-milestone-regression/.
+
+Build 3033 broadened the extra alignment, rear-entry and recovery rules from
+end-of-course work to all stationary grain-combine waits. This was a regression
+against the accepted 3031 whole-field behaviour. Require actual end-of-course
+waiting for those extra rules. Ordinary pockets, full-tank waits, pulled-back
+waits and next-row waits again use native admission, target offsets, loading
+mode, retries and endpoint handling. They acquire no added approach timer or
+moving-unload stall watcher. Native terminal path failures still report errors;
+this change does not suppress them or weaken crop/collision protection.
+
+Keep the final parking footprints, remaining-load recovery, finished-combine
+release, configured departure threshold and native AD handover. Also retain
+the independently evidenced resumable AD-arrival searches and yield ownership
+fixes. Final recovery callbacks and speed overrides cannot impose a new
+ordinary approach after the end-of-course condition disappears.
+
+New regressions compare ordinary admission, pathfinding decisions and loading
+mode with methods from the pinned 3031 milestone. They exercise the logged
+12.2/-8.4 pocket target, searches lasting beyond 90 seconds, native callbacks,
+endpoint admission, ordinary stationary/moving waits, unloading progress and
+availability of the other three tractor jobs. The tests reject the previous
+3034 runtime. Existing checked-entry tests now explicitly use an end-of-course
+combine; final geometry, backup, departure and collision tests remain required.
+Engine and asynchronous pathfinding interfaces are adapters, not a physical
+replay of the four-vehicle incident. Source and extracted-package release
+checks must pass; unattended whole-field completion and the final unload still
+require in-game validation. The 3031 milestone ZIP/tag remain unchanged and
+scheduled monitoring remains paused.
+
 ## Build 3034 - yield handover and recovery lifecycle audit
 
 The retained 13 October build-3032 trace shows tractor 325 accepting queue

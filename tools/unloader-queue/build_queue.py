@@ -106,7 +106,7 @@ def check_queue(packager):
         'isWaitingForUnloadAfterCourseEnded', 'isReadyToUnload', 'getCanCutterBeTurnedOff', 'updateFieldworkOffset', 'delete')}
     # Final-only stalled unload recovery; normal native method bodies are intact.
     expected |= {('U', 'unloadStoppedCombine'), ('U', 'startUnloadingStoppedCombine')}
-    # Stationary rear-entry admission and recovery; native method bodies remain intact.
+    # End-of-course rear entry only. Ordinary hook behaviour is regression-tested.
     expected |= {('U', name) for name in ('isOkToStartUnloadingCombine', 'startUnloadingCombine', 'unloadMovingCombine', 'isPathfindingNeeded')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
@@ -127,6 +127,7 @@ if __name__ == '__main__':
                                 'unloader-queue/test_finish_clearance.py',
                                 'unloader-queue/test_final_approach.py',
                                 'unloader-queue/test_stopped_approach.py',
+                                'unloader-queue/test_milestone_unloading.py',
                                 'unloader-queue/test_departure_threshold.py',
                                 'unloader-queue/test_harvester_bypass.py',
                                 'unloader-queue/test_combined_recovery.py',
