@@ -115,7 +115,14 @@ function Q.finishParkingClear(combine,model,pose)
                         end
                         -- A whole-train length ahead covers filling any trailer
                         -- compartment; the rear lane covers entry and reversing.
-                        local rear=math.min(z,otherModel.back-5)-math.max(15,3*length)
+                        local neighbourBack=math.huge
+                        for _,rect in ipairs(rigidRectangles(otherModel,otherModel.root,0)) do
+                            for _,p in ipairs(rect) do
+                                local along=(p.x-reference.x)*math.sin(reference.t)+(p.z-reference.z)*math.cos(reference.t)
+                                neighbourBack=math.min(neighbourBack,along)
+                            end
+                        end
+                        local rear=math.min(z,neighbourBack-5)-math.max(15,3*length)
                         local lane={left=x+left,right=x+right,front=z+front+front-back,back=rear+back}
                         if overlaps(W.rectangle(lane,reference,1)) then return false,'neighbour unloading access' end
                     end

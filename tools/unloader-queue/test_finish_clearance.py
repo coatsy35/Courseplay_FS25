@@ -333,6 +333,21 @@ class FinishClearanceTests(unittest.TestCase):
             assert(not clear and reason=='neighbour unloader geometry unavailable')
         ''')
 
+    def test_terminal_lane_uses_the_attached_harvester_pipe_reference(self):
+        self.lua.execute('''
+            other.combineController.getFillLevel=function() return 100 end
+            u.isServingPosition=function() return true end
+            u.settings.combineOffsetX={getValue=function() return 0 end}
+            u.settings.combineOffsetZ={getValue=function() return 0 end}
+            -- Pipe reference 20 m ahead of the towing vehicle: a relative rear
+            -- extent cannot be added to this node without transforming it.
+            other.getPipeOffsetReferenceNode=function() return {x=15,z=0,t=0} end
+            g_currentMission.vehicleSystem.vehicles={harvester,neighbour,v}
+            local model=W.rigidModel(harvester)
+            local clear,reason=Q.finishParkingClear(c,model,{x=26,z=-50,t=0})
+            assert(not clear and reason=='neighbour unloading access')
+        ''')
+
     def test_terminal_access_is_rechecked_after_neighbour_moves(self):
         self.lua.execute('''
             advance(); plan(); local goal=c.queueFinishClearance.goal
