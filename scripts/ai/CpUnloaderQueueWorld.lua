@@ -179,8 +179,13 @@ function W.bodyClear(world, body, pose, corridor, perimeterConnector)
         if G.overlap(rectangle,island) then return false,'island' end
     end
     if corridor and not corridor(rectangle) then return false, 'outside harvested exit corridor' end
-    local cropFree,cropReason=W.cropFree(world,rectangle,entrance or perimeterConnector)
-    if not cropFree then return false,cropReason end
+    local finalParking=world.finalParking
+    local mayCrossCrop=finalParking and world.strategy.queueFinishClearance==finalParking
+        and finalParking.world==world and world.strategy.combineController:getFillLevel()<0.01
+    if not mayCrossCrop then
+        local cropFree,cropReason=W.cropFree(world,rectangle,entrance or perimeterConnector)
+        if not cropFree then return false,cropReason end
+    end
     PathfinderUtil.setWorldPositionAndRotationOnTerrain(world.node,pose.x,pose.z,pose.t,0.5)
     -- Reuse native collision filtering, without appending every background
     -- rejection to PathfinderUtil's global debug-box array.

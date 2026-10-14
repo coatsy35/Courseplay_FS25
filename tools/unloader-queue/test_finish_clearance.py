@@ -1,4 +1,4 @@
-"""Final unload, checked forward parking, native completion and obstruction guards."""
+"""Final-only crop crossing, checked parking routes and native completion."""
 from pathlib import Path
 import sys
 import unittest
@@ -21,6 +21,9 @@ class FinishClearanceTests(unittest.TestCase):
             neighbour,other=makeHarvester(15,-20,0)
             neighbour.getIsCpActive=function() return true end
             other.callUnloader=function() end
+            other.combineController={getFillLevel=function() return 0 end}
+            other.getPipeOffset=function(_,x,z) return 11+(x or 0),-2+(z or 0) end
+            other.getPipeOffsetReferenceNode=function() return neighbour.rootNode end
             c.states={WORKING={},UNLOADING_ON_FIELD={},WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED={}}
             c.state=c.states.UNLOADING_ON_FIELD; c.unloadState=c.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
             c.safeFieldworkUnloadOrRefillStates={c.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED}
@@ -53,7 +56,7 @@ class FinishClearanceTests(unittest.TestCase):
                 c.speed=math.huge; c:driveUnloadOnField()
             end
             function plan()
-                for i=1,100 do
+                for i=1,600 do
                     advance()
                     if not c.queueFinishClearance or c.queueFinishClearance.driving then return end
                 end
@@ -116,13 +119,13 @@ class FinishClearanceTests(unittest.TestCase):
             plan(); assert(starts==1 and not finishes)
         ''')
 
-    def test_standing_crop_boundary_and_header_only_obstacle_prevent_departure(self):
-        for obstruction in ('densityCount=10', '''
-            harvester.cpGetFieldPolygon=function() return {{x=-100,z=-100},{x=100,z=-100},{x=100,z=12},{x=-100,z=12}} end
+    def test_boundary_and_header_only_obstacle_still_prevent_departure(self):
+        for obstruction in ('''
+            harvester.cpGetFieldPolygon=function() return {{x=-100,z=-100},{x=100,z=-100},{x=100,z=7},{x=-100,z=12}} end
             ''', '''
             overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,detector)
                 -- Only the header side intersects this stationary object.
-                detector.collidingShapes=(x+w>=7 and z+l>=10) and 1 or 0
+                detector.collidingShapes=(x+w>=7 and z+l>=6) and 1 or 0
             end
             '''):
             with self.subTest(obstruction=obstruction):
@@ -213,20 +216,173 @@ class FinishClearanceTests(unittest.TestCase):
             assert(c.queueFinishClearance and c.queueFinishClearance.driving and not finishes)
         ''')
 
-    def test_cut_canola_is_clear_and_invalid_density_has_distinct_diagnosis(self):
+    def test_crop_crossing_is_limited_to_the_owned_empty_final_parking_world(self):
         self.lua.execute('''
             g_fruitTypeManager.getFruitTypes=function()
                 return {{name='CANOLA',terrainDataPlaneId=1,startStateChannel=0,numStateChannels=4,cutStates={[11]=true}}}
             end
-            densityStates={[11]=100}
+            densityStates={[11]=367,[6]=1}; densityTotal=368
             advance(); plan(); assert(c.queueFinishClearance.driving)
-            Q.clearFinishClearance(c); c.queueFinishAttempted=nil; densityTotal=0
-            c.unloadState=c.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
-            local message
-            c.debug=function(_,format,...) message=string.format(format,...) end
+            local world=c.queueFinishClearance.world
+            assert(W.rigidClear(world,W.pose(harvester.rootNode)))
+            -- The incident's residual sample and real standing crop are both
+            -- permitted here. Ordinary queue worlds still reject either.
+            densityStates={[6]=368}
+            assert(W.rigidClear(world,W.pose(harvester.rootNode)))
+            local ordinary=W.new(c,W.rigidModel(harvester))
+            local clear,reason=W.rigidClear(ordinary,W.pose(harvester.rootNode))
+            assert(not clear and reason=='standing crop')
+            fill=100
+            clear,reason=W.rigidClear(world,W.pose(harvester.rootNode))
+            assert(not clear and reason=='standing crop')
+            fill=0; Q.clearFinishClearance(c)
+            clear,reason=W.rigidClear(ordinary,W.pose(harvester.rootNode))
+            assert(not clear and reason=='standing crop')
+            densityTotal=0
+            clear,reason=W.rigidClear(ordinary,W.pose(harvester.rootNode))
+            assert(not clear and reason=='invalid crop density')
+            W.delete(ordinary)
+        ''')
+
+    def test_ordinary_empty_wait_cannot_acquire_crop_permission(self):
+        self.lua.execute('''
+            c.unloadState={}; assert(not Q.beginFinishClearance(c))
+            c.state=c.states.WORKING; c.course:setCurrentWaypointIx(1)
+            assert(not Q.beginFinishClearance(c))
+            c.course:setCurrentWaypointIx(2); fill=1
+            assert(not Q.beginFinishClearance(c))
+        ''')
+
+    def test_blocked_straight_uses_a_checked_curve_and_follows_its_live_sweep(self):
+        self.lua.execute('''
+            local obstacle={x=0,z=24}
+            overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,detector)
+                local rect=G.rectangle({x=x,z=z,heading=ry},{width=2*w,length=2*l},0)
+                detector.collidingShapes=(collision==1 or G.inside(rect,obstacle)) and 1 or 0
+            end
             advance(); plan()
-            assert(finishes==1 and message:find('invalid crop density',1,true))
-            assert(message:find('crop=CANOLA',1,true) and not message:find('standing crop',1,true))
+            local data=c.queueFinishClearance
+            assert(data and data.driving and data.route.angle~=0 and starts==1)
+            local points=data.route.points
+            assert(c.course:getNumberOfWaypoints()==#points)
+            for i,p in ipairs(points) do
+                local x,_,z=c.course:getWaypointPosition(i)
+                assert(math.abs(x-p.x)<0.00001 and math.abs(z-p.z)<0.00001)
+                if i>1 then
+                    local a=points[i-1]
+                    local travel=math.sqrt((a.x-p.x)^2+(a.z-p.z)^2)+data.corner*math.abs(H.math.delta(p.t,a.t))
+                    assert(travel<=0.50001,'wide header sweep undersampled')
+                end
+            end
+            local halfway=math.floor(#points/2)
+            for i=1,halfway do
+                local p=points[i]
+                harvester.rootNode.x=p.x; harvester.rootNode.z=p.z; harvester.rootNode.t=p.t
+                header.rootNode.x,header.rootNode.z=H.math.position(p,0,5); header.rootNode.t=p.t
+                advance(); assert(not finishes and c.speed==5)
+            end
+            collision=1; advance(); advance(); assert(c.speed==0 and not finishes)
+            collision=0; advance(); advance(); assert(c.speed==5)
+            for i=halfway+1,#points do
+                local p=points[i]
+                harvester.rootNode.x=p.x; harvester.rootNode.z=p.z; harvester.rootNode.t=p.t
+                header.rootNode.x,header.rootNode.z=H.math.position(p,0,5); header.rootNode.t=p.t
+                advance(); if finishes then break end
+                assert(c.speed==5)
+            end
+            assert(finishes==1 and not c.queueFinishClearance)
+        ''')
+
+    def test_curve_header_tip_obstacle_rejects_that_candidate(self):
+        self.lua.execute('''
+            advance()
+            local route=c.queueFinishClearance.candidates[2]
+            local p=route.points[math.floor(#route.points/2)]
+            local x,z=H.math.position(p,7.5,5)
+            local obstacle={x=x,z=z}
+            assert(math.abs(x-p.x)>1.75 or math.abs(z-p.z)>4)
+            overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,detector)
+                local rect=G.rectangle({x=x,z=z,heading=ry},{width=2*w,length=2*l},0)
+                detector.collidingShapes=(G.inside(rect,{x=0,z=24}) or G.inside(rect,obstacle)) and 1 or 0
+            end
+            plan()
+            local data=c.queueFinishClearance
+            assert(data and data.driving and data.route~=route and data.route.angle~=0)
+            for _,point in ipairs(data.route.points) do assert(W.rigidClear(data.world,point)) end
+        ''')
+
+    def test_terminal_position_reserves_neighbour_pipe_entry_and_reverse_lane(self):
+        self.lua.execute('''
+            other.combineController.getFillLevel=function() return 100 end
+            neighbour.rootNode.x=0; neighbour.rootNode.z=0
+            -- Keep the actual mounted header at the moved combine pose.
+            local nh=neighbour:getAttachedImplements()[1].object
+            nh.rootNode.x=0; nh.rootNode.z=5
+            u.isServingPosition=function() return true end
+            u.settings.combineOffsetX={getValue=function() return 0 end}
+            u.settings.combineOffsetZ={getValue=function() return 0 end}
+            g_currentMission.vehicleSystem.vehicles={harvester,neighbour,v}
+            local model=W.rigidModel(harvester)
+            local clear,reason=Q.finishParkingClear(c,model,{x=11,z=-20,t=0})
+            assert(not clear and reason=='neighbour unloading access')
+            clear,reason=Q.finishParkingClear(c,model,{x=13,z=10,t=0})
+            assert(not clear and reason=='neighbour unloading access')
+            assert(Q.finishParkingClear(c,model,{x=35,z=20,t=0}))
+            g_currentMission.vehicleSystem.vehicles={harvester,neighbour}
+            clear,reason=Q.finishParkingClear(c,model,{x=35,z=20,t=0})
+            assert(not clear and reason=='neighbour unloader geometry unavailable')
+        ''')
+
+    def test_terminal_access_is_rechecked_after_neighbour_moves(self):
+        self.lua.execute('''
+            advance(); plan(); local goal=c.queueFinishClearance.goal
+            neighbour.rootNode.x=goal.x; neighbour.rootNode.z=goal.z
+            local nh=neighbour:getAttachedImplements()[1].object
+            nh.rootNode.x=goal.x; nh.rootNode.z=goal.z+5
+            move(goal.z); advance()
+            assert(not finishes and c.speed==0 and c.queueFinishClearance)
+            neighbour.rootNode.x=40; nh.rootNode.x=40
+            advance(); assert(finishes==1)
+        ''')
+
+    def test_planning_checks_are_sliced_and_yaw_uses_actual_turning_radius(self):
+        self.lua.execute('''
+            c.turningRadius=18; advance()
+            local data=c.queueFinishClearance
+            local calls=0; local native=W.rigidClear
+            W.rigidClear=function(...) calls=calls+1; return native(...) end
+            advance(); assert(calls<=8 and not starts)
+            W.rigidClear=native
+            for _,route in ipairs(data.candidates) do
+                for i=2,#route.points do
+                    local a,b=route.points[i-1],route.points[i]
+                    assert(math.abs(H.math.delta(b.t,a.t))/(b.s-a.s)<=1/18+0.000001)
+                end
+            end
+        ''')
+
+    def test_refill_revokes_parking_and_returns_to_final_unloading(self):
+        self.lua.execute('''
+            advance(); plan(); assert(starts==1)
+            local world=c.queueFinishClearance.world
+            fill=1; advance()
+            assert(not c.queueFinishClearance and not world.node and not finishes and c.speed==0)
+            assert(c.unloadState==c.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED)
+            assert(not c.queueFinishAttempted)
+        ''')
+
+    def test_crop_permission_does_not_relax_islands_or_revoked_ownership(self):
+        self.lua.execute('''
+            densityCount=10; advance()
+            local data=c.queueFinishClearance
+            local pose=W.pose(harvester.rootNode)
+            data.world.boundary.islands={{{x=-1,z=-1},{x=1,z=-1},{x=1,z=1},{x=-1,z=1}}}
+            local clear,reason=W.rigidClear(data.world,pose)
+            assert(not clear and (reason=='field boundary' or reason=='island'))
+            data.world.boundary.islands={}; c.queueFinishClearance=nil
+            clear,reason=W.rigidClear(data.world,pose)
+            assert(not clear and reason=='standing crop')
+            c.queueFinishClearance=data; Q.clearFinishClearance(c)
         ''')
 
     def test_header_geometry_change_restarts_initial_sweep(self):

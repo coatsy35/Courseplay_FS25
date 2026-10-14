@@ -1,3 +1,45 @@
+## Build 3036 - crop-permitted final parking with checked turn-away routes
+
+The 14 October 3035 run reached the final unload. At 14:26:34 combine 319
+checked its 22 m forward clearance, rejected a CANOLA density rectangle with
+368 positive samples and 367 recognised cut-state samples, then finished and
+folded in place. The single unrecognised sample does not establish visible
+standing crop. Tractor 324 subsequently reached combine 318 but was repeatedly
+blocked by parked 319 at 1.4–1.5 m. Evidence is retained locally in
+out/incident-3035-final-clearance/.
+
+The user explicitly authorises crossing crop during this final parking move.
+Grant that exception only to the owned clearance world of an empty,
+self-propelled harvester at the original course end. Ordinary harvesting,
+unloading, preparation and yielding keep their crop checks. A new load revokes
+parking and returns to final unloading. Boundaries, islands, vehicle/obstacle
+checks, unsupported steering exclusions and native proximity remain active.
+
+Try the original 20–25 m straight clearance first, then forward 45/90 degree
+turns in either direction at the actual turning radius, with a straight exit.
+Check each mounted component, including the header, at no more than 0.5 m
+corner travel between samples. Drive the same sampled points; recheck the
+live curved sweep and changed implement geometry. Candidate collision checks
+remain sliced to eight poses or two milliseconds per update. Existing elapsed
+planning/progress limits remain safety bounds, not frame-cost measurements.
+
+Before parking, reserve the neighbouring worker's body/header and pipe lane
+using actual local unloader dimensions and configured pipe offsets, including
+rear entry and native reverse clearance. Recheck the destination against live
+neighbours on arrival. Missing unloading geometry cannot validate a parking
+position. Wait for the assigned unloader to release before moving. If every
+checked route is obstructed, stop safely and record the reason; there is no
+promise of escaping a physically boxed-in position.
+
+Regression coverage includes residual/standing crop permission, ordinary crop
+rejection, revoked ownership/refill, field/island/header obstacles, blocked
+straight routes with a valid turn, wide-header sampling, live curved-route
+obstacles, terminal pipe/reverse access and changed neighbours. Source and
+extracted-ZIP qualification also retain the 3035 milestone unloading contracts.
+Engine adapters cannot validate physical steering or unattended completion;
+the final move and remaining unload still need in-game testing. Keep the 3031
+milestone unchanged and scheduled monitoring paused.
+
 ## Build 3035 - restore milestone unloading during ordinary harvesting
 
 The 13 October 3034 run failed in an ordinary unloading pocket, before course
