@@ -32,42 +32,94 @@ local function rigidCorner(model)
     return corner
 end
 
-local function finishCandidates(data,radius)
-    local corner=rigidCorner(data.world.model)
-    data.corner=corner
+local function coursePose(course,ix)
+    local x,_,z=course:getWaypointPosition(ix)
+    return {x=x,z=z,t=course:getWaypointYRotation(ix)}
+end
+
+local function finishCandidates(data,combine)
+    data.corner=rigidCorner(data.world.model)
+    data.origin=W.pose(combine.vehicle:getAIDirectionNode())
+    local model,course=data.world.model,combine.fieldWorkCourse
     local candidates={}
-    local function candidate(angle)
-        local points={{x=data.origin.x,z=data.origin.z,t=data.origin.t,s=0}}
-        local function segment(length,curvature)
-            local start=points[#points]
-            -- At most 0.5 m of motion at ANY rigid corner between samples.
-            -- The 0.3 m collision padding covers either half of that sweep.
-            local count=math.ceil(length*(1+corner*math.abs(curvature))/0.5)
-            for i=1,count do
-                local s=length*i/count
-                local t=start.t+s*curvature
-                local x,z
-                if curvature==0 then x,z=H.math.position(start,0,s)
-                else
-                    x=start.x+(math.cos(start.t)-math.cos(t))/curvature
-                    z=start.z+(math.sin(t)-math.sin(start.t))/curvature
+    local inset=math.max(model.front,-model.back)+10
+    local last=course:getNumberOfWaypoints()
+    local final=coursePose(course,last)
+    local travelled=0
+    -- Previously worked straight centre runs only. Keep the full parked header
+    -- away from the final run and inset from row ends, turns and connectors.
+    for ix=2,last-1 do
+        travelled=travelled+distance(coursePose(course,ix),coursePose(course,ix-1))
+        if travelled>=10 then
+            travelled=0
+            local p=coursePose(course,ix)
+            local lateral=math.abs((p.x-final.x)*math.cos(final.t)-(p.z-final.z)*math.sin(final.t))
+            local d=distance(data.origin,p)
+            if d>=20 and d<=150 and lateral>model.width+5
+                    and not course:isOnHeadland(ix) and not course:isOnConnectingPath(ix) then
+                local first=course:getPreviousWaypointIxWithinDistance(ix,inset)
+                local finish=course:getNextWaypointIxWithinDistance(ix,inset)
+                local valid=first and finish and distance(coursePose(course,first),p)>=inset
+                    and distance(coursePose(course,finish),p)>=inset
+                if valid then
+                    for i=first,finish do
+                        if course:isOnHeadland(i) or course:isOnConnectingPath(i)
+                                or course:isTurnStartAtIx(i) or course:isTurnEndAtIx(i)
+                                or math.abs(H.math.delta(course:getWaypointYRotation(i),p.t))>math.rad(5) then
+                            valid=false; break
+                        end
+                    end
                 end
-                points[#points+1]={x=x,z=z,t=t,s=start.s+s}
+                if valid then
+                    -- Either heading along the completed row is suitable.
+                    for _,turn in ipairs({0,math.pi}) do
+                        candidates[#candidates+1]={goal={x=p.x,z=p.z,t=p.t+turn},ix=ix,distance=d}
+                    end
+                end
             end
         end
-        if angle==0 then segment(data.length,0)
-        else
-            segment(3,0)
-            segment(radius*math.abs(angle),angle>0 and 1/radius or -1/radius)
-            segment(math.max(8,data.length-3-radius*math.abs(angle)),0)
-        end
-        candidates[#candidates+1]={points=points,angle=angle,goal=points[#points]}
     end
-    candidate(0)
-    if radius and H.math.finite(radius) and radius>0 and radius<=25 then
-        for _,angle in ipairs({math.pi/4,-math.pi/4,math.pi/2,-math.pi/2}) do candidate(angle) end
-    end
+    table.sort(candidates,function(a,b)
+        if a.distance~=b.distance then return a.distance<b.distance end
+        if a.ix~=b.ix then return a.ix<b.ix end
+        return a.goal.t<b.goal.t
+    end)
     data.candidates=candidates; data.candidate=1; data.sample=0
+end
+
+-- Build one forward curve at a time, then validate it in the normal sliced
+-- planner. Sample the actual analytic curve, including the whole header sweep.
+function Q.finishRoute(data,combine,route)
+    if route.points then return true end
+    local radius=combine.turningRadius
+    if not radius or not H.math.finite(radius) or radius<=0 then return false end
+    local origin=data.origin
+    local x,z=H.math.position(origin,0,3)
+    local start=State3D(x,-z,CpMathUtil.angleFromGame(origin.t))
+    local goal=route.goal
+    local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
+    local solution=DubinsSolver():solve(start,target,radius)
+    if not solution or solution:getLength(radius)>200 then return false end
+    local points={}
+    for i=0,6 do
+        local x,z=H.math.position(origin,0,i/2)
+        points[#points+1]={x=x,z=z,t=origin.t,s=i/2}
+    end
+    local length=solution:getLength(radius)
+    local step=0.25/(1+data.corner/radius)
+    local samples=dubins_path_sample_many(solution.pathDescriptor,step)
+    local distances=CpMathUtil.getSeries(0,length,step)
+    for i=2,#samples do
+        local p=samples[i]
+        points[#points+1]={x=p.x,z=-p.y,t=CpMathUtil.angleToGame(p.t),s=3+distances[i]}
+    end
+    -- Native sampling may omit its last point after floating-point rounding.
+    -- Include the exact requested row pose and validate the final small edge.
+    if distance(points[#points],goal)<0.000001 then table.remove(points) end
+    points[#points+1]={x=goal.x,z=goal.z,t=goal.t,s=3+length}
+    route.points=points; route.goal=points[#points]
+    route.angle=H.math.delta(goal.t,origin.t)
+    return true
 end
 
 -- Keep terminal chassis/header footprints out of the other worker's body and
@@ -82,93 +134,116 @@ function Q.finishParkingClear(combine,model,pose)
     end
     for _,vehicle in pairs(vehicles) do
         if vehicle~=combine.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle)
-                and combine.fieldWorkerProximityController:hasSameCourse(vehicle)
-                and distance(pose,W.pose(vehicle:getAIDirectionNode()))<100 then
+                and combine.fieldWorkerProximityController:hasSameCourse(vehicle) then
             local other=vehicle:getCpDriveStrategy()
             local otherModel=W.rigidModel(vehicle)
             if not otherModel then return false,'neighbour geometry unavailable' end
-            for _,rect in ipairs(rigidRectangles(otherModel,otherModel.root,1)) do
-                if overlaps(rect) then return false,'neighbour header/body clearance' end
+            local targets={{pose=otherModel.root}}
+            -- Reserve the following worker's end unloading space now, even if
+            -- it is still harvesting more than 100 m away or currently empty.
+            if not other.queueFinishClearance and other.fieldWorkCourse then
+                local course=other.fieldWorkCourse
+                targets[#targets+1]={pose=coursePose(course,course:getNumberOfWaypoints()),future=true}
             end
-            if not other.queueFinishClearance and other.combineController:getFillLevel()>=0.01 then
-                local found=false
-                for _,tractor in pairs(vehicles) do
-                    local driver=tractor.getCpDriveStrategy and tractor:getCpDriveStrategy()
-                    if driver and driver.startUnloadingStoppedCombine and driver.settings
-                            and driver.settings.combineOffsetX and driver.settings.combineOffsetZ
-                            and ((driver.isServingPosition and driver:isServingPosition(otherModel.root.x,otherModel.root.z,10))
-                                or distance(otherModel.root,W.pose(tractor:getAIDirectionNode()))<150) then
-                        local rig=W.model(tractor)
-                        if not rig then return false,'unloader geometry unavailable' end
-                        found=true
-                        local x,z=other:getPipeOffset(-driver.settings.combineOffsetX:getValue(),driver.settings.combineOffsetZ:getValue())
-                        local reference=W.pose(other:getPipeOffsetReferenceNode())
-                        local poses=W.settledPoses(rig,{x=0,z=0,t=0})
-                        local left,right,front,back=-math.huge,math.huge,-math.huge,math.huge
-                        local length=0
-                        for _,link in ipairs(rig.links) do length=length+math.abs(link.length) end
-                        for i,body in ipairs(rig.bodies) do
-                            for _,p in ipairs(W.rectangle(body,poses[i],0)) do
-                                left=math.max(left,p.x); right=math.min(right,p.x)
-                                front=math.max(front,p.z); back=math.min(back,p.z)
+            for _,target in ipairs(targets) do
+                if distance(pose,target.pose)<100 then
+                    for _,rect in ipairs(rigidRectangles(otherModel,target.pose,target.future and 6 or 1)) do
+                        if overlaps(rect) then return false,'neighbour header/body clearance' end
+                    end
+                    if not other.queueFinishClearance and (target.future or other.combineController:getFillLevel()>=0.01) then
+                        local found=false
+                        for _,tractor in pairs(vehicles) do
+                            local driver=tractor.getCpDriveStrategy and tractor:getCpDriveStrategy()
+                            if driver and driver.startUnloadingStoppedCombine and driver.settings
+                                    and driver.settings.combineOffsetX and driver.settings.combineOffsetZ
+                                    and ((driver.isServingPosition and driver:isServingPosition(otherModel.root.x,otherModel.root.z,10))
+                                        or distance(otherModel.root,W.pose(tractor:getAIDirectionNode()))<150) then
+                                local rig=W.model(tractor)
+                                if not rig then return false,'unloader geometry unavailable' end
+                                found=true
+                                local x,z=other:getPipeOffset(-driver.settings.combineOffsetX:getValue(),driver.settings.combineOffsetZ:getValue())
+                                local reference=W.pose(other:getPipeOffsetReferenceNode())
+                                if target.future then
+                                    local root=otherModel.root
+                                    local dx,dz=reference.x-root.x,reference.z-root.z
+                                    local x,z=H.math.position(target.pose,dx*math.cos(root.t)-dz*math.sin(root.t),
+                                        dx*math.sin(root.t)+dz*math.cos(root.t))
+                                    reference={x=x,z=z,t=target.pose.t+H.math.delta(reference.t,root.t)}
+                                end
+                                local poses=W.settledPoses(rig,{x=0,z=0,t=0})
+                                local left,right,front,back=-math.huge,math.huge,-math.huge,math.huge
+                                local length=0
+                                for _,link in ipairs(rig.links) do length=length+math.abs(link.length) end
+                                for i,body in ipairs(rig.bodies) do
+                                    for _,p in ipairs(W.rectangle(body,poses[i],0)) do
+                                        left=math.max(left,p.x); right=math.min(right,p.x)
+                                        front=math.max(front,p.z); back=math.min(back,p.z)
+                                    end
+                                end
+                                -- A whole-train length ahead covers filling any trailer
+                                -- compartment; the rear lane covers entry and reversing.
+                                local neighbourBack=math.huge
+                                for _,rect in ipairs(rigidRectangles(otherModel,target.pose,0)) do
+                                    for _,p in ipairs(rect) do
+                                        local along=(p.x-reference.x)*math.sin(reference.t)+(p.z-reference.z)*math.cos(reference.t)
+                                        neighbourBack=math.min(neighbourBack,along)
+                                    end
+                                end
+                                local rear=math.min(z,neighbourBack-5)-math.max(15,3*length)
+                                local lane={left=x+left,right=x+right,front=z+front+front-back,back=rear+back}
+                                if overlaps(W.rectangle(lane,reference,1)) then return false,'neighbour unloading access' end
                             end
                         end
-                        -- A whole-train length ahead covers filling any trailer
-                        -- compartment; the rear lane covers entry and reversing.
-                        local neighbourBack=math.huge
-                        for _,rect in ipairs(rigidRectangles(otherModel,otherModel.root,0)) do
-                            for _,p in ipairs(rect) do
-                                local along=(p.x-reference.x)*math.sin(reference.t)+(p.z-reference.z)*math.cos(reference.t)
-                                neighbourBack=math.min(neighbourBack,along)
-                            end
-                        end
-                        local rear=math.min(z,neighbourBack-5)-math.max(15,3*length)
-                        local lane={left=x+left,right=x+right,front=z+front+front-back,back=rear+back}
-                        if overlaps(W.rectangle(lane,reference,1)) then return false,'neighbour unloading access' end
+                        if not found then return false,'neighbour unloader geometry unavailable' end
                     end
                 end
-                if not found then return false,'neighbour unloader geometry unavailable' end
             end
         end
     end
     return true
 end
 
+local function finishDestinationClear(combine,model,pose)
+    -- Crop crossing is allowed on the final approach, not at the parked centre
+    -- position: the complete unfolded footprint must be on harvested ground.
+    for _,rectangle in ipairs(rigidRectangles(model,pose,0)) do
+        local clear,reason=W.cropFree(combine.queueFinishClearance.world,rectangle)
+        if not clear then return false,reason end
+    end
+    return Q.finishParkingClear(combine,model,pose)
+end
+
 function Q.beginFinishClearance(combine)
     if combine.queueFinishAttempted or combine.queueFinishClearance or not finishEnd(combine) then return false end
-    combine.queueFinishAttempted=true
     if not combine.vehicle.spec_combine or combine:isAttachedHarvester() or combine:isChopper()
             or combine.settings.selfUnload:getValue() or combine.combineController:getFillLevel()>=0.01
             or combine.settings.restartCourseAtEnd:getValue() then return false end
     local _,steeringLength=AIUtil.getSteeringParameters(combine.vehicle)
     if steeringLength~=0 then return false end
     local origin=W.pose(combine.vehicle:getAIDirectionNode())
-    local neighbour=false
-    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
-        if vehicle~=combine.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle)
-                and combine.fieldWorkerProximityController:hasSameCourse(vehicle)
-                and distance(origin,W.pose(vehicle:getAIDirectionNode()))<100 then neighbour=true; break end
-    end
-    if not neighbour then return false end
     local model,reason=W.rigidModel(combine.vehicle)
-    if not model then return false end
     local world
-    world,reason=W.new(combine,model)
-    if not world then combine:debug('Queue: final clearance unavailable: %s',reason); return false end
-    local length=math.min(25,math.max(20,model.front-model.back+8))
-    local data={world=world,origin=origin,length=length,started=g_currentMission.time,
+    if model then world,reason=W.new(combine,model) end
+    combine.queueFinishAttempted=true
+    local data={world=world,origin=origin,started=g_currentMission.time,
         progressTime=g_currentMission.time,progress=origin}
     combine.queueFinishClearance=data
-    -- This capability is valid only while this exact empty final manoeuvre owns
-    -- the world. Deleting or reusing a world cannot relax ordinary crop checks.
-    world.finalParking=data
-    finishCandidates(data,combine.turningRadius)
+    -- Take final-state ownership even when geometry is temporarily unavailable;
+    -- a last-waypoint callback alone cannot hold the vehicle on later updates.
+    if world then
+        world.finalParking=data
+        finishCandidates(data,combine)
+    else
+        data.reason=reason or 'geometry unavailable'
+        data.retryAt=g_currentMission.time+3000
+        combine:debug('Queue: final parking waiting unfolded: %s',data.reason)
+    end
     combine.aiOffsetX=0; combine.aiOffsetZ=0; combine.tightTurnOffset=0
     combine.state=combine.states.UNLOADING_ON_FIELD
     combine.unloadState={name='CLEARING_FINAL_UNLOAD',properties={}}
     combine:raiseImplements()
     combine:setMaxSpeed(0)
-    combine:debug('Queue: checking forward/turn-away final parking; crop crossing permitted only after emptying at course end')
+    combine:debug('Queue: parking on a completed centre run after final unload; waiting for trailer clearance')
     return true
 end
 
@@ -177,7 +252,24 @@ function Q.clearFinishClearance(combine)
     if data then W.delete(data.world); combine.queueFinishClearance=nil end
 end
 
+local function retryFinishClearance(combine,reason)
+    local data=combine.queueFinishClearance
+    if not data then return end
+    if data.reason~=reason then
+        data.reason=reason
+        combine:debug('Queue: final parking waiting unfolded: %s',reason)
+    end
+    data.driving=nil; data.route=nil; data.goal=nil; data.nearest=nil
+    data.nextCheck=nil; data.clear=nil
+    data.clearanceStarted=nil; data.progressTime=g_currentMission.time
+    data.progress=W.pose(combine.vehicle:getAIDirectionNode())
+    data.retryAt=g_currentMission.time+3000
+    data.candidates=nil
+    combine:setMaxSpeed(0)
+end
+
 function Q.completeFinishClearance(combine,reason)
+    if reason~='completed' then retryFinishClearance(combine,reason); return end
     if not combine.queueFinishClearance then return end
     combine:debug('Queue: final parking clearance %s',reason)
     Q.clearFinishClearance(combine)
@@ -217,6 +309,7 @@ function Q.driveFinishClearance(combine)
         combine:setMaxSpeed(0)
         return
     end
+    if not data.driving and data.retryAt and time<data.retryAt then combine:setMaxSpeed(0); return end
     if not data.driving then
         -- Releasing the assignment starts native reverse clearance; it does not
         -- mean the trailer is clear. Let that manoeuvre finish before parking.
@@ -241,21 +334,28 @@ function Q.driveFinishClearance(combine)
         data.waitingTrailer=nil
         data.clearanceStarted=data.clearanceStarted or time
     end
-    if time-data.clearanceStarted>60000 then Q.completeFinishClearance(combine,'timed out safely'); return end
     local here=W.pose(combine.vehicle:getAIDirectionNode())
     local model=W.rigidModel(combine.vehicle)
     if not model then Q.completeFinishClearance(combine,'geometry unavailable'); return end
+    if not data.world then
+        local reason
+        data.world,reason=W.new(combine,model)
+        if not data.world then retryFinishClearance(combine,reason or 'world unavailable'); return end
+        data.world.finalParking=data
+    end
     local changed=not W.sameRigidShape(data.world.model,model)
     data.world.model=model
     if data.driving then
         if changed then data.corner=rigidCorner(model) end
         if distance(here,data.progress)>0.5 then data.progress=here; data.progressTime=time end
         if time-data.progressTime>10000 then Q.completeFinishClearance(combine,'stopped by an obstruction'); return end
-        if distance(here,data.goal)<=1 then
-            if W.rigidClear(data.world,here) and Q.finishParkingClear(combine,model,here) then
-                Q.completeFinishClearance(combine,'completed')
-            else combine:setMaxSpeed(0) end
-            return
+        if distance(here,data.goal)<=1 and math.abs(H.math.delta(here.t,data.goal.t))<=math.rad(5) then
+            if W.rigidClear(data.world,here) and finishDestinationClear(combine,model,here) then
+                Q.completeFinishClearance(combine,'completed'); return
+            end
+            if distance(here,data.goal)<0.1 then combine:setMaxSpeed(0); return end
+            -- A near-goal pose may still overlap the reserved lane or crop
+            -- edge. Continue the checked final metre rather than stop short.
         end
         local nearest,best=data.nearest or 1,math.huge
         for i=nearest,math.min(#data.route.points,nearest+40) do
@@ -273,10 +373,14 @@ function Q.driveFinishClearance(combine)
         combine:setMaxSpeed(data.clear and 5 or 0)
         return
     end
-    if changed then finishCandidates(data,combine.turningRadius) end
     combine:setMaxSpeed(0)
     if data.retryAt and time<data.retryAt then return end
+    if changed or not data.candidates then finishCandidates(data,combine) end
     local route=data.candidates[data.candidate]
+    if not route then retryFinishClearance(combine,'no completed centre-run destination available'); return end
+    if not Q.finishRoute(data,combine,route) then
+        data.candidate=data.candidate+1; data.sample=0; return
+    end
     local timer=openIntervalTimer()
     local reason
     for checked=1,8 do
@@ -289,23 +393,23 @@ function Q.driveFinishClearance(combine)
     closeIntervalTimer(timer)
     if not reason and data.sample==#route.points then
         local clear
-        clear,reason=Q.finishParkingClear(combine,model,route.goal)
+        clear,reason=finishDestinationClear(combine,model,route.goal)
         if clear then
             data.route=route; data.goal=route.goal; data.driving=true; data.progressTime=time
             local points={}
             for _,p in ipairs(route.points) do points[#points+1]={x=p.x,z=p.z} end
             combine.ppc:setShortLookaheadDistance()
             combine:startCourse(Course(combine.vehicle,points,true),1)
-            combine:debug('Queue: final parking %.1f m, turn %.0f degrees',route.goal.s,math.deg(route.angle))
+            combine:debug('Queue: final parking %.1f m to completed centre waypoint %d',route.goal.s,route.ix)
             return
         end
     end
     if reason then
         combine:debug('Queue: final parking candidate %d rejected: %s',data.candidate,data.world.failureDetail or reason)
+        route.points=nil -- rejected sweeps need not occupy memory until the next retry
         data.candidate=data.candidate+1; data.sample=0
         if data.candidate>#data.candidates then
-            if time-data.clearanceStarted<15000 then data.candidate=1; data.retryAt=time+1000
-            else Q.completeFinishClearance(combine,'no checked forward/turn-away route available') end
+            retryFinishClearance(combine,'no checked route to a completed centre run')
         end
     end
 end

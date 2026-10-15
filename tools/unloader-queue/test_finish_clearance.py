@@ -43,7 +43,12 @@ class FinishClearanceTests(unittest.TestCase):
             c.raiseImplements=function() raised=true end
             c.startCourse=function(self,course) self.course=course; starts=(starts or 0)+1 end
             c.ppc.setShortLookaheadDistance=function() end
-            c.fieldWorkCourse=Course(harvester,{{x=0,z=-100},{x=0,z=0}},false); c.course=c.fieldWorkCourse
+            local worked={}
+            for z=60,-90,-2 do worked[#worked+1]={x=-45,z=z} end
+            worked[#worked+1]={x=0,z=-90}
+            for z=-88,0,2 do worked[#worked+1]={x=0,z=z} end
+            c.fieldWorkCourse=Course(harvester,worked,false); c.course=c.fieldWorkCourse
+            originalCount=#worked
             c.course:setCurrentWaypointIx(c.course:getNumberOfWaypoints())
             AIUtil.getSteeringParameters=function() return 0,0 end
             AIDriveStrategyFieldWorkCourse.finishFieldWork=function(self)
@@ -56,7 +61,7 @@ class FinishClearanceTests(unittest.TestCase):
                 c.speed=math.huge; c:driveUnloadOnField()
             end
             function plan()
-                for i=1,600 do
+                for i=1,3000 do
                     advance()
                     if not c.queueFinishClearance or c.queueFinishClearance.driving then return end
                 end
@@ -64,6 +69,19 @@ class FinishClearanceTests(unittest.TestCase):
             end
             function move(z)
                 harvester.rootNode.z=z; header.rootNode.z=z+5
+            end
+            function movePose(p)
+                harvester.rootNode.x=p.x; harvester.rootNode.z=p.z; harvester.rootNode.t=p.t
+                header.rootNode.x,header.rootNode.z=H.math.position(p,0,5); header.rootNode.t=p.t
+            end
+            function followParking()
+                local points=c.queueFinishClearance.route.points
+                for _,p in ipairs(points) do
+                    movePose(p); advance()
+                    if finishes then return end
+                    assert(c.speed==5)
+                end
+                assert(finishes==1)
             end
         ''')
 
@@ -75,10 +93,11 @@ class FinishClearanceTests(unittest.TestCase):
             assert(not c:isReadyToUnload(false) and c:isManeuvering())
             local original=c.fieldWorkCourse
             plan(); assert(starts==1 and c.course~=original and c.fieldWorkCourse==original)
-            assert(original:getNumberOfWaypoints()==2)
-            assert(c.queueFinishClearance.length>=20 and c.queueFinishClearance.length<=25)
+            assert(original:getNumberOfWaypoints()==originalCount)
+            local goal=c.queueFinishClearance.goal
+            assert(goal.x==-45 and math.abs(math.sin(goal.t))<0.001)
             c:updateFieldworkOffset(c.course)
-            for z=0,20 do move(z); advance(); if finishes then break end; assert(c.speed==5) end
+            followParking()
             assert(finishes==1 and not c.queueFinishClearance and c:isWaitingForUnloadAfterCourseEnded())
             assert(not Q.beginFinishClearance(c),'completed job attempted a second parking move')
         ''')
@@ -88,8 +107,8 @@ class FinishClearanceTests(unittest.TestCase):
             c.state=c.states.WORKING; c.unloadState=nil
             c:onLastWaypointPassed(); assert(c.queueFinishClearance)
             plan(); local last=c.course:getNumberOfWaypoints()
-            assert(last>2 and c.fieldWorkCourse:getNumberOfWaypoints()==2)
-            move(c.queueFinishClearance.length); c:onLastWaypointPassed()
+            assert(last>2 and c.fieldWorkCourse:getNumberOfWaypoints()==originalCount)
+            movePose(c.queueFinishClearance.goal); c:onLastWaypointPassed()
             assert(finishes==1)
         ''')
 
@@ -124,7 +143,7 @@ class FinishClearanceTests(unittest.TestCase):
             plan(); assert(starts==1 and not finishes)
         ''')
 
-    def test_stalled_trailer_clearance_finishes_safely_without_starting_parking(self):
+    def test_stalled_trailer_clearance_waits_unfolded_and_recovers(self):
         self.lua.execute('''
             advance()
             u.states={MOVING_BACK={properties={vehicle=harvester}},MOVING_BACK_WITH_TRAILER_FULL={}}
@@ -134,7 +153,8 @@ class FinishClearanceTests(unittest.TestCase):
             g_currentMission.time=g_currentMission.time+110000; place(0,2,0); advance()
             assert(not starts and not finishes,'physical reverse progress must renew the wait')
             g_currentMission.time=g_currentMission.time+120001; advance()
-            assert(finishes==1 and not starts and not c.queueFinishClearance)
+            assert(not finishes and not starts and c.queueFinishClearance)
+            u.state={}; plan(); assert(starts==1 and not finishes)
         ''')
 
     def test_boundary_and_header_only_obstacle_still_prevent_departure(self):
@@ -151,7 +171,7 @@ class FinishClearanceTests(unittest.TestCase):
                 self.lua.execute(obstruction+'''
                     advance(); assert(c.queueFinishClearance)
                     for i=1,300 do advance(); if finishes then break end end
-                    assert(finishes==1 and not starts and not c.queueFinishClearance)
+                    assert(not finishes and not starts and c.queueFinishClearance)
                 ''')
 
     def test_moving_final_unload_reverses_clear_before_combine_parks(self):
@@ -186,12 +206,12 @@ class FinishClearanceTests(unittest.TestCase):
             -- Native proximity/traffic may still stop us despite a clear
             -- geometric route. No movement must eventually end the attempt.
             g_currentMission.time=g_currentMission.time+10001; advance()
-            assert(finishes==1 and not c.queueFinishClearance)
+            assert(not finishes and c.queueFinishClearance and c.speed==0)
+            plan(); assert(c.queueFinishClearance.driving)
         ''')
 
-    def test_no_other_worker_or_unsupported_mode_keeps_native_completion(self):
-        for setup in ('g_currentMission.vehicleSystem.vehicles={harvester}',
-                      'c.settings.selfUnload.getValue=function() return true end',
+    def test_unsupported_mode_keeps_native_completion(self):
+        for setup in ('c.settings.selfUnload.getValue=function() return true end',
                       'c.settings.restartCourseAtEnd.getValue=function() return true end',
                       'AIUtil.getSteeringParameters=function() return 0,8 end',
                       'c.isChopper=function() return true end'):
@@ -246,7 +266,7 @@ class FinishClearanceTests(unittest.TestCase):
                 return {{name='CANOLA',terrainDataPlaneId=1,startStateChannel=0,numStateChannels=4,cutStates={[11]=true}}}
             end
             densityStates={[11]=367,[6]=1}; densityTotal=368
-            advance(); plan(); assert(c.queueFinishClearance.driving)
+            advance(); assert(c.queueFinishClearance)
             local world=c.queueFinishClearance.world
             assert(W.rigidClear(world,W.pose(harvester.rootNode)))
             -- The incident's residual sample and real standing crop are both
@@ -320,7 +340,8 @@ class FinishClearanceTests(unittest.TestCase):
     def test_curve_header_tip_obstacle_rejects_that_candidate(self):
         self.lua.execute('''
             advance()
-            local route=c.queueFinishClearance.candidates[2]
+            local route=c.queueFinishClearance.candidates[1]
+            assert(Q.finishRoute(c.queueFinishClearance,c,route))
             local p=route.points[math.floor(#route.points/2)]
             local x,z=H.math.position(p,7.5,5)
             local obstacle={x=x,z=z}
@@ -331,8 +352,11 @@ class FinishClearanceTests(unittest.TestCase):
             end
             plan()
             local data=c.queueFinishClearance
-            assert(data and data.driving and data.route~=route and data.route.angle~=0)
-            for _,point in ipairs(data.route.points) do assert(W.rigidClear(data.world,point)) end
+            assert(data and not finishes)
+            if data.driving then assert(data.route~=route) end
+            if data.driving then
+                for _,point in ipairs(data.route.points) do assert(W.rigidClear(data.world,point)) end
+            end
         ''')
 
     def test_terminal_position_reserves_neighbour_pipe_entry_and_reverse_lane(self):
@@ -378,7 +402,7 @@ class FinishClearanceTests(unittest.TestCase):
             neighbour.rootNode.x=goal.x; neighbour.rootNode.z=goal.z
             local nh=neighbour:getAttachedImplements()[1].object
             nh.rootNode.x=goal.x; nh.rootNode.z=goal.z+5
-            move(goal.z); advance()
+            movePose(goal); advance()
             assert(not finishes and c.speed==0 and c.queueFinishClearance)
             neighbour.rootNode.x=40; nh.rootNode.x=40
             advance(); assert(finishes==1)
@@ -393,6 +417,7 @@ class FinishClearanceTests(unittest.TestCase):
             advance(); assert(calls<=8 and not starts)
             W.rigidClear=native
             for _,route in ipairs(data.candidates) do
+                assert(Q.finishRoute(data,c,route))
                 for i=2,#route.points do
                     local a,b=route.points[i-1],route.points[i]
                     assert(math.abs(H.math.delta(b.t,a.t))/(b.s-a.s)<=1/18+0.000001)
@@ -432,6 +457,92 @@ class FinishClearanceTests(unittest.TestCase):
             advance()
             assert(c.queueFinishClearance.sample==8 and not starts)
             plan(); assert(c.queueFinishClearance.driving)
+        ''')
+
+    def test_lead_parks_before_distant_follower_or_when_alone(self):
+        for alone in (False, True):
+            with self.subTest(alone=alone):
+                self.setUp()
+                self.lua.globals().alone = alone
+                self.lua.execute('''
+                    neighbour.rootNode.z=-135
+                    neighbour:getAttachedImplements()[1].object.rootNode.z=-130
+                    if alone then g_currentMission.vehicleSystem.vehicles={harvester} end
+                    fill=100; advance(); assert(not c.queueFinishClearance and not finishes)
+                    fill=0; advance(); assert(c.queueFinishClearance and not finishes)
+                    plan(); followParking(); assert(finishes==1)
+                ''')
+
+    def test_missing_geometry_at_last_waypoint_holds_and_retries(self):
+        self.lua.execute('''
+            local original=W.rigidModel
+            W.rigidModel=function() return nil,'temporarily unavailable' end
+            c.state=c.states.WORKING; c.unloadState=nil
+            c:onLastWaypointPassed()
+            assert(c.queueFinishClearance and c.state==c.states.UNLOADING_ON_FIELD and raised)
+            for i=1,40 do advance(); assert(c.speed==0 and not starts and not finishes) end
+            W.rigidModel=original
+            plan(); followParking(); assert(finishes==1)
+        ''')
+
+    def test_headland_or_connector_cannot_be_the_parking_destination(self):
+        for attribute in ('setHeadlandPassNumber(1)', 'setOnConnectingPath(true)'):
+            with self.subTest(attribute=attribute):
+                self.setUp()
+                self.lua.execute('for _,wp in ipairs(c.fieldWorkCourse:getAllWaypoints()) do wp.attributes:'+attribute+' end')
+                self.lua.execute('''
+                    advance()
+                    for i=1,30 do g_currentMission.time=g_currentMission.time+4000; advance() end
+                    assert(c.queueFinishClearance and not starts and not finishes and c.speed==0)
+                    assert(c.queueFinishClearance.reason=='no completed centre-run destination available')
+                ''')
+
+    def test_unharvested_destination_waits_unfolded_then_recovers(self):
+        self.lua.execute('''
+            densityCount=10; advance()
+            for i=1,1000 do advance(); assert(not finishes and not starts) end
+            assert(c.queueFinishClearance and c.speed==0)
+            densityCount=0; plan(); followParking(); assert(finishes==1)
+        ''')
+
+    def test_followers_future_end_lane_is_reserved_before_it_is_full(self):
+        self.lua.execute('''
+            neighbour.rootNode.x=0; neighbour.rootNode.z=-135
+            local nh=neighbour:getAttachedImplements()[1].object
+            nh.rootNode.x=0; nh.rootNode.z=-130
+            other.fieldWorkCourse=Course(neighbour,{{x=0,z=-150},{x=0,z=0}},false)
+            other.combineController.getFillLevel=function() return 0 end
+            u.isServingPosition=function() return true end
+            u.settings.combineOffsetX={getValue=function() return 0 end}
+            u.settings.combineOffsetZ={getValue=function() return 0 end}
+            g_currentMission.vehicleSystem.vehicles={harvester,neighbour,v}
+            local model=W.rigidModel(harvester)
+            local clear,reason=Q.finishParkingClear(c,model,{x=11,z=-20,t=0})
+            assert(not clear and reason=='neighbour unloading access')
+            assert(Q.finishParkingClear(c,model,{x=-45,z=0,t=math.pi}))
+        ''')
+
+    def test_more_than_twenty_four_nearby_rejections_reach_farther_centre_run(self):
+        self.lua.execute('''
+            local worked={}
+            for z=60,-180,-2 do worked[#worked+1]={x=-45,z=z} end
+            worked[#worked+1]={x=0,z=-180}
+            for z=-178,0,2 do worked[#worked+1]={x=0,z=z} end
+            c.fieldWorkCourse=Course(harvester,worked,false); c.course=c.fieldWorkCourse
+            local original=Q.finishParkingClear
+            local rejected=0
+            Q.finishParkingClear=function(combine,model,p)
+                if p.z>-79.5 then rejected=rejected+1; return false,'occupied waiting spaces' end
+                return original(combine,model,p)
+            end
+            advance(); assert(#c.queueFinishClearance.candidates>24)
+            for i=1,10000 do
+                advance()
+                if c.queueFinishClearance.driving then break end
+            end
+            assert(c.queueFinishClearance.driving and not finishes and rejected>=24)
+            assert(c.queueFinishClearance.goal.z<=-80)
+            followParking(); assert(finishes==1)
         ''')
 
     def test_separate_rotated_offset_components_preserve_world_footprints(self):

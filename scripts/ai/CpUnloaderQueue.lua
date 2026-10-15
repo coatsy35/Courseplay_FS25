@@ -670,7 +670,10 @@ function Q.schedule()
         selected.search=nil
         if path then Q.startRoute(selected,path)
         else Q.failed(selected,reason or 'no safe route') end
-    elseif selected.searchWorkMs>(selected.operation=='prepare' and not arrival and 15000 or 1000) then
+    -- Arrival candidates are finite (bounded nodes, edges and travel), and
+    -- rotate fairly. Keep their progress until completion; a cumulative CPU
+    -- cutoff otherwise discards every candidate and repeats the same entrance.
+    elseif not arrival and selected.searchWorkMs>(selected.operation=='prepare' and 15000 or 1000) then
         selected.search=nil; Q.failed(selected,'search budget exhausted; retaining CP control')
     elseif selected.operation=='yield' or arrival then
         local phaseReason=S.chargeChoices(selected.search,elapsed,workPhase)
@@ -730,7 +733,7 @@ function Q.tick(driver)
             Q.release(driver); driver:startUnloadingTrailers(); return
         end
         -- Arrival searches retain partial work while native pathfinding owns
-        -- the frame. The measured work budget in schedule remains bounded.
+        -- the frame. The shared update slice and individual searches remain bounded.
         if data.operation=='yield' and Q.updateYieldRecovery(driver) then return end
         if data.path then
             local position=W.pose(driver.vehicle:getAIDirectionNode())

@@ -1,3 +1,58 @@
+## Build 3039 - complete arrival searches and park on completed centre runs
+
+The preserved 15 October 3038 run confirms AD handed tractor 324 to CP at
+17:46:07.731. CP captured the physical arrival and selected a nearby clearing
+position, but at 17:46:33.688 abandoned its search with the cumulative CPU
+budget exhausted. It repeatedly alternated the same nearby candidate batches
+without starting a preparation route. Tractor 325 showed the same cycle.
+The 3033 resumable candidate fix retained the outer one-second work cutoff,
+which still discarded all candidates before their finite searches completed.
+
+Arrival searches now retain that work until their bounded candidate searches
+finish. Preserve fair rotation, the shared two-millisecond update target,
+6,000-node candidate bounds, travel/edge limits, native foreground precedence,
+ownership cancellation and live full-train validation. Yield and ordinary
+preparation retain their existing cumulative allowances. A regression completes
+an actual articulated fallback after more than one second of injected CPU work;
+this is not an FPS measurement or proof of live route availability.
+
+At 17:52:07.594 lead combine 319 emptied and immediately finished/folded without
+entering parking. Follower 318 still had 133.5 metres to its final waypoint just
+before that event, and 126.5 metres just afterwards. This strongly supports the
+old requirement for a same-course neighbour within 100 metres as the skipped
+gate; the log does not record an exact centre-to-centre separation or each gate.
+
+Every eligible empty self-propelled combine at its original course end now
+retains the final job, regardless of nearby workers. Keep it unfolded through
+assignment release and the trailer's native reverse clearance. Missing geometry,
+blocked routes, stalled trailers and route deviations stop and retry; they no
+longer report successful completion and fold where the obstruction occurred.
+Native self-unload, attached/towed harvesters, choppers and course restart modes
+retain their existing completion handling.
+
+Choose inset, straight non-headland/non-connecting sections of the completed
+original course, away from its final run. A forward move and checked Dubins
+curve reach either alignment along a previous centre row. All eligible nearby
+positions remain reachable by the lazy candidate search; rejected sweeps are
+released. Validate the complete unfolded body/header sweep, field/islands and
+obstacles in sliced checks. Crop crossing remains final-only as authorised;
+the terminal footprint must be harvested. Reserve both current and future final
+body/pipe/reverse access of following same-course workers, even while they are
+still cutting farther away or their tanks are momentarily empty. Native finish
+and folding run only after actual position, heading and terminal clearance pass.
+The original harvesting course, ordinary unloading, departure cutoff and AD
+handover are unchanged.
+
+Evidence and hashes are in out/incident-3038-ad-arrival/. Regression coverage
+includes distant/absent followers, missing geometry at the native last-waypoint
+callback, trailer clearance, obstruction recovery without folding, headland and
+connector rejection, terminal crop, future unloading access, farther parking
+alternatives, curve fidelity and live full-header protection. Full source and
+extracted-ZIP qualification remain required. Engine adapters cannot establish
+physical in-game steering or unattended completion; arrival parking and the
+successive final unload/park/fold sequence still require the user's field run.
+Retain the 3031 milestone and paused scheduled monitor unchanged.
+
 ## Build 3038 - recover a departing trailer obstructing a row turn
 
 The preserved 15 October build-3037 log records tractor 323 reaching its

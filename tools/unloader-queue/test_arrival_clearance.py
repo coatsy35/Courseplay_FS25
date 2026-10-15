@@ -455,6 +455,38 @@ class ArrivalTests(unittest.TestCase):
             for i=2,#data.path do poses=H.advance(data.world.model,poses,data.path[i]); assert(W.clear(data.world,poses)) end
         ''')
 
+    def test_arrival_finishes_checked_fallback_after_more_than_one_second_cpu(self):
+        self.lua.execute('''
+            local S=CpUnloaderQueueSearch
+            Q.refresh=function() end
+            g_currentMission.vehicleSystem.vehicles={}
+            local starts,work,frameWork=0,0,0
+            local new,step=S.new,S.step
+            S.new=function(...)
+                starts=starts+1
+                local state=assert(new(...))
+                state.direct=nil -- actual A* fallback after a rejected direct candidate
+                return state
+            end
+            S.step=function(s,budget)
+                if not s.choices then frameWork=frameWork+2; work=work+2 end
+                return step(s,budget)
+            end
+            openIntervalTimer=function() frameWork=0; return 1 end
+            readIntervalTimerMs=function() return frameWork end
+            Q.take(u,'prepare')
+            Q.request(u,{x=0,z=60,t=0,arrival=true,choices={{x=0,z=60,t=0}}})
+            local data=u.queueData; local search=data.search
+            for i=1,20000 do
+                g_updateLoopIndex=i; g_currentMission.time=i*30; Q.schedule()
+                if not data.search then break end
+            end
+            assert(data.path and work>1000,'finite fallback did not survive its quantum: '..work)
+            assert(starts==1 and search.slots[1].fallback,'fallback recreated direct candidate')
+            local poses=W.poses(data.world.model)
+            for i=2,#data.path do poses=H.advance(data.world.model,poses,data.path[i]); assert(W.clear(data.world,poses)) end
+        ''')
+
     def test_expensive_arrival_candidate_cannot_starve_next_valid_route(self):
         self.lua.execute('''
             local S=CpUnloaderQueueSearch
