@@ -137,9 +137,10 @@ function Q.preparationEta(driver,combine)
         +math.min(30,data and data.searchLatency or 0)
 end
 
--- Only temporary, identifiable outgoing traffic qualifies for deferred native
--- approach. Static obstacles, crop refusal and unrelated failures stay native.
-function Q.waitingGoalOccupied(driver,x,z)
+-- Ordinary approaches defer only for outgoing traffic. The checked final rear
+-- entry also recognises parked vehicle footprints, so one blocked goal cannot
+-- stop each replacement job in turn. Crop and non-vehicle failures stay native.
+function Q.waitingGoalOccupied(driver,x,z,finalEntry)
     if not Q.enabled(driver) or not driver.combineToUnload then return false end
     local departing={}
     for other,data in pairs(Q.members) do
@@ -148,6 +149,16 @@ function Q.waitingGoalOccupied(driver,x,z)
             or (states.MOVING_BACK and other.state==states.MOVING_BACK)
         if other~=driver and other.vehicle:getIsCpActive() and (data.nativeDeparture or backing) then
             departing[#departing+1]=other.vehicle
+        end
+    end
+    if finalEntry then
+        departing={}
+        local seen={}
+        for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+            local root=vehicle.getRootVehicle and vehicle:getRootVehicle() or vehicle
+            if root~=driver.vehicle and root~=driver.combineToUnload and not seen[root] then
+                seen[root]=true; departing[#departing+1]=root
+            end
         end
     end
     if #departing==0 then return false end
@@ -168,15 +179,25 @@ function Q.waitingGoalOccupied(driver,x,z)
 end
 
 function Q.deferWaitingApproach(driver,x,z)
-    if not Q.waitingGoalOccupied(driver,x,z) then return false end
+    local occupied=Q.waitingGoalOccupied(driver,x,z)
+    local goalX,goalZ=x,z
+    local final=Q.finalApproachTarget(driver)~=nil
+    local entry=driver.queueStoppedApproach
+    local rear=not occupied and final and entry and entry.combine==driver.combineToUnload
+    if rear then
+        goalX,goalZ=entry.x,entry.farZ
+        occupied=Q.waitingGoalOccupied(driver,goalX,goalZ,true)
+    end
+    if not occupied then return false end
     local data=Q.data(driver)
     local pending=data.deferredApproach
     if not pending or pending.combine~=driver.combineToUnload then
         pending={combine=driver.combineToUnload,started=now(),pose=W.pose(driver:getPipeOffsetReferenceNode())}
         data.deferredApproach=pending
-        driver:debug('Queue: replacement goal occupied by outgoing train; retaining native assignment')
+        driver:debug('Queue: unloading goal occupied by a vehicle; retaining native assignment')
     end
     pending.x=x; pending.z=z; pending.retryAt=now()+1000
+    pending.goalX=goalX; pending.goalZ=goalZ; pending.final=final; pending.rear=rear
     driver:setMaxSpeed(0)
     return true
 end
@@ -205,14 +226,18 @@ function Q.resumeWaitingApproach(driver)
     end
     driver:setMaxSpeed(0)
     if now()<pending.retryAt then return end
-    if now()-pending.started>=60000 then
+    if now()-pending.started>=(pending.final and 120000 or 60000) then
         data.deferredApproach=nil; data.waitingApproach=nil; data.approachRetryAt=now()+10000
+        if pending.final then
+            Q.clearStoppedApproach(driver)
+            driver:debug('Queue: final goal remains occupied; keeping job available after retry delay')
+        end
         driver:startWaitingForSomethingToDo()
         return
     end
-    if Q.waitingGoalOccupied(driver,pending.x,pending.z) then pending.retryAt=now()+1000; return end
+    if Q.waitingGoalOccupied(driver,pending.goalX,pending.goalZ,pending.rear) then pending.retryAt=now()+1000; return end
     data.deferredApproach=nil
-    driver:debug('Queue: outgoing train cleared replacement goal; resuming native approach')
+    driver:debug('Queue: vehicle cleared unloading goal; resuming native approach')
     driver:startPathfindingToWaitingCombine(pending.x,pending.z)
 end
 

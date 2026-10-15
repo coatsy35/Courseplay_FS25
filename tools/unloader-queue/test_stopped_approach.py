@@ -71,14 +71,89 @@ class StoppedApproachTests(unittest.TestCase):
             assert(data.phase=='checking' and not u:isOkToStartUnloadingCombine())
         ''')
 
-    def test_native_backup_keeps_recovery_timeout(self):
+    def test_native_backup_does_not_spend_the_travel_progress_allowance(self):
         self.lua.execute('''
             local context=nativeBackupFixture()
             u.state=u.states.WAITING_FOR_PATHFINDER
             Q.stoppedApproachGoal(u,0,-8); u.queueStoppedApproach.context=context
             u:onPathfindingObstacleAtStart(u.pathfinderController,context,1,false,0,0)
             g_currentMission.time=91000; Q.updateStoppedApproach(u)
+            assert(not stopped and u.queueStoppedApproach and u.state==u.states.MOVING_BACK_BEFORE_PATHFINDING)
+            u:onLastWaypointPassed()
+            assert(retried==1 and u.queueStoppedApproach.phase=='approaching')
+            g_currentMission.time=180000; place(0,2,0); Q.updateStoppedApproach(u)
+            assert(not stopped and u.queueStoppedApproach.progressTime==180000)
+            g_currentMission.time=270001; Q.updateStoppedApproach(u)
             assert(stopped and not u.queueStoppedApproach)
+        ''')
+
+    def test_search_and_progressing_final_run_in_can_exceed_ninety_seconds(self):
+        self.lua.execute('''
+            u.state=u.states.WAITING_FOR_PATHFINDER
+            Q.stoppedApproachGoal(u,0,-8)
+            g_currentMission.time=91000; Q.updateStoppedApproach(u)
+            assert(not stopped and u.queueStoppedApproach.phase=='pathfinding')
+            checkedRunIn()
+            local data=u.queueStoppedApproach
+            for i,p in ipairs(data.path) do
+                place(p.x,p.z,p.t); g_currentMission.time=g_currentMission.time+500
+                Q.updateStoppedApproach(u)
+                assert(not stopped and u.queueStoppedApproach==data)
+            end
+            assert(g_currentMission.time>90000)
+            u:onLastWaypointPassed()
+            assert(not stopped and u.state==u.states.UNLOADING_STOPPED_COMBINE)
+        ''')
+
+    def test_occupied_final_rear_entry_retains_job_then_resumes_original_goal(self):
+        for late in (False, True):
+            with self.subTest(late=late):
+                self.setUp()
+                self.lua.execute('''
+                    u.state=u.states.WAITING_FOR_PATHFINDER
+                    local x,z=Q.stoppedApproachGoal(u,0,-8)
+                    local blocker,blockerDriver,blockerHeader=makeHarvester(x,pipe.z+z,0)
+                    blocker.getIsCpActive=function() return false end
+                    g_currentMission.vehicleSystem.vehicles={harvester,v,blocker}
+                    Q.data(u).waitingApproach={combine=harvester,x=0,z=-8}
+                '''+('''
+                    assert(not u:onPathfindingDoneToWaitingCombine({},false,nil,true))
+                ''' if late else '''
+                    AIDriveStrategyUnloadCombine.startPathfindingToWaitingCombine(u,0,-8)
+                ''')+'''
+                    assert(u.queueData.deferredApproach and not stopped)
+                    g_currentMission.time=90000
+                    Q.updateStoppedApproach(u); Q.resumeWaitingApproach(u)
+                    assert(u.combineToUnload==harvester and u.queueData.deferredApproach and not stopped)
+                    local original
+                    u.startPathfindingToWaitingCombine=function(_,x,z) original={x=x,z=z} end
+                    blocker.rootNode.x=80; blockerHeader.rootNode.x=80
+                    g_currentMission.time=91001; Q.resumeWaitingApproach(u)
+                    assert(not u.queueData.deferredApproach and original.x==0 and original.z==-8)
+                    assert(not stopped and u.combineToUnload==harvester)
+                ''')
+
+    def test_permanently_occupied_final_goal_releases_reservation_without_stopping_job(self):
+        self.lua.execute('''
+            u.state=u.states.WAITING_FOR_PATHFINDER
+            local x,z=Q.stoppedApproachGoal(u,0,-8)
+            local blocker=makeHarvester(x,pipe.z+z,0)
+            g_currentMission.vehicleSystem.vehicles={harvester,v,blocker}
+            assert(Q.deferWaitingApproach(u,0,-8))
+            g_currentMission.time=120001; Q.resumeWaitingApproach(u)
+            assert(not stopped and u.state==u.states.IDLE and not u.combineToUnload)
+            assert(not u.queueStoppedApproach and not u.queueData.deferredApproach)
+            assert(u.queueData.approachRetryAt>g_currentMission.time)
+        ''')
+
+    def test_native_hold_without_physical_progress_does_not_hide_a_stalled_approach(self):
+        self.lua.execute('''
+            u.state=u.states.WAITING_FOR_PATHFINDER
+            Q.stoppedApproachGoal(u,0,-8); Q.stoppedApproachPath(u,true,{})
+            u.state=u.states.DRIVING_TO_COMBINE
+            u.isBeingHeld=function() return true end
+            g_currentMission.time=89000; Q.updateStoppedApproach(u); assert(not stopped)
+            g_currentMission.time=90001; Q.updateStoppedApproach(u); assert(stopped)
         ''')
 
     def test_leaving_final_scope_finishes_native_backup_and_retains_departure_intent(self):

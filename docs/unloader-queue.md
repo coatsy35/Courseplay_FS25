@@ -1,3 +1,53 @@
+## Build 3037 - unload, reverse clear, then park at course end
+
+The retained 3036 run reached final unloading with combine 319 still holding
+11,576.9 litres. Tractor 322 obtained a valid 149-waypoint approach at 00:41:10,
+then a checked 12.9 m run-in at 00:41:59. It passed waypoint 62 at 00:42:05.320,
+but the added total 90-second rear-entry deadline stopped its job 124 ms later.
+Replacement tractors then failed at an occupied rear goal. The lead combine
+never became empty, so no final parking attempt began. Evidence is retained in
+out/incident-3036-final-unload/; the blocking trailer's owner is not established.
+
+The lead combine must unload at its stopped end position. Once empty, its
+trailer releases the assignment and completes native reverse clearance before
+the combine starts its checked forward/turn-away parking move. A trailer at its
+configured cutoff, explicitly sent to unload, or serving the last combine uses
+native departure and AD handover. Otherwise it remains available for the next
+combine. Apply the same final-empty transition to a moving rendezvous that
+finishes at course end, and retain the successful-job-stop race handling.
+Loaded combines do not acquire permission to move for parking.
+
+Remove the absolute rear-entry deadline across search, native backup and travel.
+The native pathfinder and its matching reverse retain their own lifecycle. The
+approach has a 90-second actual no-movement bound; the checked final run-in keeps
+its 12-second no-movement bound and existing search CPU budget. Movement resets
+progress; a native hold alone does not. A slow but progressing approach therefore
+does not spend a shared timeout and stop immediately before reaching the pipe.
+
+Check the actual farther-back final goal for vehicle footprints, including
+parked trailers. An occupied goal retains the assignment and retries after the
+vehicle clears, using the original native offsets. After two minutes of occupied
+goal waiting, release the reservation with a short retry delay while keeping
+the tractor job available. Do not stop successive jobs against the same vehicle.
+Crop refusal, unknown geometry and unrelated path failures retain native handling.
+
+Parking waits for both assignment release and the native reverse state tied to
+that combine. Its planning/driving allowance starts after this handover. A
+trailer making physical progress renews the wait; two minutes without clearance
+progress finishes the combine safely in place with a diagnostic, rather than
+forcing movement through it. Once reverse clearance ends, native departure and
+checked parking may proceed concurrently under their existing collision checks.
+The 3036 final-only crop permission, full-header sweep, neighbour unloading lane
+reservation, field boundaries and live proximity protection remain unchanged.
+
+Regressions cover three successive final loads, partial and due trailers, final
+moving-rendezvous completion, native reverse/AD handover, slow progressing
+approaches, genuine stalls, occupied-goal recovery and ordinary 3031 unloading
+contracts. Source and extracted-package qualification remain mandatory. These
+engine-boundary tests do not simulate the complete live vehicle physics; the
+whole-field run and successive final unloading still need in-game validation.
+Keep the accepted 3031 milestone and paused scheduled monitor unchanged.
+
 ## Build 3036 - crop-permitted final parking with checked turn-away routes
 
 The 14 October 3035 run reached the final unload. At 14:26:34 combine 319

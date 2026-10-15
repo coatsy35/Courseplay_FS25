@@ -217,7 +217,31 @@ function Q.driveFinishClearance(combine)
         combine:setMaxSpeed(0)
         return
     end
-    if time-data.started>60000 then Q.completeFinishClearance(combine,'timed out safely'); return end
+    if not data.driving then
+        -- Releasing the assignment starts native reverse clearance; it does not
+        -- mean the trailer is clear. Let that manoeuvre finish before parking.
+        for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+            local driver=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+            local states=driver and driver.states
+            local backing=states and (driver.state==states.MOVING_BACK
+                or driver.state==states.MOVING_BACK_WITH_TRAILER_FULL)
+            if driver and (driver.combineToUnload==combine.vehicle
+                    or (backing and driver.state.properties.vehicle==combine.vehicle)) then
+                local pose=W.pose(vehicle:getAIDirectionNode())
+                local wait=data.waitingTrailer
+                if not wait or wait.vehicle~=vehicle or distance(pose,wait.pose)>0.5 then
+                    wait={vehicle=vehicle,pose=pose,time=time}; data.waitingTrailer=wait
+                end
+                if time-wait.time>120000 then
+                    Q.completeFinishClearance(combine,'unloader clearance made no progress'); return
+                end
+                combine:setMaxSpeed(0); return
+            end
+        end
+        data.waitingTrailer=nil
+        data.clearanceStarted=data.clearanceStarted or time
+    end
+    if time-data.clearanceStarted>60000 then Q.completeFinishClearance(combine,'timed out safely'); return end
     local here=W.pose(combine.vehicle:getAIDirectionNode())
     local model=W.rigidModel(combine.vehicle)
     if not model then Q.completeFinishClearance(combine,'geometry unavailable'); return end
@@ -252,10 +276,6 @@ function Q.driveFinishClearance(combine)
     if changed then finishCandidates(data,combine.turningRadius) end
     combine:setMaxSpeed(0)
     if data.retryAt and time<data.retryAt then return end
-    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
-        local driver=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
-        if driver and driver.combineToUnload==combine.vehicle then return end
-    end
     local route=data.candidates[data.candidate]
     local timer=openIntervalTimer()
     local reason
@@ -284,16 +304,15 @@ function Q.driveFinishClearance(combine)
         combine:debug('Queue: final parking candidate %d rejected: %s',data.candidate,data.world.failureDetail or reason)
         data.candidate=data.candidate+1; data.sample=0
         if data.candidate>#data.candidates then
-            if time-data.started<15000 then data.candidate=1; data.retryAt=time+1000
+            if time-data.clearanceStarted<15000 then data.candidate=1; data.retryAt=time+1000
             else Q.completeFinishClearance(combine,'no checked forward/turn-away route available') end
         end
     end
 end
 
--- Complete the native stopped-unloading transition even when the combine's
--- successful job stop has already removed its strategy. Keep the vehicle for
--- native marker-based reverse clearance; releaseCombine cannot retain it once
--- CP is inactive. Departure and AutoDrive handover remain entirely native.
+-- Final loads always hand over through native reverse clearance, including a
+-- moving rendezvous that emptied at course end or a successful job stop that
+-- already removed the combine strategy. Departure and AutoDrive stay native.
 function Q.hasRemainingCombine(driver,finished)
     for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         if vehicle~=finished and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
@@ -307,8 +326,14 @@ end
 
 function Q.releaseFinishedCombine(driver)
     local combine=driver.combineToUnload
-    if not Q.enabled(driver) or driver.state~=driver.states.UNLOADING_STOPPED_COMBINE
-            or not combine or not combine.queueFinishedEmptyCombine or combine:getIsCpActive() then return false end
+    if not Q.enabled(driver) or not combine or (driver.state~=driver.states.UNLOADING_STOPPED_COMBINE
+            and driver.state~=driver.states.UNLOADING_MOVING_COMBINE) then return false end
+    if combine:getIsCpActive() then
+        local c=combine:getCpDriveStrategy()
+        if not c or not c.isWaitingForUnloadAfterCourseEnded or not c:isWaitingForUnloadAfterCourseEnded()
+                or not c.combineController or c.combineController:getFillLevel()>=0.01
+                or c:alwaysNeedsUnloader() then return false end
+    elseif not combine.queueFinishedEmptyCombine then return false end
     local leave=Q.atDepartureThreshold(driver) or driver:isDriveUnloadNowRequested()
     if not leave then leave=not Q.hasRemainingCombine(driver,combine) end
     Q.cancel(driver)
@@ -1633,6 +1658,7 @@ function Q.stoppedApproachPath(driver,success,course)
         Q.clearStoppedApproach(driver); return
     end
     data.course=course; data.phase='approaching'
+    data.progress=W.pose(driver.vehicle:getAIDirectionNode()); data.progressTime=g_currentMission.time
 end
 
 function Q.stoppedAdmission(driver)
@@ -1683,7 +1709,6 @@ function Q.updateStoppedApproach(driver)
     if data.combine==driver.combineToUnload and not data.combine:getIsCpActive() then
         if nativeBackup and data.combine.queueFinishedEmptyCombine then
             data.departing=data.departing or finalDeparting(driver)
-            if g_currentMission.time-data.started>90000 then stoppedApproachFailed(driver,'rear entry timed out') end
         else Q.releaseLostRecoveryTarget(driver,data) end
         return
     end
@@ -1693,9 +1718,6 @@ function Q.updateStoppedApproach(driver)
     if nativeBackup then
         -- Do not interrupt an accepted native reverse when the target resumes.
         -- Its callback retains the intent until the next update/endpoint.
-        if Q.finalApproachTarget(driver) and g_currentMission.time-data.started>90000 then
-            stoppedApproachFailed(driver,'rear entry timed out')
-        end
         return
     end
     if data.departing and not finalDeparting(driver) then driver:requestDriveUnloadNow() end
@@ -1712,7 +1734,17 @@ function Q.updateStoppedApproach(driver)
         else driver:startWaitingForSomethingToDo() end
         return
     end
-    if g_currentMission.time-data.started>90000 then stoppedApproachFailed(driver,'rear entry timed out'); return end
+    -- Native search and its matching backup retain their own lifecycle. Once
+    -- travelling, measure lack of movement rather than total rendezvous time.
+    if data.phase=='approaching' then
+        local here=W.pose(driver.vehicle:getAIDirectionNode())
+        if distance(here,data.progress)>0.5 then
+            data.progress=here; data.progressTime=g_currentMission.time
+        end
+        if g_currentMission.time-data.progressTime>90000 then
+            stoppedApproachFailed(driver,'rear entry made no progress'); return
+        end
+    end
     if data.phase=='checking' then
         driver:setMaxSpeed(0)
         local timer=openIntervalTimer()

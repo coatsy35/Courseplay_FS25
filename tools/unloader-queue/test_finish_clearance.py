@@ -96,8 +96,9 @@ class FinishClearanceTests(unittest.TestCase):
     def test_no_early_move_or_native_reverse_hold_while_unloader_is_assigned(self):
         self.lua.execute('''
             advance()
-            local unloader={combineToUnload=harvester}
-            local tractor={getCpDriveStrategy=function() return unloader end}
+            local unloader={combineToUnload=harvester,augerWagon=true}
+            local tractor={getCpDriveStrategy=function() return unloader end,
+                getAIDirectionNode=function() return {x=10,z=0,t=0} end}
             g_currentMission.vehicleSystem.vehicles={harvester,neighbour,tractor}
             for i=1,20 do advance(); assert(not starts and not finishes and c.speed==0) end
             -- Native stopped-unload completion must recognise end-of-course,
@@ -106,17 +107,34 @@ class FinishClearanceTests(unittest.TestCase):
             unloader.changeToUnloadWhenTrailerFull=function() return false end
             unloader.areThereAnyCombinesOrLoaderLeftoverOnTheField=function() return true end
             unloader.debug=function() end
-            unloader.states={MOVING_BACK={}}
+            unloader.states={MOVING_BACK={properties={}},IDLE={properties={}}}
             unloader.ppc={setNormalLookaheadDistance=function() end}
             unloader.releaseCombine=function(self) self.combineJustUnloaded=self.combineToUnload; self.combineToUnload=nil end
-            unloader.startMovingBackFromCombine=function(_,state,combine,hold)
+            unloader.startMovingBackFromCombine=function(self,state,combine,hold)
                 assert(combine==harvester and not hold); reversed=true
+                self.state=state; state.properties.vehicle=combine
             end
             c.getFillLevelPercentage=function() return 0 end
             c.isFull=function() return false end
             c.pipeController={justStoppedDischarging=function() return false end}
             unloader:unloadStoppedCombine(); assert(reversed and not unloader.combineToUnload)
+            g_currentMission.time=g_currentMission.time+61000; advance()
+            assert(not starts and not finishes and c.speed==0)
+            unloader.state=unloader.states.IDLE
             plan(); assert(starts==1 and not finishes)
+        ''')
+
+    def test_stalled_trailer_clearance_finishes_safely_without_starting_parking(self):
+        self.lua.execute('''
+            advance()
+            u.states={MOVING_BACK={properties={vehicle=harvester}},MOVING_BACK_WITH_TRAILER_FULL={}}
+            u.state=u.states.MOVING_BACK; u.combineToUnload=nil
+            g_currentMission.vehicleSystem.vehicles={harvester,neighbour,v}
+            advance(); assert(not starts and not finishes)
+            g_currentMission.time=g_currentMission.time+110000; place(0,2,0); advance()
+            assert(not starts and not finishes,'physical reverse progress must renew the wait')
+            g_currentMission.time=g_currentMission.time+120001; advance()
+            assert(finishes==1 and not starts and not c.queueFinishClearance)
         ''')
 
     def test_boundary_and_header_only_obstacle_still_prevent_departure(self):
@@ -136,20 +154,26 @@ class FinishClearanceTests(unittest.TestCase):
                     assert(finishes==1 and not starts and not c.queueFinishClearance)
                 ''')
 
-    def test_moving_unload_completion_releases_without_holding_finished_combine(self):
+    def test_moving_final_unload_reverses_clear_before_combine_parks(self):
         self.lua.execute('''
             advance(); assert(c.queueFinishClearance)
-            c.getFillLevelPercentage=function() return 0 end
-            c.isTurningOnHeadland=function() return false end
+            u.states={UNLOADING_MOVING_COMBINE={},MOVING_BACK={properties={}},
+                MOVING_BACK_WITH_TRAILER_FULL={properties={}},IDLE={}}
+            u.state=u.states.UNLOADING_MOVING_COMBINE
             u.combineToUnload=harvester
-            u.getFollowingCourseOffset=function() return 0 end
-            u.followCourse={setOffset=function() end}
-            u.changeToUnloadWhenTrailerFull=function() return false end
-            u.driveBesideCombine=function() return 0,0 end
-            u.startWaitingForSomethingToDo=function() idle=true end
-            u.startMovingBackFromCombine=function() error('moving unload incorrectly held the finished combine') end
+            u.isDriveUnloadNowRequested=function() return false end
+            u.isServingPosition=function() return true end
+            u.ppc.setNormalLookaheadDistance=function() end
+            u.releaseCombine=function(self) self.combineToUnload=nil end
+            u.startMovingBackFromCombine=function(self,state,target,hold)
+                assert(target==harvester and not hold)
+                self.state=state; state.properties.vehicle=target; reversed=true
+            end
+            g_currentMission.vehicleSystem.vehicles={harvester,neighbour,v}
             u:unloadMovingCombine()
-            assert(idle and not u.combineToUnload)
+            assert(reversed and not u.combineToUnload and u.state==u.states.MOVING_BACK)
+            for i=1,20 do advance(); assert(not starts and not finishes) end
+            u.state=u.states.IDLE
             plan(); assert(starts==1 and not finishes)
         ''')
 

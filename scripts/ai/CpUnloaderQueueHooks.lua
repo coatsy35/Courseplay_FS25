@@ -67,6 +67,7 @@ end
 
 local stoppedUnload = U.unloadStoppedCombine
 function U:unloadStoppedCombine()
+    if Q.releaseFinishedCombine(self) then return end
     if self.queueStationaryPipe and self.queueStationaryPipe==self.combineToUnload and not Q.finalApproachTarget(self) then
         self.queueStationaryPipe=nil
         local c=self.combineToUnload and self.combineToUnload:getCpDriveStrategy()
@@ -110,6 +111,7 @@ end
 
 local movingUnload = U.unloadMovingCombine
 function U:unloadMovingCombine()
+    if Q.releaseFinishedCombine(self) then return end
     if Q.watchStoppedMovingUnload(self) then return end
     return movingUnload(self)
 end
@@ -131,7 +133,9 @@ function U:startPathfindingToWaitingCombine(x,z)
     -- farther back; an outgoing trailer still owns that final space.
     if Q.deferWaitingApproach(self,x,z) then return end
     if self.queueData then self.queueData.waitingApproach={combine=self.combineToUnload,x=x,z=z} end
+    local originalX,originalZ=x,z
     x,z=Q.stoppedApproachGoal(self,x,z)
+    if self.queueStoppedApproach and Q.deferWaitingApproach(self,originalX,originalZ) then return end
     local result=waitingPath(self,x,z)
     -- The native context is created inside waitingPath and can synchronously
     -- install a backup. Bind it after that call, before the next update.
