@@ -122,7 +122,7 @@ end
 function Q.release(driver)
     Q.cancel(driver)
     local data=driver.queueData
-    if data then data.operation=nil; data.stage=nil end
+    if data then data.operation=nil; data.stage=nil; data.departureClearance=nil end
     driver.state=driver.states.IDLE
 end
 
@@ -710,10 +710,13 @@ function Q.tick(driver)
         Q.remove(driver); return
     end
     local data=Q.data(driver)
-    if data.operation and not Q.owns(driver) then Q.cancel(driver); data.operation=nil end
+    if data.operation and not Q.owns(driver) then
+        Q.cancel(driver); data.operation=nil; data.departureClearance=nil
+    end
     Q.refresh()
     if Q.owns(driver) and Q.holdForHarvesterBypass(driver) then return end
-    if data.nativeDeparture and driver.state~=driver.states.IDLE then return end
+    local departureClearance=Q.departureClearanceActive(driver)
+    if data.nativeDeparture and driver.state~=driver.states.IDLE and not departureClearance then return end
     if driver.state==driver.states.IDLE then
         if data.nativeDeparture or driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
             driver:startUnloadingTrailers(); return
@@ -721,9 +724,9 @@ function Q.tick(driver)
         Q.take(driver,'prepare')
     end
     if Q.owns(driver) then
-        -- Full/manual departure outranks both preparation and a queue yield.
-        -- From here CP owns obstacle clearance and return-marker travel.
-        if driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
+        -- Full/manual departure outranks ordinary queue work. Only a checked
+        -- escape from its blocked departure may finish before native replanning.
+        if not departureClearance and (driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver)) then
             Q.release(driver); driver:startUnloadingTrailers(); return
         end
         -- Arrival searches retain partial work while native pathfinding owns

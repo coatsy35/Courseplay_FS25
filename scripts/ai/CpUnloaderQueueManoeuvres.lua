@@ -667,11 +667,89 @@ local function resumeBypass(combine,wait)
     wait.turn.state=wait.turn.states.PREPARING_RECOVERY
 end
 
+-- Departure keeps native ownership except for this bounded, checked escape.
+-- A failed combine detour plus ten seconds without physical progress is required;
+-- passing departures, native reverse clearance and foreground searches are untouched.
+function Q.departureClearanceActive(driver)
+    return Q.owns(driver) and driver.queueData.departureClearance==true
+end
+
+function Q.resumeNativeDeparture(driver,reason)
+    local data=driver.queueData
+    if not data then return end
+    if Q.owns(driver) then Q.release(driver) else Q.cancel(driver) end
+    data.departureClearance=nil; data.departureConflicts=nil
+    data.priorityCombine=nil; data.yieldRequests=nil; data.operation=nil
+    data.departureRetryAt=g_currentMission.time+30000
+    -- Controller runners advance synchronously. Detaching the old runner and
+    -- installing fresh native listeners prevents a cancelled result resuming it.
+    if driver.pathfinderController then
+        driver.pathfinderController.pathfinder=nil
+        if driver.pathfinderController.reset then driver.pathfinderController:reset() end
+    end
+    driver:debug('Queue: %s; replanning native departure from current pose',reason)
+    driver:startPathfindingToInvertedGoalPositionMarker()
+end
+
+local function requestDepartureClearance(combine,driver,area)
+    local data=driver.queueData
+    if not data or not data.nativeDeparture or not Q.enabled(driver)
+            or not driver.vehicle:getIsCpActive() then return false end
+    if Q.departureClearanceActive(driver) then
+        -- A second turning combine joins the existing escape; never restart it.
+        if not data.yieldRequests[combine.vehicle] then
+            data.yieldRequests[combine.vehicle]={turnClearance=area,preferForward=true,
+                turn=combine.aiTurn,turnContext=combine.turnContext}
+        end
+        return false
+    end
+    if driver.state~=driver.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL
+            or not driver.invertedStartPositionMarkerNode
+            or (driver.pathfinderController and driver.pathfinderController.pathfinder)
+            or (driver.isBeingHeld and driver:isBeingHeld()) then
+        data.departureConflicts=nil; return false
+    end
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    local time=g_currentMission.time
+    data.departureConflicts=data.departureConflicts or setmetatable({}, {__mode='k'})
+    local watch=data.departureConflicts[combine]
+    if not watch or watch.context~=combine.turnContext
+            or watch.course~=driver.course or distance(here,watch.pose)>0.5
+            or math.abs(H.math.delta(here.t,watch.pose.t))>math.rad(5)
+            or not AIUtil.isStopped(driver.vehicle) then
+        data.departureConflicts[combine]={context=combine.turnContext,course=driver.course,pose=here,time=time}
+        return false
+    end
+    if time-watch.time<10000 or time<(data.departureRetryAt or 0)
+            or not AIUtil.isStopped(combine.vehicle) or not intersects(area,driver.vehicle) then return false end
+    local probe=setmetatable({queueData={operation='yield'}},{__index=driver})
+    local world,reason=W.new(probe)
+    local clear=false
+    if world then clear,reason=W.clear(world,W.poses(world.model)); W.delete(world) end
+    if not clear then
+        -- Do not force movement from an invalid pose. Native pathfinding retains
+        -- its own obstacle-at-start handling and return-marker retry policy.
+        Q.resumeNativeDeparture(driver,'departure clearance unavailable: '..tostring(reason))
+        return true
+    end
+    if driver.pathfinderController then driver.pathfinderController.pathfinder=nil end
+    Q.take(driver,'yield')
+    data.departureClearance=true; data.departureConflicts=nil
+    data.priorityCombine=combine.vehicle
+    data.yieldRequests={[combine.vehicle]={turnClearance=area,preferForward=true,
+        turn=combine.aiTurn,turnContext=combine.turnContext}}
+    data.nextAttempt=0
+    driver:debug('Queue: stalled native departure conflicts with %s turn; checking whole-rig clearance',
+        CpUtil.getName(combine.vehicle))
+    return true
+end
+
 -- A native reverse can finish while the combine searches or waits. Use the
 -- rig's current ownership, not its classification when the detour started.
 -- An existing request must keep its search, progress and clearance timer.
 local function requestTurnClearance(combine,driver,area)
     local data=driver.queueData
+    if data and data.nativeDeparture then return requestDepartureClearance(combine,driver,area) end
     if not data or not Q.owns(driver)
             or (data.operation~='yield' and not parkedQueueTrailer(driver)) then return false end
     local request=data.yieldRequests and data.yieldRequests[combine.vehicle]
@@ -734,7 +812,11 @@ function Q.checkParkedTrailerTravel(combine)
             -- returning to the queue, but moving clearance/departures go first.
             local stationary=(not blocked or AIUtil.isStopped(wait.driver.vehicle))
                 and (not traffic or AIUtil.isStopped(traffic.vehicle))
-            if stationary and g_currentMission.time>=(wait.retryAt or 0) then
+            local departureBusy=Q.departureClearanceActive(wait.driver)
+                or (wait.driver.queueData and wait.driver.queueData.nativeDeparture
+                    and ((wait.driver.pathfinderController and wait.driver.pathfinderController.pathfinder)
+                        or Q.nativeClearanceActive(wait.driver)))
+            if stationary and not departureBusy and g_currentMission.time>=(wait.retryAt or 0) then
                 wait.retryAt=g_currentMission.time+5000
                 combine.queueTrailerWait=nil
                 resumeBypass(combine,wait)
@@ -751,7 +833,8 @@ function Q.checkParkedTrailerTravel(combine)
         -- Recheck the route from the stopped pose after the entire rig clears.
         -- Never skip to the next row or restart the obstructed calculated turn.
         local driver=wait.driver
-        if Q.owns(driver) and not Q.atDepartureThreshold(driver) and not driver:isDriveUnloadNowRequested() then
+        if Q.owns(driver) and not driver.queueData.nativeDeparture
+                and not Q.atDepartureThreshold(driver) and not driver:isDriveUnloadNowRequested() then
             Q.take(driver,'prepare')
             driver.queueData.yieldRequests=nil; driver.queueData.priorityCombine=nil
         end
@@ -1100,6 +1183,9 @@ end
 function Q.resumeAfterYield(driver)
     local data=Q.data(driver)
     data.priorityCombine=nil; data.yieldRequests=nil
+    if Q.departureClearanceActive(driver) then
+        Q.resumeNativeDeparture(driver,'whole rig clear of harvester turn'); return
+    end
     Q.take(driver,'prepare')
     data.nextAttempt=0
     Q.reason(data,'clear of harvester manoeuvre; resuming prepare')
@@ -1133,6 +1219,9 @@ function Q.updateYieldRecovery(driver)
     local timeout=data.yieldFailed and 15000 or 60000
     if time-data.yieldProgressTime<timeout or not Q.nativeMoveAway
             or (driver.isBeingHeld and driver:isBeingHeld()) then return false end
+    if Q.departureClearanceActive(driver) then
+        Q.resumeNativeDeparture(driver,'checked departure clearance made no progress'); return true
+    end
     local vehicle=data.priorityCombine
     if not vehicle or not (data.yieldRequests and data.yieldRequests[vehicle])
             or not AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then

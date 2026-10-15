@@ -131,6 +131,7 @@ if __name__ == '__main__':
                                 'unloader-queue/test_departure_threshold.py',
                                 'unloader-queue/test_harvester_bypass.py',
                                 'unloader-queue/test_combined_recovery.py',
+                                'unloader-queue/test_departure_turn.py',
                                 'unloader-queue/test_arrival_clearance.py'),
                   stage='queue-operational-candidate-requires-in-game-validation',
                   reference_zip=args.match_release)

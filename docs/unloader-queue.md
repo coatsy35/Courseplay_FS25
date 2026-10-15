@@ -1,3 +1,46 @@
+## Build 3038 - recover a departing trailer obstructing a row turn
+
+The preserved 15 October build-3037 log records tractor 323 reaching its
+configured departure cutoff at 14:55:02, then receiving its native return route
+at 14:55:08. Combine 319 began the row turn at waypoint 2414/2434 at 14:55:46.
+The tractor reported the combine blocking at 1.4 m, later remained roughly
+10.8 m off its route, and the combine repeatedly failed its bypass. This was
+before final unloading; the combine still held about 40% of its tank.
+The tractor task stopped at 15:08:30 before clearance was logged at 15:08:55;
+that is not evidence of unattended recovery. Retain the incident snapshot and
+diagnosis under out/incident-3037-header-conflict/.
+
+After a failed row-turn bypass, watch each departing tractor's actual position
+and heading. Only a native return-to-start tractor with no physical progress
+for ten seconds, still intersecting the full reserved turn, can enter checked
+yield clearance. Moving departures, initial reverse clearance, native searches,
+other unloading modes and explicit native holds retain their control. Separate
+watches prevent two waiting combines from continually resetting the same timer.
+
+Use the existing articulated clearance search, crop/field/island/obstacle checks,
+shared computation budget and live route validation. Hold the combine while
+that escape searches or moves, rather than restarting its bypass concurrently.
+Additional turning combines join the clearance request. Native move-away or
+backup callbacks cannot replace this owned checked route. The whole rig and
+native proximity must clear each request for two seconds before handback.
+
+Keep native departure intent even below the cutoff: after clearance, recalculate
+the original inverted start-marker route from the actual pose, using unchanged
+native crop/reverse parameters, alignment, retries and full-job/AD handover.
+An invalid starting footprint or bounded failure to make clearance progress
+returns to that native planner, with a 30-second recovery cooldown; it never
+forces an unchecked queue path. Superseded queue search generations and native
+coroutine runners are invalidated. There is no new AD command or marker change.
+
+Twelve regressions cover persistent versus transient conflicts, two waiting
+combines, whole-trailer clearance, live obstacles, failed searches, cancelled
+turns, cutoff preservation, a real articulated search followed by native marker
+route completion, and the final handover. The existing unloading, staging and
+3037 final-unload/parking fixes remain. Full source and extracted-ZIP release
+qualification is required. Engine queries and physical movement in these tests
+use planar adapters; the 3038 field run still needs in-game validation. Preserve
+the accepted 3031 milestone and keep the scheduled monitor paused.
+
 ## Build 3037 - unload, reverse clear, then park at course end
 
 The retained 3036 run reached final unloading with combine 319 still holding

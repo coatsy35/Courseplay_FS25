@@ -328,6 +328,7 @@ Q.nativeMoveAway=function(driver,vehicle)
 end
 function U:onBlockingVehicle(vehicle,isBack)
     if not Q.enabled(self) then return blocking(self,vehicle,isBack) end
+    if Q.departureClearanceActive(self) then return end
     if isBack then return blocking(self,vehicle,isBack) end
     if Q.nativeClearanceActive(self) then return end
     if Q.deferTrailerYield(self,vehicle) then return end
@@ -349,6 +350,7 @@ end
 -- Invalidate a pending preparation route before native backup takes ownership.
 local backup = U.requestToBackupForReversingCombine
 function U:requestToBackupForReversingCombine(vehicle,...)
+    if Q.departureClearanceActive(self) then return end
     if Q.deferTrailerYield(self,vehicle) then return end
     if Q.owns(self) then Q.release(self) end
     return backup(self,vehicle,...)
