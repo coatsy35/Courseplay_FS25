@@ -195,6 +195,7 @@ function W.bodyClear(world, body, pose, corridor, perimeterConnector)
     local detector=world.collision
     detector.currentOverlapBoxPosition={pos={x,y,z},direction={math.sin(ry),math.cos(ry)},size=math.max(width,length)}
     detector.collidingShapes=0
+    detector.collidingShapesText=nil
     overlapBox(x,y+0.2,z,rx,ry,rz,width,1,length,'_overlapBoxCallback',detector,
         detector.collisionMask,true,true,true,true)
     if detector.collidingShapes > 0 then
@@ -269,7 +270,9 @@ function W.rigidClear(world,root)
         local x,z=H.math.position(root,relative.x,relative.z)
         local clear,reason=W.bodyClear(world,body,{x=x,z=z,t=root.t+relative.t})
         if not clear then
-            world.failureDetail=string.format('component=%d at %.1f,%.1f: %s',i,x,z,world.densityFailure or reason)
+            local obstacle=reason=='vehicle or obstacle' and world.collision.collidingShapesText
+            world.failureDetail=string.format('component=%d at %.1f,%.1f: %s%s',i,x,z,world.densityFailure or reason,
+                obstacle and (' ('..obstacle..')') or '')
             return false,reason
         end
     end

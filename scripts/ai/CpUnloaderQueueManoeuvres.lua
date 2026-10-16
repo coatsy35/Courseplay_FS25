@@ -87,36 +87,66 @@ local function finishCandidates(data,combine)
     data.candidates=candidates; data.candidate=1; data.sample=0
 end
 
--- Build one forward curve at a time, then validate it in the normal sliced
--- planner. Sample the actual analytic curve, including the whole header sweep.
+-- A shortest analytic curve is not an obstacle-avoiding route. Keep the usual
+-- curve first, then try other forward words and checked longer lead-outs before
+-- rejecting a completed row. This planner belongs only to final empty harvesters.
+local function finishRouteOptions(data,combine,route)
+    local radius=combine.turningRadius
+    if not radius or not H.math.finite(radius) or radius<=0 then return {} end
+    local origin,goal=data.origin,route.goal
+    local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
+    local options,seen={},{}
+    local function add(lead,types,preferred)
+        local x,z=H.math.position(origin,0,lead)
+        local start=State3D(x,-z,CpMathUtil.angleFromGame(origin.t))
+        local solution,word=DubinsSolver(types):solve(start,target,radius)
+        if not solution then return end
+        local length=solution:getLength(radius)
+        local key=string.format('%.2f:%s',lead,word)
+        if lead+length<=200 and not seen[key] then
+            seen[key]=true
+            options[#options+1]={solution=solution,lead=lead,length=length,word=word,preferred=preferred}
+        end
+    end
+    add(3,nil,true)
+    local length=data.world.model.front-data.world.model.back
+    local leads={3,0,math.min(40,math.max(8,length)),math.min(40,math.max(8,length)+radius)}
+    for _,lead in ipairs(leads) do
+        for pathType=DubinsSolver.PathType.LSL,DubinsSolver.PathType.LRL do add(lead,{pathType}) end
+    end
+    table.sort(options,function(a,b)
+        if a.preferred~=b.preferred then return a.preferred==true end
+        if a.lead+a.length~=b.lead+b.length then return a.lead+a.length<b.lead+b.length end
+        if a.lead~=b.lead then return a.lead<b.lead end
+        return a.word<b.word
+    end)
+    return options
+end
+
+-- Sample the actual curve, including the entire straight lead-out and header.
 function Q.finishRoute(data,combine,route)
     if route.points then return true end
-    local radius=combine.turningRadius
-    if not radius or not H.math.finite(radius) or radius<=0 then return false end
-    local origin=data.origin
-    local x,z=H.math.position(origin,0,3)
-    local start=State3D(x,-z,CpMathUtil.angleFromGame(origin.t))
-    local goal=route.goal
-    local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
-    local solution=DubinsSolver():solve(start,target,radius)
-    if not solution or solution:getLength(radius)>200 then return false end
+    route.options=route.options or finishRouteOptions(data,combine,route)
+    route.option=route.option or 1
+    local option=route.options[route.option]
+    if not option then return false end
+    local radius,origin,goal=combine.turningRadius,data.origin,route.goal
     local points={}
-    for i=0,6 do
-        local x,z=H.math.position(origin,0,i/2)
-        points[#points+1]={x=x,z=z,t=origin.t,s=i/2}
+    local count=math.max(1,math.ceil(option.lead/0.5))
+    for i=0,count do
+        local s=option.lead*i/count
+        local x,z=H.math.position(origin,0,s)
+        if i==0 or s>0 then points[#points+1]={x=x,z=z,t=origin.t,s=s} end
     end
-    local length=solution:getLength(radius)
     local step=0.25/(1+data.corner/radius)
-    local samples=dubins_path_sample_many(solution.pathDescriptor,step)
-    local distances=CpMathUtil.getSeries(0,length,step)
+    local samples=dubins_path_sample_many(option.solution.pathDescriptor,step)
+    local distances=CpMathUtil.getSeries(0,option.length,step)
     for i=2,#samples do
         local p=samples[i]
-        points[#points+1]={x=p.x,z=-p.y,t=CpMathUtil.angleToGame(p.t),s=3+distances[i]}
+        points[#points+1]={x=p.x,z=-p.y,t=CpMathUtil.angleToGame(p.t),s=option.lead+distances[i]}
     end
-    -- Native sampling may omit its last point after floating-point rounding.
-    -- Include the exact requested row pose and validate the final small edge.
     if distance(points[#points],goal)<0.000001 then table.remove(points) end
-    points[#points+1]={x=goal.x,z=goal.z,t=goal.t,s=3+length}
+    points[#points+1]={x=goal.x,z=goal.z,t=goal.t,s=option.lead+option.length}
     route.points=points; route.goal=points[#points]
     route.angle=H.math.delta(goal.t,origin.t)
     return true
@@ -400,14 +430,22 @@ function Q.driveFinishClearance(combine)
             for _,p in ipairs(route.points) do points[#points+1]={x=p.x,z=p.z} end
             combine.ppc:setShortLookaheadDistance()
             combine:startCourse(Course(combine.vehicle,points,true),1)
-            combine:debug('Queue: final parking %.1f m to completed centre waypoint %d',route.goal.s,route.ix)
+            combine:debug('Queue: final parking %.1f m to completed centre waypoint %d, lead-out %.1f m, turn %s',
+                route.goal.s,route.ix,route.options[route.option].lead,route.options[route.option].word)
             return
         end
     end
     if reason then
-        combine:debug('Queue: final parking candidate %d rejected: %s',data.candidate,data.world.failureDetail or reason)
-        route.points=nil -- rejected sweeps need not occupy memory until the next retry
-        data.candidate=data.candidate+1; data.sample=0
+        local detail=data.world.failureDetail or reason
+        combine:debug('Queue: final parking candidate %d route %d rejected after %.1f m: %s',
+            data.candidate,route.option,route.points[math.min(data.sample+1,#route.points)].s,detail)
+        -- Every route starts at the same pose. A blocked start needs clearance,
+        -- not another full candidate cycle or permission to cross the obstacle.
+        if data.sample==0 then retryFinishClearance(combine,'start blocked: '..detail); return end
+        local destinationRejected=data.sample==#route.points
+        route.points=nil
+        route.option=route.option+1; data.sample=0
+        if destinationRejected or route.option>#route.options then data.candidate=data.candidate+1 end
         if data.candidate>#data.candidates then
             retryFinishClearance(combine,'no checked route to a completed centre run')
         end

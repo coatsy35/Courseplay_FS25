@@ -1,3 +1,57 @@
+## Build 3042 - final harvester routes around a neighbouring finished combine
+
+The preserved 16 October 3040 run entered final parking for CR11/319 at
+11:54:17.867 after its 5,053.2 L final load was emptied. T7.300/325 released
+and reversed clear. From 11:54:23.487, every proposed parking route failed its
+component-2/header vehicle-or-obstacle test. Rejections persisted until the
+jobs were stopped at 12:18:50. CR11/318 ended at 11:54:26 with 15,649.8 L and
+remained waiting for its final unload; its assigned tractor's entry goal was
+occupied. This was not a missing parking-state transition or a crop refusal.
+The old log did not identify the colliding object or distance along the route,
+so it does not prove which vehicle blocked each sample.
+
+The final planner asked Dubins for only its shortest curve to each row pose,
+always after the same 3 m lead-out. It did not try a longer straight departure
+or an alternative turning shape when that curve intersected another header.
+Changing the row destination could therefore repeat the same blocked sweep.
+A close-combine regression (17 m lateral / 3 m longitudinal separation, or
+15.2 m / 3 m) reproduces complete route rejection with the previous planner,
+despite the initial footprint being clear. These are controlled reproductions,
+not measured coordinates of the photographed vehicles.
+
+Retain the previous shortest route first, then try all six forward Dubins
+words with bounded lead-outs of 0 m, 3 m, whole-harvester length and length plus
+turning radius (lead-out capped at 40 m, total route at 200 m). Rank alternatives
+by total distance. Sample and validate the entire straight part, actual curve,
+chassis and unfolded mounted header; retain the existing boundary, island,
+collision, destination crop and neighbouring unloading-lane checks. Generate
+only the active option's samples, retaining the eight-check / 2 ms target slice.
+Analytic options are bounded but do not constitute a hard per-frame time limit.
+
+Reject a blocked current footprint once and wait three seconds before retrying,
+instead of cycling through every destination sharing that blocked start. Include
+the native collider description and distance travelled along the rejected route
+in diagnostics. Do not ignore an obstacle to force an exit. A physically blocked
+start can still require the obstruction to move; this change does not promise
+to untangle existing contact.
+
+The change belongs only to the existing empty-harvester final-parking state.
+Stay unfolded through final unload, native trailer reverse clearance and the
+checked parking manoeuvre. Only then restore native finish/folding. Ordinary
+harvesting, tractor routes, reservations and AutoDrive departure retain their
+existing behaviour. Build 3041's trailer-parking and traffic corrections remain.
+The 3031 milestone and all earlier release artefacts remain intact.
+
+Regression coverage now uses both actual chassis/header footprints and a
+tractor/trailer in an ordered two-combine final-unload sequence. It verifies a
+longer lead-out, an alternative turning word, full swept collision checks,
+blocked-start backoff/recovery, retained unloading gates and native completion
+for each combine. The previous single-header obstacle test accepts a safe
+alternative to the same destination instead of requiring a different row.
+Evidence: out/incident-3040-final-parking/. Full source and extracted-ZIP release
+checks are required. Physical steering and a complete unattended run still need
+in-game validation.
+
 ## Build 3041 - parallel waiting positions and trailer traffic clearance
 
 The 16 October run loaded 3040 at 10:16:00.093. At 11:20:13 tractor 324
