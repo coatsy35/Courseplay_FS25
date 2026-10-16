@@ -1,3 +1,74 @@
+## Build 3041 - parallel waiting positions and trailer traffic clearance
+
+The 16 October run loaded 3040 at 10:16:00.093. At 11:20:13 tractor 324
+followed combine 319's course from waypoint 1846 while tractor 323 approached
+combine 318. At 11:20:46.272 native proximity reported 323 only 0.4 m away.
+The generic blocking callback held 323 for 20 seconds and gave 324 a straight
+six-waypoint, 25 m move. That course ended at 11:22:10.215. Preparation then
+selected a position 217.4 m away without starting a parking route. The move
+was clearance, not an accepted parallel parking position; its endpoint had no
+row/boundary alignment requirement. The vehicles held different native calls,
+so physical proximity alone did not make 323 available to replace 324.
+
+Returning tractors selected arrival targets at 10:58:42, 11:00:12 and 11:18:11,
+but no preparation route started before later native calls. The log does not
+record enough internal search progress to identify a single cause. Do not claim
+that a stale native pathfinder or one crop refusal proves the arrival failure.
+The previous pool also considered only one orientation at nearby arrival slots,
+only headlands for later pool parking, and ranked those later slots from the old
+arrival rather than the current position. Its candidate checks did not restrict
+centre rows to the harvester's completed course progress.
+
+Choose nearby parallel slots in either direction on completed headlands or
+centre rows, with enough straight span for the complete train in that direction.
+Rank by current travel and heading cost (actual arrival for entrance clearance),
+retain twelve bounded alternatives, and reuse the per-pass body/boundary data.
+Exclude future course sections before they crowd out harvested candidates.
+Actual density, field, island, articulation and obstacle validation still runs
+for every route; course progress never grants permission to cross crop. A rig
+without a current assignment can still find a waiting slot. Parked positions
+remain stable until a new stage or actual obstruction requires movement.
+
+Arrival and pool parking retain a 0.5 ms target search slice while native
+pathfinding is active, within the existing once-per-update shared scheduler;
+ordinary preparation still defers to native work. This is a scheduling target,
+not a hard bound on a single engine query or an FPS claim. The normal target is
+2 ms. Pending searches log elapsed time, measured computation, candidate phase,
+expanded nodes and last rejection every 15 seconds. Candidate/node/edge/travel
+bounds and stale-generation rejection remain. Full in-game arrival clearance
+must still be demonstrated; the previous log cannot establish its exact delay.
+
+For two eligible CP unloaders, use checked parallel parking instead of the
+unloader-to-unloader straight nudge when the start and a waiting slot can be
+validated. Also detect a stopped unloader physically occupying the immediate
+12 m forward route, before driving into contact. Do not reserve distant route
+intersections or alter a moving vehicle merely because courses cross. The
+parked rig yields to a called rig; otherwise the requesting rig yields. A
+reciprocal wait fixes that decision. Preserve both native combine reservations
+while the complete rig follows the collision-checked articulated route. Accept
+parking only after position, every body heading and clearance checks pass;
+then release its call through native waiting/deregistration for a fresh approach.
+
+Active transfer, continuous/auto-aim service, reverse clearance, full/manual
+native departure and excluded unloading modes retain control. Traffic eligibility
+only peeks at the native manual-departure flag: it must not consume the request.
+Invalid starting geometry retains native control rather than forcing a path
+through contact. Failed clearance, ownership changes, removal and departure
+clear both sides of the wait. A dedicated movement clock prevents old parking
+time from cancelling a fresh clearance. Actual stationary obstacles can still
+require waiting; this does not promise escape from a physically boxed-in rig.
+
+Regressions cover completed versus future rows, both parallel directions, real
+articulated paths, an active foreground pathfinder, two-rig obstacle avoidance,
+reservations, reciprocal callbacks, full/manual departure, removal, progress,
+transfer exclusions and nearby stationary versus distant/moving traffic.
+Existing milestone, stopped-rendezvous, yield and departure suites remain.
+Final empty-harvester parking is unchanged and remains harvester-only. Preserve
+the 3031 milestone, previous releases and paused monitor. Evidence is in
+out/incident-3040-arrival-and-trailer-conflict/. Source and extracted-ZIP checks
+are required; physical steering and unattended field completion still need
+in-game validation.
+
 ## Build 3040 - recover a moving rendezvous after the combine fills and stops
 
 The preserved 3039 run loaded at 22:32:26 on 15 October. Tractor 323 accepted a

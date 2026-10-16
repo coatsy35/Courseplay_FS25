@@ -1284,6 +1284,143 @@ function Q.yieldArea(combine,travelCourse,horizon,sampleLimit)
     return overlaps,nil,rectangles
 end
 
+-- Unloader-to-unloader clearance is separate from harvester end parking.
+-- Keep a live combine reservation until the complete rig reaches a parallel slot.
+local function trafficEligible(driver)
+    if not driver or not Q.members[driver] or not Q.enabled(driver) or not driver.vehicle:getIsCpActive()
+            or Q.nativeClearanceActive(driver) or Q.atDepartureThreshold(driver)
+            or (driver.driveUnloadNowRequested and driver.driveUnloadNowRequested:get()) or driver.queueData.nativeDeparture then return false end
+    local combine=driver.combineToUnload
+    if combine then
+        local c=combine:getIsCpActive() and combine:getCpDriveStrategy()
+        if not c or c:alwaysNeedsUnloader() or c:hasAutoAimPipe() or c:isDischarging() then return false end
+    end
+    return driver.state==driver.states.IDLE or (Q.owns(driver) and driver.queueData.operation=='prepare')
+        or driver.state==driver.states.DRIVING_TO_COMBINE
+        or driver.state==driver.states.DRIVING_TO_MOVING_COMBINE
+        or driver.state==driver.states.UNLOADING_MOVING_COMBINE
+end
+
+function Q.clearTrailerTraffic(driver)
+    local data=driver.queueData
+    local waiting=data and data.trailerWait
+    if waiting then
+        local other=waiting.queueData
+        if other and other.trailerTraffic and other.trailerTraffic.other==driver then other.trailerTraffic.cancelled=true end
+        data.trailerWait=nil
+    end
+    local traffic=data and data.trailerTraffic
+    if traffic then
+        local other=traffic.other.queueData
+        if other and other.trailerWait==driver then other.trailerWait=nil end
+        data.trailerTraffic=nil
+    end
+end
+
+function Q.trailerTrafficHold(driver)
+    local data=driver.queueData
+    local yielding=data and data.trailerWait
+    if not yielding then return false end
+    if data.nativeDeparture or Q.atDepartureThreshold(driver) or (driver.driveUnloadNowRequested and driver.driveUnloadNowRequested:get()) then
+        Q.clearTrailerTraffic(driver); return false
+    end
+    local other=yielding.queueData
+    if not yielding.vehicle:getIsCpActive() or not other or not Q.owns(yielding)
+            or not other.trailerTraffic or other.trailerTraffic.other~=driver
+            or other.trailerTraffic.waitingOwner~=driver.combineToUnload then
+        Q.clearTrailerTraffic(driver); return false
+    end
+    return true
+end
+
+function Q.beginTrailerTraffic(driver,vehicle)
+    local other=vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+    if not other or other==driver or not Q.members[other] then return false end
+    local data=Q.data(driver)
+    if data.trailerTraffic or Q.trailerTrafficHold(driver) then return true end
+    if not trafficEligible(driver) or not trafficEligible(other) then return false end
+    if (data.trafficRetryAt or 0)>g_currentMission.time then return false end
+    if driver.combineToUnload and driver.combineToUnload==other.combineToUnload then return false end
+    if other.queueData.trailerTraffic or Q.trailerTrafficHold(other) then return false end
+    -- A parked unloader gives way to one with a call; otherwise the requester
+    -- yields. The reciprocal wait fixes the decision in either update order.
+    local parked=other.state==other.states.IDLE or Q.owns(other)
+    local yielding,waiting=driver,other
+    if parked and driver.combineToUnload then yielding,waiting=other,driver end
+    local probe=setmetatable({queueData={operation='yield'}},{__index=yielding})
+    local world=W.new(probe)
+    if not world then return false end
+    local clear=W.clear(world,W.poses(world.model)); W.delete(world)
+    if not clear then return false end -- no unchecked escape from overlapping bodies
+    local area=Q.yieldArea(waiting.vehicle,nil,30,240)
+    if not area then return false end
+    local goal=Q.poolTarget(yielding,false,area)
+    if not goal then return false end
+    if yielding.pathfinderController then yielding.pathfinderController.pathfinder=nil end
+    Q.clearStoppedApproach(yielding); Q.clearFinalUnload(yielding)
+    local owner=yielding.combineToUnload
+    local yd=Q.take(yielding,'yield')
+    yd.trailerTraffic={other=waiting,owner=owner,waitingOwner=waiting.combineToUnload,area=area,goal=goal,started=g_currentMission.time,
+        progress=W.pose(yielding.vehicle:getAIDirectionNode()),progressAt=g_currentMission.time}
+    Q.data(waiting).trailerWait=yielding
+    yd.nextAttempt=0
+    Q.reason(yd,'checked parallel clearance for '..CpUtil.getName(waiting.vehicle))
+    return true
+end
+
+function Q.updateTrailerTraffic(driver)
+    local data=driver.queueData
+    local traffic=data and data.trailerTraffic
+    if not traffic then return false end
+    if not Q.owns(driver) then Q.clearTrailerTraffic(driver); return false end
+    local finished=data.parkedGoal and Q.arrived(driver,data.parkedGoal)
+    local cancelled=traffic.cancelled or not traffic.other.vehicle:getIsCpActive()
+        or traffic.other.combineToUnload~=traffic.waitingOwner
+        or driver.combineToUnload~=traffic.owner
+        or (traffic.owner and not traffic.owner:getIsCpActive())
+    local pose=W.pose(driver.vehicle:getAIDirectionNode())
+    if distance(pose,traffic.progress)>1 then traffic.progress=pose; traffic.progressAt=g_currentMission.time end
+    local failed=data.yieldFailed or g_currentMission.time-traffic.progressAt>60000
+    if not finished and not cancelled and not failed then return false end
+    local parked=finished and data.parkedGoal
+    Q.clearTrailerTraffic(driver)
+    Q.release(driver)
+    driver:startWaitingForSomethingToDo() -- native deregistration and fresh call geometry
+    data.parkedGoal=parked
+    data.trafficRetryAt=g_currentMission.time+10000
+    data.nextAttempt=0
+    driver:debug('Queue: trailer clearance %s; native assignment released',finished and 'parked parallel' or 'cancelled for replanning')
+    return true
+end
+
+-- Only a stopped unloader actually occupying the immediate forward route can
+-- request early clearance. Do not reserve intersecting routes across the field.
+function Q.checkTrailerTraffic(driver)
+    local data=driver.queueData
+    if not data or data.trailerTraffic or Q.trailerTrafficHold(driver) or not trafficEligible(driver) then return end
+    local time=g_currentMission.time
+    if time<(data.trafficCheckAt or 0) or time<(data.trafficRetryAt or 0) then return end
+    data.trafficCheckAt=time+500
+    if not driver.combineToUnload or not driver.course then return end
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    for other,member in pairs(Q.members) do
+        if other~=driver and trafficEligible(other) and (other.vehicle.lastSpeedReal or 0)*3600<0.5 then
+            local pose=W.pose(other.vehicle:getAIDirectionNode())
+            local dz=(pose.x-here.x)*math.sin(here.t)+(pose.z-here.z)*math.cos(here.t)
+            if distance(here,pose)<35 and dz>0 then
+                local area=Q.yieldArea(driver.vehicle,driver.course,12,160)
+                if area then
+                    for _,item in ipairs(W.currentBodies(other.vehicle) or {}) do
+                        if area(W.rectangle(item.body,item.pose,2)) then
+                            if Q.beginTrailerTraffic(driver,other.vehicle) then return end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 function Q.resumeAfterYield(driver)
     local data=Q.data(driver)
     data.priorityCombine=nil; data.yieldRequests=nil
@@ -1311,6 +1448,7 @@ end
 function Q.updateYieldRecovery(driver)
     local data=driver.queueData
     if not data or data.operation~='yield' or not Q.owns(driver) then return false end
+    if data.trailerTraffic then return Q.updateTrailerTraffic(driver) end
     Q.yieldTarget(driver,true)
     if data.operation~='yield' or not Q.owns(driver) then return false end
     local time=g_currentMission.time
@@ -1361,7 +1499,7 @@ function Q.priority(driver,combine)
     local data=Q.data(driver)
     if data.bypass and data.bypass.combine.vehicle==combine then return true end
     Q.clearHarvesterBypass(driver)
-    if data.operation=='yield' and Q.owns(driver) then
+    if data.operation=='yield' and Q.owns(driver) and not data.trailerTraffic then
         data.yieldRequests[combine]=data.yieldRequests[combine] or {}
         data.yieldRequests[combine].clearSince=nil
         return true
@@ -1380,6 +1518,7 @@ function Q.priority(driver,combine)
     -- Native searches are advanced synchronously by this controller; removing
     -- its runner prevents a superseded callback after clearance. The next native
     -- call installs its own context/listeners in the ordinary way.
+    Q.clearTrailerTraffic(driver)
     if driver.pathfinderController then driver.pathfinderController.pathfinder=nil end
     driver:releaseCombine()
     Q.take(driver,'yield')
@@ -1392,6 +1531,7 @@ end
 
 function Q.yieldTarget(driver,checkOnly)
     local data=Q.data(driver)
+    if data.trailerTraffic then return checkOnly and true or data.trailerTraffic.goal end
     local bodies=W.currentBodies(driver.vehicle)
     local areas,combine,anyBlocked,preferForward={},nil,false,false
     local time=g_currentMission.time

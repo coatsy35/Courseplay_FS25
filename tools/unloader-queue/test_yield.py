@@ -482,12 +482,13 @@ class YieldTests(unittest.TestCase):
             c.fieldWorkCourse=Course(harvester,{{x=50,z=20},{x=50,z=50},{x=50,z=80},
                 {x=50,z=110},{x=50,z=140},{x=50,z=170}},false)
             for i=1,6 do c.fieldWorkCourse:getWaypoint(i).attributes:setHeadlandPassNumber(1) end
+            c.course=c.fieldWorkCourse; c.getClosestFieldworkWaypointIx=function() return 6 end
             Q.combines={test={driver=c,position={x=0,z=12}}}
             u.isServingPosition=function() return true end
             u.invertedStartPositionMarkerNode={x=50,z=10,t=0}
             data.assignment={}
             local parking=assert(nativeQueueTarget(u))
-            assert(parking.x==50 and math.abs(H.math.delta(parking.t,0))<0.001)
+            assert(parking.x==50 and math.abs(math.sin(parking.t))<0.001,'parking is not parallel to the row')
             Q.request(u,parking)
             for i=1,100000 do
                 done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
@@ -508,7 +509,7 @@ class YieldTests(unittest.TestCase):
             local x,z=H.math.position(v.rootNode,0,-3.3)
             trailer.joint.node.x=x; trailer.joint.node.z=z; trailer.joint.node.t=v.rootNode.t
             Q.startRoute(data,path); Q.onLast(u)
-            assert(data.operation=='prepare' and data.parkedGoal==parking)
+            assert(data.operation=='prepare' and data.parkedGoal==(path.goal or parking))
         ''')
 
     def test_unavailable_geometry_holds_without_repeating_two_messages(self):

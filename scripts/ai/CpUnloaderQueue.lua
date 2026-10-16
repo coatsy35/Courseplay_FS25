@@ -94,6 +94,7 @@ function Q.failed(data,reason,phase)
 end
 
 function Q.remove(driver)
+    Q.clearTrailerTraffic(driver)
     Q.cancel(driver); Q.members[driver]=nil; driver.queueData=nil
     if next(Q.members)==nil then
         Q.nextPlan=0; Q.plan=nil; Q.combines=nil; Q.nextDeparture=0; Q.schedulerTime=nil
@@ -120,6 +121,7 @@ function Q.take(driver,operation)
 end
 
 function Q.release(driver)
+    Q.clearTrailerTraffic(driver)
     Q.cancel(driver)
     local data=driver.queueData
     if data then data.operation=nil; data.stage=nil; data.departureClearance=nil end
@@ -431,21 +433,24 @@ function Q.stagingClear(driver,poses,model)
     return true
 end
 
-function Q.stagingCandidate(driver,course,ix)
+function Q.stagingCandidate(driver,course,ix,opposite,context)
     local p=point(course,ix)
     local length=AIUtil.getLength(driver.vehicle)
     -- Reject bends/row ends within the parked train and manoeuvring space.
-    local first=course:getPreviousWaypointIxWithinDistance(ix,length+4)
-    local last=course:getNextWaypointIxWithinDistance(ix,driver.turningRadius+5)
-    if not first or not last or distance(point(course,first),p)<length
-            or distance(point(course,last),p)<driver.turningRadius then return end
+    local behind=opposite and driver.turningRadius+5 or length+4
+    local ahead=opposite and length+4 or driver.turningRadius+5
+    local first=course:getPreviousWaypointIxWithinDistance(ix,behind)
+    local last=course:getNextWaypointIxWithinDistance(ix,ahead)
+    if not first or not last or (context and context.completed and last>context.completed)
+            or distance(point(course,first),p)<(opposite and driver.turningRadius or length)
+            or distance(point(course,last),p)<(opposite and length or driver.turningRadius) then return end
     for i=first,last do
         if math.abs(H.math.delta(course:getWaypointYRotation(i),p.t))>math.rad(10)
                 or (course.isTurnStartAtIx and course:isTurnStartAtIx(i))
                 or (course.isOnConnectingPath and course:isOnConnectingPath(i)) then return end
     end
     if course:isOnHeadland(ix) then
-        local boundary=FieldworkBoundary.forVehicle(driver.vehicle,0)
+        local boundary=context and context.boundary or FieldworkBoundary.forVehicle(driver.vehicle,0)
         if not boundary then return end
         local nearest,heading
         for i,a in ipairs(boundary.polygon) do
@@ -458,7 +463,8 @@ function Q.stagingCandidate(driver,course,ix)
         if not heading or math.min(math.abs(H.math.delta(p.t,heading)),
                 math.abs(H.math.delta(p.t,heading+math.pi)))>math.rad(10) then return end
     end
-    local model=W.model(driver.vehicle)
+    if opposite then p.t=p.t+math.pi end
+    local model=context and context.model or W.model(driver.vehicle)
     if not model then return end
     p.accept=function(poses,m) return Q.stagingClear(driver,poses,m) end
     if not p.accept(W.settledPoses(model,p),model) or not Q.targetAvailable(driver,p) then return end
@@ -473,7 +479,7 @@ function Q.target(driver)
         return Q.poolTarget(driver,true)
     end
     local assignment=data.assignment
-    if not assignment or assignment.future then return end
+    if not assignment or assignment.future then return Q.poolTarget(driver) end
     if assignment.combine then
         local combine=Q.combines[assignment.combine]
         if not combine then return end
@@ -533,59 +539,83 @@ function Q.arrivalClear(driver)
     return true
 end
 
-function Q.poolTarget(driver,arrival)
+-- Waiting slots use either parallel direction, never the rig's arbitrary current
+-- heading. Include completed centre rows: density checks decide what is harvested.
+function Q.poolTarget(driver,arrival,clearance)
     local data=Q.data(driver)
     local parked=data.parkedGoal
-    if not arrival and parked and Q.targetAvailable(driver,parked) and Q.arrived(driver,parked) then return parked end
-    -- Stable slots along harvested headland courses, outside the AD start's
-    -- turning space. Search and density checks decide whether a slot is usable.
-    local index=1
-    for other in pairs(Q.members) do if id(other.vehicle)<id(driver.vehicle) then index=index+1 end end
-    local origin=arrivalOrigin(driver) or W.pose(driver.vehicle:getAIDirectionNode())
-    local best,score
-    local candidates={}
-    local visited={}
-    for _, combine in pairs(Q.combines or {}) do
+    if not clearance and not arrival and parked and Q.targetAvailable(driver,parked)
+            and Q.arrived(driver,parked) then return parked end
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    local origin=arrival and arrivalOrigin(driver) or here
+    local candidates,visited={},{}
+    local model=W.model(driver.vehicle)
+    if not model then return end
+    local function order(a,b)
+        if a.score~=b.score then return a.score<b.score end
+        if a.goal.x~=b.goal.x then return a.goal.x<b.goal.x end
+        if a.goal.z~=b.goal.z then return a.goal.z<b.goal.z end
+        return a.goal.t<b.goal.t
+    end
+    local boundary=FieldworkBoundary.forVehicle(driver.vehicle,0)
+    local spacing=math.max(22,AIUtil.getLength(driver.vehicle)+8)
+    for _,combine in pairs(Q.combines or {}) do
         local course=combine.driver.fieldWorkCourse
+        local completed
+        if course and combine.driver.getClosestFieldworkWaypointIx then
+            local _,ix=Q.coursePosition(combine.driver)
+            completed=ix
+        end
+        local context={model=model,boundary=boundary,completed=completed}
         if course and driver:isServingPosition(combine.position.x,combine.position.z,10) then
-            local spacing=math.max(22,AIUtil.getLength(driver.vehicle)+8)
             local accumulated=0
-            for i=2,course:getNumberOfWaypoints() do
-                if arrival or (course:isOnHeadland(i) and course:isOnHeadland(i-1)) then
-                    local p=point(course,i)
-                    accumulated=accumulated+distance(p,point(course,i-1))
-                    -- Arrival coverage must not get coarser for later fleet
-                    -- members: an index-sized gap can skip the whole local area.
-                    if accumulated>=(arrival and 10 or index*spacing) then
-                        accumulated=0
-                        local d=distance(p,origin)
+            for i=2,completed or course:getNumberOfWaypoints() do
+                local p=point(course,i)
+                accumulated=accumulated+distance(p,point(course,i-1))
+                if accumulated>=10 then
+                    accumulated=0
+                    local d=distance(p,origin)
+                    local limit=arrival and math.max(100,2*driver.turningRadius+2*spacing) or 150
+                    if d<=limit and (not arrival or d>2*driver.turningRadius+spacing) then
                         local key=string.format('%.1f:%.1f:%.2f',p.x,p.z,p.t)
-                        local competitive=arrival and (#candidates<6 or d<candidates[#candidates].distance)
-                            or (not arrival and (not score or d<score))
-                        local nearby=not arrival or d<=math.max(100,2*driver.turningRadius+2*spacing)
-                        if nearby and d>2*driver.turningRadius+spacing and competitive and not visited[key] then
+                        if not visited[key] then
                             visited[key]=true
-                            local candidate=Q.stagingCandidate(driver,course,i)
-                            if candidate then
-                                if not score or d<score then best,score=candidate,d end
-                                if arrival then
-                                    candidates[#candidates+1]={goal=candidate,distance=d}
-                                    table.sort(candidates,function(a,b) return a.distance<b.distance end)
-                                    if #candidates>6 then table.remove(candidates) end
+                            for _,opposite in ipairs({false,true}) do
+                                local score=d+driver.turningRadius*math.abs(H.math.delta(here.t,p.t+(opposite and math.pi or 0)))
+                                if #candidates<12 or score<=candidates[#candidates].score then
+                                    local candidate=Q.stagingCandidate(driver,course,i,opposite,context)
+                                    if candidate then
+                                        local accept=candidate.accept
+                                        candidate.accept=function(poses,model)
+                                            if not accept(poses,model) then return false end
+                                            if clearance then
+                                                for j,body in ipairs(model.bodies) do
+                                                    if clearance(W.rectangle(body,poses[j],2)) then return false end
+                                                end
+                                            end
+                                            return true
+                                        end
+                                        if candidate.accept(W.settledPoses(model,candidate),model) then
+                                            -- Travel/turning cost keeps easy parallel entries ahead of
+                                            -- a closer slot that requires a hairpin at the boundary.
+                                            candidates[#candidates+1]={goal=candidate,score=score}
+                                            table.sort(candidates,order)
+                                            if #candidates>12 then table.remove(candidates) end
+                                        end
+                                    end
                                 end
                             end
                         end
                     end
-                else accumulated=0 end
+                end
             end
         end
     end
-    if arrival and best then
-        local choices={}
-        for _,candidate in ipairs(candidates) do choices[#choices+1]=candidate.goal end
-        return {x=best.x,z=best.z,t=best.t,choices=choices,firstValid=true,arrival=true}
-    end
-    return best
+    local choices={}
+    for i=1,math.min(12,#candidates) do choices[i]=candidates[i].goal end
+    if #choices==0 then return end
+    local best=choices[1]
+    return {x=best.x,z=best.z,t=best.t,choices=choices,firstValid=true,arrival=arrival or nil,parking=true}
 end
 
 function Q.request(driver,goal,corridor)
@@ -601,7 +631,7 @@ function Q.request(driver,goal,corridor)
         if data.search then
             data.search.firstValid=goal.firstValid
             data.search.escape=goal.escape
-            data.search.arrival=goal.arrival
+            data.search.arrival=goal.arrival or goal.parking
         end
     else data.search,reason,phase=S.new(world,goal,corridor) end
     data.searchGeneration=data.generation
@@ -639,10 +669,12 @@ end
 function Q.schedule()
     if Q.frame==g_updateLoopIndex then return end
     Q.frame=g_updateLoopIndex
-    -- Foreground native calls keep their existing scheduling and take precedence.
+    -- Foreground native calls keep precedence, while background parking retains
+    -- a small bounded slice instead of starving throughout repeated native work.
+    local foreground=false
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         local d=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
-        if d and d.pathfinderController and d.pathfinderController.pathfinder then return end
+        if d and d.pathfinderController and d.pathfinderController.pathfinder then foreground=true; break end
     end
     local selected
     local function priority(data)
@@ -655,17 +687,26 @@ function Q.schedule()
                         and (data.lastAdvance or 0)<(selected.lastAdvance or 0))) then selected=data end
     end
     if not selected then return end
-    local arrival=selected.goal and selected.goal.arrival
+    local arrival=selected.goal and (selected.goal.arrival or selected.goal.parking)
+    if foreground and not arrival and not selected.trailerTraffic then return end
     selected.lastAdvance=now()
     local workPhase=S.choicePhase(selected.search)
     local timer=openIntervalTimer()
     local done,path,reason
-    repeat done,path,reason=S.step(selected.search,1) until done or readIntervalTimerMs(timer)>=2
+    repeat done,path,reason=S.step(selected.search,1) until done or readIntervalTimerMs(timer)>=(foreground and 0.5 or 2)
     local elapsed=readIntervalTimerMs(timer); closeIntervalTimer(timer)
     -- Charge measured computation, not the duration of a game frame. A low
     -- frame rate or another worker must not reduce this search's work allowance.
     selected.searchWorkMs=(selected.searchWorkMs or 0)+elapsed
     if elapsed>=8 then selected.driver:debug('Queue search advance %.1f ms',elapsed) end
+    if not done and now()-(selected.searchReport or selected.searchStarted or now())>=15000 then
+        selected.searchReport=now()
+        local search=selected.search
+        local slot=search.slots and search.slots[search.index]
+        selected.driver:debug('Queue: parking search pending %.1f s, CPU %.1f ms, candidate %s, nodes %d, last rejection %s, foreground %s',
+            (now()-selected.searchStarted)/1000,selected.searchWorkMs,tostring(workPhase or search.index or 1),
+            slot and slot.state and slot.state.expanded or search.expanded or 0,tostring(search.reason),tostring(foreground))
+    end
     if done then
         selected.search=nil
         if path then Q.startRoute(selected,path)
@@ -714,6 +755,7 @@ function Q.tick(driver)
     end
     local data=Q.data(driver)
     if data.operation and not Q.owns(driver) then
+        Q.clearTrailerTraffic(driver)
         Q.cancel(driver); data.operation=nil; data.departureClearance=nil
     end
     Q.refresh()

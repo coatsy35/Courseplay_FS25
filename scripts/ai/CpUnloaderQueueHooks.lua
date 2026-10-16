@@ -55,10 +55,11 @@ end
 local drive = U.getDriveData
 function U:getDriveData(...)
     Q.releaseFinishedCombine(self)
+    Q.checkTrailerTraffic(self)
     Q.speed(self)
     local hold=Q.holdIncomingTurn(self)
     local gx,gz,forwards,speed,acceleration=drive(self,...)
-    if Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
+    if Q.trailerTrafficHold(self) or Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
     if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
     speed=Q.finalUnloadSpeed(self,speed)
     speed=Q.stoppedApproachSpeed(self,speed)
@@ -130,7 +131,7 @@ end
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
     if self.queueData and (self.queueData.approachRetryAt or 0)>g_currentMission.time then return false end
-    if self.queueData and self.queueData.bypass then return false end
+    if self.queueData and (self.queueData.bypass or self.queueData.trailerTraffic or Q.trailerTrafficHold(self)) then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' end
     return allowed(self)
@@ -344,6 +345,7 @@ function U:onBlockingVehicle(vehicle,isBack)
     if Q.departureClearanceActive(self) then return end
     if isBack then return blocking(self,vehicle,isBack) end
     if Q.nativeClearanceActive(self) then return end
+    if Q.beginTrailerTraffic(self,vehicle) then return end
     if Q.deferTrailerYield(self,vehicle) then return end
     if Q.priority(self,vehicle) then return end
     return Q.nativeMoveAway(self,vehicle)
