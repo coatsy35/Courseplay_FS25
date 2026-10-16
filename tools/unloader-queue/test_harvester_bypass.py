@@ -140,6 +140,11 @@ class HarvesterBypassTests(unittest.TestCase):
         self.travel_fixture(trailer_x=40)
         self.lua.execute('''
             for k,value in pairs(AIDriveStrategyUnloadCombine.myCombineUnloadStates) do u.states[k]=value end
+            -- Supply the engine state queried by early trailer traffic detection.
+            local grainStrategy={alwaysNeedsUnloader=function() return false end,
+                hasAutoAimPipe=function() return false end,isDischarging=function() return false end}
+            grainTarget={getIsCpActive=function() return true end,
+                getCpDriveStrategy=function() return grainStrategy end}
             function trafficRig(x,z,state,assignment,departing)
                 local vehicle={active=true,stopped=false,rootNode={x=x,z=z,t=math.pi/2},size={width=3,length=5}}
                 local trailer={rootNode={x=x-10,z=z,t=math.pi/2},size={width=3,length=10}}
@@ -166,7 +171,7 @@ class HarvesterBypassTests(unittest.TestCase):
         self.lua.execute('''
             outgoing,ov,ot=trafficRig(0,40,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
             serving,sv,st=trafficRig(0,20,u.states.BACKING_UP_FOR_REVERSING_COMBINE,hv,false)
-            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,grainTarget,false)
             local departure=outgoing.course; local approach=incoming.course; local assignment=incoming.combineToUnload
             incoming.pathfinderController={pathfinder={}}; local runner=incoming.pathfinderController.pathfinder
             assert(select(4,c:getDriveData(33))==0 and c.aiTurn==old)
@@ -189,7 +194,7 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_approach_waiting_transition_cannot_be_seized_by_proximity_callback(self):
         self.traffic_fixture()
         self.lua.execute('''
-            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,grainTarget,false)
             c:getDriveData(33)
             nativeUnloaderStep=function(driver)
                 driver.stateAfterWaitingForManeuveringCombine=driver.state
@@ -232,7 +237,7 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_new_reservation_invalidates_cached_clear_approach_in_same_update(self):
         self.traffic_fixture()
         self.lua.execute('''
-            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,grainTarget,false)
             assert(not Q.holdIncomingTurn(incoming,15))
             c:getDriveData(33)
             assert(Q.holdIncomingTurn(incoming,15))
@@ -313,7 +318,7 @@ class HarvesterBypassTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.setUp(); self.traffic_fixture()
                 self.lua.execute('''
-                    incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
+                    incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,grainTarget,false)
                     c:getDriveData(33); assert(Q.holdIncomingTurn(incoming,15))
                 '''+change+'''
                     assert(not Q.holdIncomingTurn(incoming,15))

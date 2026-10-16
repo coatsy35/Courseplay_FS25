@@ -1287,9 +1287,9 @@ end
 -- Unloader-to-unloader clearance is separate from harvester end parking.
 -- Keep a live combine reservation until the complete rig reaches a parallel slot.
 local function trafficEligible(driver)
-    if not driver or not Q.members[driver] or not Q.enabled(driver) or not driver.vehicle:getIsCpActive()
+    if not driver or not Q.members[driver] or not Q.enabled(driver) or driver.queueData.nativeDeparture
             or Q.nativeClearanceActive(driver) or Q.atDepartureThreshold(driver)
-            or (driver.driveUnloadNowRequested and driver.driveUnloadNowRequested:get()) or driver.queueData.nativeDeparture then return false end
+            or (driver.driveUnloadNowRequested and driver.driveUnloadNowRequested:get()) or not driver.vehicle:getIsCpActive() then return false end
     local combine=driver.combineToUnload
     if combine then
         local c=combine:getIsCpActive() and combine:getCpDriveStrategy()
