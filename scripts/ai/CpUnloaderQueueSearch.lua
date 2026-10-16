@@ -36,7 +36,9 @@ local function key(poses)
 end
 
 local function checkedStart(world,corridor)
-    local poses=W.poses(world.model)
+    -- Choices can start seconds apart. Do not mix a captured tractor position
+    -- with trailer nodes read later while the rig settles or is pushed.
+    local poses=world.startPoses or W.poses(world.model)
     local clear,reason=W.clear(world,poses,corridor)
     if not clear then
         if reason=='field boundary' and world.entranceReason then
@@ -61,6 +63,33 @@ local function reverseTracking(world,poses)
     return index
 end
 
+local function connectGoal(search,parent)
+    if search.reverse or search.escape then return false end
+    local world,goal,radius=search.world,search.goal,search.radius
+    local poses=parent.poses
+    local start=State3D(poses[1].x,-poses[1].z,CpMathUtil.angleFromGame(poses[1].t))
+    local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
+    -- The tractor reaching the requested heading does not align its trailer.
+    -- Reserve a straight run-in so the direct candidate can settle the train.
+    local runIn=0
+    for _,link in ipairs(world.model.links) do runIn=runIn+link.length end
+    runIn=math.max(10,3*runIn)
+    local approach=target
+    if not goal.reverse and distance(poses[1],goal)>runIn+2 then
+        approach=State3D(goal.x-runIn*math.sin(goal.t),-(goal.z-runIn*math.cos(goal.t)),target.t)
+    end
+    local solution=DubinsSolver():solve(start,approach,radius)
+
+    local limit=math.max(120,3*distance(search.root.poses[1],goal))
+    if not solution or parent.distance+solution:getLength(radius)+(approach~=target and runIn or 0)>limit then
+        return false
+    end
+    search.direct=solution:getWaypoints(start,radius)
+    if approach~=target then search.direct[#search.direct+1]=target end
+    search.directIx=2; search.directNode=parent
+    return true
+end
+
 function S.new(world,goal,corridor)
     local poses,reason,phase=checkedStart(world,corridor)
     if not poses then return nil,reason,phase end
@@ -75,16 +104,6 @@ function S.new(world,goal,corridor)
     local search={world=world,goal=goal,corridor=corridor,radius=radius,open={root},seen={},expanded=0,root=root}
     local start=State3D(poses[1].x,-poses[1].z,CpMathUtil.angleFromGame(poses[1].t))
     local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
-    -- The tractor reaching the requested heading does not align its trailer.
-    -- Reserve a straight run-in so the direct candidate can settle the train.
-    local runIn=0
-    for _,link in ipairs(world.model.links) do runIn=runIn+link.length end
-    runIn=math.max(10,3*runIn)
-    local approach=target
-    if not goal.reverse and distance(poses[1],goal)>runIn+2 then
-        approach=State3D(goal.x-runIn*math.sin(goal.t),-(goal.z-runIn*math.cos(goal.t)),target.t)
-    end
-    local solution=not goal.reverse and DubinsSolver():solve(start,approach,radius)
     if goal.reverse then
         search.trackingIndex,reason=reverseTracking(world,poses)
         if not search.trackingIndex then return nil,reason end
@@ -94,12 +113,7 @@ function S.new(world,goal,corridor)
         search.reverse=true
         search.direct={start,target}
         search.directIx=2; search.directNode=root
-    elseif solution and solution:getLength(radius)<math.max(100,3*distance(poses[1],goal)) then
-        search.direct=solution:getWaypoints(start,radius)
-        if approach~=target then search.direct[#search.direct+1]=target end
-        search.directIx=2
-        search.directNode=root
-    end
+    else connectGoal(search,root) end
     return search
 end
 
@@ -161,7 +175,7 @@ function S.step(search,budget)
             local f=edge.step/edge.count
             local a,b=edge.parent.poses[1],edge.target
             local root={x=a.x+(b.x-a.x)*f,z=a.z+(b.z-a.z)*f,t=a.t+H.math.delta(b.t,a.t)*f}
-            local poses=H.advance(search.world.model,edge.poses,root)
+            local poses=W.advance(search.world.model,edge.poses,root)
             if search.reverse then
                 root.trackX=poses[search.trackingIndex].x; root.trackZ=poses[search.trackingIndex].z
             end
@@ -229,6 +243,10 @@ function S.step(search,budget)
                     search.done=true; return true,nil,search.reason or 'no safe queue route'
                 end
                 search.parent=pop(search.open); search.steer=search.reverse and 0 or -1; search.expanded=search.expanded+1
+                -- A lattice rarely lands on a precise parking pose with every
+                -- trailer straight. Reuse the checked analytic run-in as the
+                -- obstacle search advances, instead of exhausting the grid.
+                if search.expanded%8==0 and connectGoal(search,search.parent) then return false end
             end
             local a=search.parent.poses[1]
             local turn=search.steer*2/search.radius

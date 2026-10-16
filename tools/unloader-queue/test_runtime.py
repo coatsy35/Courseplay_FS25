@@ -347,6 +347,97 @@ class EngineBoundaryTests(unittest.TestCase):
             poses=CpUnloaderQueueWorld.poses(world.model)
         ''')
 
+    def test_real_coupling_offsets_do_not_jump_at_zero_motion(self):
+        self.lua.execute('''
+            local W=CpUnloaderQueueWorld
+            local H=HeadlandLoopGeometry
+            v.rootNode.t=0.2
+            trailer.rootNode.t=-0.1
+            local hx,hz=H.math.position(v.rootNode,0.2,-3.3)
+            trailer.joint.node.x=hx; trailer.joint.node.z=hz
+            trailer.rootNode.x,trailer.rootNode.z=H.math.position(
+                {x=hx,z=hz,t=trailer.rootNode.t},0.2,-6.5)
+            local model=assert(W.model(v))
+            local initial=W.poses(model)
+            local predicted=W.advance(model,initial,initial[1])
+            for i,p in ipairs(initial) do
+                assert(math.abs(p.x-predicted[i].x)<0.000001)
+                assert(math.abs(p.z-predicted[i].z)<0.000001)
+                assert(p.t==predicted[i].t)
+            end
+            -- The former centreline approximation jumps at a stationary root.
+            local old=H.advance(model,initial,initial[1])
+            assert(math.sqrt((old[2].x-initial[2].x)^2+(old[2].z-initial[2].z)^2)>0.25)
+            local w=assert(W.new(u))
+            local search=assert(CpUnloaderQueueSearch.new(w,{x=60*math.sin(0.2),z=60*math.cos(0.2),t=0.2}))
+            local done,path,reason
+            for i=1,200000 do
+                done,path,reason=CpUnloaderQueueSearch.step(search,1)
+                if done then break end
+            end
+            assert(done and path,tostring(reason)..':'..search.expanded..':'..tostring(search.reason))
+            local poses=w.startPoses
+            for i=2,#path do
+                poses=W.advance(w.model,poses,path[i])
+                assert(W.clear(w,poses))
+            end
+            for _,p in ipairs(poses) do assert(math.abs(H.math.delta(p.t,0.2))<math.rad(10)) end
+        ''')
+
+    def test_delayed_parking_candidates_share_one_complete_start_snapshot(self):
+        self.lua.execute('''
+            local W=CpUnloaderQueueWorld
+            local before=world.startPoses or W.poses(world.model)
+            trailer.rootNode.x=trailer.rootNode.x+1
+            trailer.rootNode.t=0.1
+            local search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=40,t=0}))
+            for i,p in ipairs(before) do
+                local stored=search.root.poses[i]
+                assert(stored.x==p.x and stored.z==p.z and stored.t==p.t,
+                    'a late candidate mixed captured and live rig poses')
+            end
+        ''')
+
+    def test_queue_planar_internal_drawbar_retains_each_measured_pivot(self):
+        self.lua.execute('''
+            local vehicle,_,drill,cart=fixture({internal=true})
+            local H=HeadlandLoopGeometry; local W=CpUnloaderQueueWorld
+            local hitch={x=cart.joint.node.x,z=cart.joint.node.z,t=0.03}
+            cart.joint.rootNode.x,cart.joint.rootNode.z=H.math.position(hitch,0,-2)
+            cart.joint.rootNode.t=0.03
+            cart.internalPivotNode.x,cart.internalPivotNode.z=H.math.position(hitch,0,-3.78)
+            local pivot={x=cart.internalPivotNode.x,z=cart.internalPivotNode.z,t=-0.04}
+            cart.rootNode.x,cart.rootNode.z=H.math.position(pivot,0,-4.3); cart.rootNode.t=-0.04
+            local model=assert(W.model(vehicle)); assert(#model.links==3)
+            local poses=W.poses(model)
+            local after=W.advance(model,poses,poses[1])
+            for i,p in ipairs(poses) do
+                assert(math.abs(after[i].x-p.x)<0.000001 and math.abs(after[i].z-p.z)<0.000001)
+                assert(math.abs(after[i].t-p.t)<0.000000001)
+            end
+        ''')
+
+    def test_lattice_finishes_with_a_checked_run_in_within_total_distance_bound(self):
+        self.lua.execute('''
+            local W=CpUnloaderQueueWorld; local S=CpUnloaderQueueSearch
+            local search=assert(S.new(world,{x=0,z=60,t=0}))
+            search.direct=nil -- rejected initial curve, retain the obstacle search
+            local done,path,steps
+            for i=1,5000 do
+                done,path=S.step(search,1)
+                if done then steps=i; break end
+            end
+            assert(done and path and steps<1000,'lattice did not reuse its checked straight run-in')
+            assert(search.expanded>=8 and search.expanded<30)
+            local poses=world.startPoses; local travelled=0
+            for i=2,#path do
+                travelled=travelled+math.sqrt((path[i].x-path[i-1].x)^2+(path[i].z-path[i-1].z)^2)
+                poses=W.advance(world.model,poses,path[i]); assert(W.clear(world,poses))
+            end
+            assert(travelled<=180 and math.abs(poses[1].z-60)<0.001)
+            for _,p in ipairs(poses) do assert(math.abs(p.t)<math.rad(10)) end
+        ''')
+
     def test_single_trailer_uses_real_chain_model(self):
         self.lua.execute('assert(#world.model.links==1); assert(CpUnloaderQueueWorld.clear(world,poses))')
 

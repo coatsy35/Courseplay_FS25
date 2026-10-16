@@ -646,6 +646,17 @@ end
 
 function Q.startRoute(data,path)
     if not Q.owns(data.driver) or data.searchGeneration~=data.generation then return end
+    local initial=data.world and data.world.startPoses
+    if initial then
+        local live=W.poses(data.world.model)
+        live[1]=W.pose(data.driver.vehicle:getAIDirectionNode())
+        for i,p in ipairs(live) do
+            if distance(p,initial[i])>0.25 or math.abs(H.math.delta(p.t,initial[i].t))>math.rad(2) then
+                Q.failed(data,'rig moved during parking search; replanning from current pose','start')
+                Q.cancel(data.driver); return
+            end
+        end
+    end
     data.path=path; data.search=nil
     data.searchLatency=math.max(0,(now()-(data.searchStarted or now()))/1000)
     data.goal=path.goal or data.goal
@@ -851,7 +862,7 @@ function Q.routeClear(data,poses,ix)
         local samples=math.max(1,math.ceil(d/0.5),math.ceil(math.abs(delta)/math.rad(2)))
         for j=1,samples do
             local p={x=start.x+(target.x-start.x)*j/samples,z=start.z+(target.z-start.z)*j/samples,t=start.t+delta*j/samples}
-            poses=H.advance(data.world.model,poses,p)
+            poses=W.advance(data.world.model,poses,p)
             local clear,reason=W.clear(data.world,poses,data.corridor)
             if not clear then return false,reason end
         end

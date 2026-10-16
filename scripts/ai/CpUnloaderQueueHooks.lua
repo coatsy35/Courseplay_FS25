@@ -271,10 +271,17 @@ end
 
 local combineDrive = C.getDriveData
 function C:getDriveData(...)
+    local finalHold=Q.holdFinalApproach(self)
     local cornerHold=Q.holdHeadlandCorner(self)
     local hold=Q.checkCombineTurns(self) or Q.checkParkedTrailerTravel(self) or cornerHold
     local gx,gz,forwards,speed,acceleration=combineDrive(self,...)
     cornerHold=Q.holdHeadlandCorner(self) or cornerHold
+    finalHold=Q.holdFinalApproach(self) or finalHold
+    if finalHold~=self.queueFinalApproachHold then
+        self:debug(finalHold and 'Queue: holding final straight for preceding harvester to unload and park'
+            or 'Queue: preceding harvester clear; resuming final straight')
+        self.queueFinalApproachHold=finalHold
+    end
     if cornerHold~=self.queueCornerHold then
         if cornerHold then
             self:debug('Queue: waiting before headland corner for centre-entry combine %s', CpUtil.getName(cornerHold))
@@ -283,7 +290,7 @@ function C:getDriveData(...)
         end
         self.queueCornerHold=cornerHold
     end
-    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or cornerHold or hold then speed=0 end
+    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or cornerHold or hold or finalHold then speed=0 end
     return gx,gz,forwards,speed,acceleration
 end
 

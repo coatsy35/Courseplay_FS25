@@ -37,6 +37,65 @@ local function coursePose(course,ix)
     return {x=x,z=z,t=course:getWaypointYRotation(ix)}
 end
 
+-- Reserve the finish before adjacent headers get there together. Only the final
+-- straight of the original grain-harvesting course participates: the physically
+-- leading harvester unloads and parks first, then the next may finish its row.
+local function finalApproach(combine)
+    local vehicle,course=combine.vehicle,combine.fieldWorkCourse
+    if not vehicle.spec_combine or not course or not combine.settings
+            or not combine.settings.restartCourseAtEnd or not combine.settings.selfUnload
+            or combine.settings.restartCourseAtEnd:getValue() or combine.settings.selfUnload:getValue()
+            or combine:isAttachedHarvester() or combine:isChopper() then return end
+    local _,steeringLength=AIUtil.getSteeringParameters(vehicle)
+    if steeringLength~=0 then return end
+    local last=course:getNumberOfWaypoints()
+    local goal=coursePose(course,last)
+    if combine.queueFinishClearance or finishEnd(combine) then return 0,goal end
+    if combine.state~=combine.states.WORKING or combine.course~=course or combine:isTurning() then return end
+    local ix=course:getCurrentWaypointIx()
+    if course:getDistanceToLastWaypoint(ix)>120 then return end
+    for i=ix,last do
+        if course:isOnHeadland(i) or course:isOnConnectingPath(i) or course:isTurnStartAtIx(i)
+                or math.abs(H.math.delta(course:getWaypointYRotation(i),goal.t))>math.rad(5) then return end
+    end
+    local remaining=distance(W.pose(vehicle:getAIDirectionNode()),goal)
+    if remaining<=120 then return remaining,goal end
+end
+
+function Q.holdFinalApproach(combine)
+    local remaining,goal=finalApproach(combine)
+    if not remaining or remaining==0 then return end
+    -- The following header must also stay behind the outgoing trailer's full
+    -- 15 m reverse clearance, not merely behind the lead harvester's chassis.
+    local rigLength=0
+    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        local driver=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+        if driver and driver.startUnloadingStoppedCombine and driver.isServingPosition
+                and driver:isServingPosition(goal.x,goal.z,10) then
+            rigLength=math.max(rigLength,AIUtil.getLength(vehicle))
+        end
+    end
+    local clearance=math.max(35,(combine:getWorkWidth() or 0)+(combine.turningRadius or 0),
+        15+rigLength+(combine.vehicle.size.length or 10)+5)
+    if remaining>clearance then return end
+    local here=W.pose(combine.vehicle:getAIDirectionNode())
+    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if vehicle~=combine.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle)
+                and combine.fieldWorkerProximityController
+                and combine.fieldWorkerProximityController:hasSameCourse(vehicle) then
+            local other=vehicle:getCpDriveStrategy()
+            local ahead,otherGoal=finalApproach(other)
+            if ahead and distance(goal,otherGoal)<2*clearance
+                    and math.abs(H.math.delta(goal.t,otherGoal.t))<math.rad(10) then
+                local there=W.pose(vehicle:getAIDirectionNode())
+                local forward=(there.x-here.x)*math.sin(goal.t)+(there.z-here.z)*math.cos(goal.t)
+                if other.queueFinishClearance or forward>0 or (forward==0
+                        and tostring(vehicle.rootNode)<tostring(combine.vehicle.rootNode)) then return vehicle end
+            end
+        end
+    end
+end
+
 local function finishCandidates(data,combine)
     data.corner=rigidCorner(data.world.model)
     data.origin=W.pose(combine.vehicle:getAIDirectionNode())

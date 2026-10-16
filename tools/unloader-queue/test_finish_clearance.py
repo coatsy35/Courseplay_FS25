@@ -167,6 +167,116 @@ class FinishClearanceTests(unittest.TestCase):
             end
         ''')
 
+    def test_follower_leaves_room_through_final_unload_reverse_and_parking(self):
+        self.close_combine_fixture(lateral=-15.2, longitudinal=3)
+        self.lua.execute('''
+            fill=100
+            other.state=other.states.WORKING; other.unloadState=nil
+            other.course:setCurrentWaypointIx(other.course:getNumberOfWaypoints()-10)
+            neighbour.rootNode.z=-20; otherHeader.rootNode.z=-15
+            assert(Q.holdFinalApproach(other)==harvester)
+            assert(not Q.holdFinalApproach(c))
+            -- Emptying alone does not release the following header.
+            fill=0; advance()
+            assert(c.queueFinishClearance and Q.holdFinalApproach(other)==harvester)
+            -- Retain priority while the lead turns back towards a cleared row.
+            move(-40)
+            assert(Q.holdFinalApproach(other)==harvester)
+            Q.clearFinishClearance(c); harvester.active=false
+            assert(not Q.holdFinalApproach(other))
+        ''')
+
+    def test_final_order_uses_physical_forward_position_not_distance_to_end(self):
+        self.close_combine_fixture(lateral=-15.2, longitudinal=3)
+        self.lua.execute('''
+            c.state=c.states.WORKING; c.unloadState=nil
+            other.state=other.states.WORKING; other.unloadState=nil
+            c.course:setCurrentWaypointIx(c.course:getNumberOfWaypoints()-10)
+            other.course:setCurrentWaypointIx(other.course:getNumberOfWaypoints()-10)
+            move(-20); neighbour.rootNode.z=-24; otherHeader.rootNode.z=-19
+            -- Give the physically trailing worker an earlier endpoint, so it is
+            -- closer to its own finish despite being behind the lead harvester.
+            local points={{x=lateral,z=-50},{x=lateral,z=-30},{x=lateral,z=-9}}
+            other.fieldWorkCourse=Course(neighbour,points,false); other.course=other.fieldWorkCourse
+            other.course:setCurrentWaypointIx(2)
+            assert(not Q.holdFinalApproach(c))
+            assert(Q.holdFinalApproach(other)==harvester)
+            -- Ordinary rows, turns and distant finishes never use this gate.
+            local original=c.course
+            c.course=Course(harvester,{{x=0,z=-20},{x=0,z=20}},true)
+            assert(not Q.holdFinalApproach(other))
+            c.course=original; c.settings.restartCourseAtEnd.getValue=function() return true end
+            assert(not Q.holdFinalApproach(other))
+        ''')
+
+    def test_three_finishers_release_in_physical_order_without_reciprocal_holds(self):
+        self.close_combine_fixture(lateral=-15.2, longitudinal=3)
+        self.lua.execute('''
+            neighbour.getIsCpActive=function() return neighbour.active end
+            c.state=c.states.WORKING; c.unloadState=nil
+            other.state=other.states.WORKING; other.unloadState=nil
+            c.course:setCurrentWaypointIx(c.course:getNumberOfWaypoints()-5)
+            other.course:setCurrentWaypointIx(other.course:getNumberOfWaypoints()-5)
+            move(-20); neighbour.rootNode.z=-20.9; otherHeader.rootNode.z=-15.9
+            local third,thirdDriver=makeHarvester(-30.4,-21.8,0)
+            third.spec_combine={}; thirdDriver.combine=third
+            for _,key in ipairs({'states','settings','turningRadius','fieldWorkerProximityController','isTurning','isChopper'}) do
+                thirdDriver[key]=c[key]
+            end
+            thirdDriver.state=thirdDriver.states.WORKING
+            thirdDriver.fieldWorkCourse=Course(third,{{x=-30.4,z=-50},{x=-30.4,z=-25},{x=-30.4,z=0}},false)
+            thirdDriver.course=thirdDriver.fieldWorkCourse; thirdDriver.course:setCurrentWaypointIx(2)
+            g_currentMission.vehicleSystem.vehicles={third,neighbour,harvester}
+            assert(not Q.holdFinalApproach(c))
+            assert(Q.holdFinalApproach(other)==harvester)
+            assert(Q.holdFinalApproach(thirdDriver))
+            harvester.active=false
+            assert(not Q.holdFinalApproach(other))
+            assert(Q.holdFinalApproach(thirdDriver)==neighbour)
+            neighbour.active=false
+            assert(not Q.holdFinalApproach(thirdDriver))
+        ''')
+
+    def test_five_finishers_clear_in_physical_order_including_ties(self):
+        for tied in (False, True):
+            with self.subTest(tied=tied):
+                self.setUp()
+                self.lua.globals().tied = tied
+                self.lua.execute('''
+                    local fleet={}
+                    for i=1,5 do
+                        local x,z=(i-1)*15.2,tied and -20 or -18-i*2
+                        local vehicle,driver=makeHarvester(x,z,0)
+                        vehicle.spec_combine={}; driver.combine=vehicle
+                        for _,key in ipairs({'states','settings','turningRadius','fieldWorkerProximityController','isTurning','isChopper'}) do
+                            driver[key]=c[key]
+                        end
+                        driver.state=driver.states.WORKING
+                        driver.fieldWorkCourse=Course(vehicle,{{x=x,z=-60},{x=x,z=-30},{x=x,z=0}},false)
+                        driver.course=driver.fieldWorkCourse; driver.course:setCurrentWaypointIx(2)
+                        fleet[#fleet+1]=vehicle
+                    end
+                    -- Mission enumeration must not decide departure priority.
+                    g_currentMission.vehicleSystem.vehicles={fleet[5],fleet[3],fleet[1],fleet[4],fleet[2]}
+                    table.sort(fleet,function(a,b)
+                        if a.rootNode.z~=b.rootNode.z then return a.rootNode.z>b.rootNode.z end
+                        return tostring(a.rootNode)<tostring(b.rootNode)
+                    end)
+                    for index,leader in ipairs(fleet) do
+                        for i=index,5 do
+                            local blocker=Q.holdFinalApproach(fleet[i]:getCpDriveStrategy())
+                            if i==index then assert(not blocker) else assert(blocker) end
+                        end
+                        -- Keep ownership when the leader has emptied and turns
+                        -- back; only completing its parking releases the next.
+                        local driver=leader:getCpDriveStrategy()
+                        driver.queueFinishClearance={}
+                        leader.rootNode.z=-50
+                        for i=index+1,5 do assert(Q.holdFinalApproach(fleet[i]:getCpDriveStrategy())) end
+                        driver.queueFinishClearance=nil; leader.active=false
+                    end
+                ''')
+
     def test_adjacent_finished_combines_unload_clear_and_park_in_sequence(self):
         self.close_combine_fixture()
         self.lua.execute('''

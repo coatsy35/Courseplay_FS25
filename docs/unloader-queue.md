@@ -1,3 +1,65 @@
+## Build 3043 - ordered final unloading and coherent trailer parking searches
+
+The 16 October run loaded 3042 at 12:59:00.282. CR11/319 entered final
+parking after emptying at 14:33:15.172. CR11/318 finished with 16,491.1 L
+at 14:33:18.236. From 14:33:19.896, 319's header probe rejected departure
+at 0.0 m against an FD250 header, repeatedly through 15:05. Alternative
+curves cannot solve a blocked initial footprint. Native CP also uses header
+markers in its collision envelope; this evidence does not justify shrinking
+that envelope or ignoring the neighbouring header.
+
+Keep a following grain harvester back on the final straight while the
+physically further-forward harvester finishes, unloads and parks. Compare
+position along the final row direction, not distance to each separate endpoint.
+Use deterministic ordering for exact ties. Retain the leader's priority while
+it turns towards its parking position, then release the next harvester. Leave
+space for the serving trailer's complete rig plus its native 15 m reverse
+clearance and the following header. This gate requires nearby parallel ends
+on the same course and the same supported final-parking modes. It does not
+apply on ordinary rows, turns, temporary courses, self-unloading, course restart,
+attached/chopper or articulated-harvester modes. Existing final unload, raised
+header, checked centre-row parking and native finish/folding remain in sequence.
+An already interlocked pair may still require separation: the gate prevents
+that arrival configuration; it does not authorise movement through a collider.
+
+T7.300/325 also remained in preparation: at 15:05:38.746 its search reported
+1,937.4 s elapsed, 134,485.8 ms accumulated CPU, 4,285 nodes and an earlier
+'unbounded rig movement' rejection. These are elapsed/cumulative search figures,
+not FPS measurements. Unloader 322 remained assigned to 318, with unassigned
+324 repeatedly blocking its approach. A nearby tractor is not necessarily free
+to replace an existing native assignment.
+
+Two queue-model defects are reproducible independently of that live scene.
+The old single-trailer reconstruction discarded small lateral coupling offsets
+and mixed a captured tractor position with trailer nodes read later for each
+candidate. An admissible 0.2 m offset at each coupling produces a fixed axle
+jump exceeding the 0.25 m swept-sample limit even with zero tractor movement.
+Subdivision cannot remove that jump. Retain the shared chain detector and
+existing queue adapter; measure its validated coupling nodes without changing
+the shared headland model. Measure complete planar coupling vectors, capture all initial
+poses together, and use those vectors in queue-only prediction and live horizon
+checks. Reject a completed plan if the rig moved during planning and capture a
+fresh start. Shared headland-loop kinematics and native unloading stay unchanged.
+The live log lacks the measured vectors, so this is a reproduced defect consistent
+with the logged rejection, not proof of the exact live offset.
+
+Reuse the existing fully checked analytic run-in every eight obstacle-search
+nodes, instead of relying on the discrete grid to reach the exact parking pose
+with every trailer aligned. Include the lattice prefix, curve and straight
+run-in in the root-relative travel limit. All route segments retain crop, field,
+island, vehicle, articulation and full-train checks. Targets remain parallel
+completed headlands/centre rows; reservations and configured departure thresholds
+are retained. No additional manoeuvre state or collision exemption is introduced.
+
+New regressions cover physical finishing order, up to five successive harvesters
+including tied positions,
+retained priority through unloading/parking, measured single and internal-pivot
+geometry, delayed candidates, moved-rig plan rejection, and checked bounded
+run-in completion. Five behavioural regressions fail against the preserved 3042
+source. Existing source and extracted-ZIP release checks remain mandatory.
+Evidence: out/incident-3042-final-and-arrival/. Build 3031's milestone is unchanged.
+A fresh in-game run must still verify the actual AD entrance and final sequence.
+
 ## Build 3042 - final harvester routes around a neighbouring finished combine
 
 The preserved 16 October 3040 run entered final parking for CR11/319 at

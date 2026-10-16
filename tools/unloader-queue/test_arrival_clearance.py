@@ -16,6 +16,18 @@ class ClearanceTests(unittest.TestCase):
     def setUp(self):
         yielding.YieldTests.setUp(self)
 
+    def test_completed_search_cannot_start_after_rig_moves(self):
+        self.lua.execute('''
+            Q.take(u,'prepare')
+            local data=u.queueData
+            data.world=assert(W.new(u)); data.searchGeneration=data.generation
+            data.goal={x=0,z=40,t=0}
+            place(0,1,0)
+            Q.startRoute(data,{{x=0,z=0,t=0},{x=0,z=40,t=0}})
+            assert(not data.path and not data.world and not u.course)
+            assert(data.reason:find('rig moved during parking search'))
+        ''')
+
     def working_drive_wrapper(self):
         self.lua.execute('''
             Q.checkCombineTurns=function() return false end
@@ -254,6 +266,8 @@ class ClearanceTests(unittest.TestCase):
             search,reason=S.escape(world,accept)
             assert(not search and reason=='start: vehicle or obstacle')
             collision=0; trailer.rootNode.t=math.pi/2
+            trailer.rootNode.x=-6.5; trailer.rootNode.z=-3.3
+            W.delete(world); world=assert(W.new(u))
             search,reason=S.escape(world,accept)
             assert(not search and reason=='start: articulation limit')
         ''')
@@ -437,7 +451,7 @@ class ArrivalTests(unittest.TestCase):
                 return state
             end
             S.step=function(s,budget)
-                if not s.choices then frameWork=frameWork+0.1; work=work+0.1 end
+                if not s.choices then frameWork=frameWork+0.5; work=work+0.5 end
                 return step(s,budget)
             end
             openIntervalTimer=function() frameWork=0; return 1 end

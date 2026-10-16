@@ -57,7 +57,7 @@ function W.pose(node)
     return {x=x, z=z, t=H.math.heading(node)}
 end
 
-function W.model(vehicle)
+local function detectedModel(vehicle)
     local model, reason = H.detect(vehicle)
     if model or reason ~= 'fewer than two supported towing pivots' then return model, reason end
     -- The shared detector has already checked every coupling. Its two-pivot
@@ -79,6 +79,39 @@ function W.model(vehicle)
     return model
 end
 
+function W.model(vehicle)
+    local model, reason = detectedModel(vehicle)
+    if not model then return nil,reason end
+    -- Measure one coherent planar chain, including small real coupling offsets
+    -- and terrain pitch. Dropping either lateral offset makes the first predicted
+    -- axle jump even when the tractor has not moved; finer sampling cannot fix it.
+    local poses=W.poses(model)
+    local function offset(p,x,z)
+        local dx,dz=x-p.x,z-p.z
+        return dx*math.cos(p.t)-dz*math.sin(p.t),dx*math.sin(p.t)+dz*math.cos(p.t)
+    end
+    -- Match the already validated attachment chain to its coupling nodes.
+    -- Internal drawbars contribute two model links for one attached implement.
+    local parent,index=vehicle,1
+    while index<=#model.links do
+        local object=parent:getAttachedImplements()[1].object
+        local link=model.links[index]
+        link.hitchNode=object:getActiveInputAttacherJoint().node
+        if link.positionNode then
+            model.links[index+1].hitchNode=link.positionNode
+            index=index+1
+        end
+        parent,index=object,index+1
+    end
+    for i,link in ipairs(model.links) do
+        local x,_,z=getWorldTranslation(link.hitchNode)
+        link.hitchX,link.hitch=offset(poses[i],x,z)
+        link.axleX,link.length=offset(poses[i+1],x,z)
+        if not H.math.finite(link.length) or link.length<0.5 then return nil,'invalid projected hitch geometry' end
+    end
+    return model
+end
+
 function W.poses(model)
     local poses = {model.root}
     for _, link in ipairs(model.links) do
@@ -92,10 +125,26 @@ end
 function W.settledPoses(model,root)
     local poses={root}
     for i,link in ipairs(model.links) do
-        local x,z=H.math.position(poses[i],0,link.hitch-link.length)
+        local x,z=H.math.position(poses[i],(link.hitchX or 0)-(link.axleX or 0),link.hitch-link.length)
         poses[i+1]={x=x,z=z,t=root.t}
     end
     return poses
+end
+
+-- Queue-only kinematics. Retain the measured coupling vectors; the shared
+-- headland-loop model and native unloading algorithms keep their own behaviour.
+function W.advance(model,previous,root)
+    local result={root}
+    for i,link in ipairs(model.links) do
+        local ox,oz=H.math.position(previous[i],link.hitchX or 0,link.hitch)
+        local nx,nz=H.math.position(result[i],link.hitchX or 0,link.hitch)
+        local dx,dz,angle=nx-ox,nz-oz,previous[i+1].t
+        local mid=angle+(dx*math.cos(angle)-dz*math.sin(angle))/link.length/2
+        angle=angle+(dx*math.cos(mid)-dz*math.sin(mid))/link.length
+        local x,z=H.math.position({x=nx,z=nz,t=angle},-(link.axleX or 0),-link.length)
+        result[i+1]={x=x,z=z,t=angle}
+    end
+    return result
 end
 
 function W.rectangle(body, pose, buffer)
@@ -110,7 +159,8 @@ function W.new(strategy,model)
     if not model then return nil, reason end
     local boundary = FieldworkBoundary.forVehicle(strategy.vehicle, 0)
     if not boundary then return nil, 'field boundary unavailable' end
-    local world = {strategy=strategy, model=model, boundary=boundary, fruit={}, node=createTransformGroup('cpQueueProbe')}
+    local world = {strategy=strategy, model=model, startPoses=W.poses(model),
+        boundary=boundary, fruit={}, node=createTransformGroup('cpQueueProbe')}
     world.entrance,world.entranceReason=entryGate(strategy,model,boundary)
     link(getRootNode(), world.node)
     world.collision = PathfinderCollisionDetector(strategy.vehicle, {}, {}, false, CpUtil.getDefaultCollisionFlags())
