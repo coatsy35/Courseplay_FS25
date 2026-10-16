@@ -145,7 +145,9 @@ function U:startPathfindingToWaitingCombine(x,z)
     if Q.deferWaitingApproach(self,x,z) then return end
     if self.queueData then self.queueData.waitingApproach={combine=self.combineToUnload,x=x,z=z} end
     local originalX,originalZ=x,z
-    x,z=Q.stoppedApproachGoal(self,x,z)
+    local entryAllowed
+    x,z,entryAllowed=Q.stoppedApproachGoal(self,x,z)
+    if entryAllowed==false then return end
     if self.queueStoppedApproach and Q.deferWaitingApproach(self,originalX,originalZ) then return end
     local result=waitingPath(self,x,z)
     -- The native context is created inside waitingPath and can synchronously

@@ -21,19 +21,32 @@ Reject that front admission only for an active ordinary grain combine in the
 exact full-on-field waiting state, when both vehicles have stopped, neither
 transfer nor pipe movement is occurring, and the fill node is over 0.5 m ahead.
 The existing native moving-unload position check then releases the assignment.
-Queue lead selection and the native stopped-combine call use the unchanged rear
-target and pathfinder. The same exact case can request this path even inside
-the normal close-range exclusion; unrelated markers and targets are unchanged.
-No custom reverse route, new recovery timer, crop exception or ordinary-mode
-replacement is introduced. Full/manual departure retains native priority.
+Queue lead selection and the native stopped-combine call start a scoped rear
+entry. Route first to a point behind the combine with three trailer-link lengths
+of straight run-in plus two turning radii of turning space. Keep native crop,
+collision and pathfinder retry handling. At that far endpoint, validate and drive
+the articulated forward run-in: preserve its long straight terminal section,
+reject loops/backtracking and disable the curved local-search fallback. Do not
+admit native unloading until the complete tractor/trailer rig is aligned at the
+rear entry. The same exact overshoot can request this path inside the normal
+close-range exclusion; unrelated markers and targets are unchanged.
+
+Reuse the existing checked-entry lifecycle only for this recorded overshoot
+attempt. Do not broaden finalApproachTarget or change final parking authority.
+The attempt is cancelled safely when its target resumes or ownership changes;
+native pathfinding/backup lifecycles and full/manual departure retain priority.
+Live whole-rig checks stop an obstructed run-in; no crop exception or unchecked
+reverse/forward movement is introduced. Existing ordinary approaches without
+this confirmed geometry retain the milestone path.
 
 Final empty-harvester parking, unfolding until parked, arrival staging, moving
 catches, active transfer, pockets, turns, continuous-output and auto-aim modes
 retain their existing paths. The new regression reproduces the logged deadlock
 on 3039, then runs native speed/admission, release/deregistration, queue recall,
-rear-path context and subsequent forward unloading with the correction. It also
-checks close-range isolation, native crop/turn/alignment rejection and departure
-priority. Existing milestone contracts remain intact; their engine adapter now
+far-rear path context, checked straight run-in and subsequent forward unloading
+with the correction. It also checks an articulated trailer, blocked run-in with
+no circling fallback, ordinary crop protection, target resumption, close-range
+isolation, native crop/turn/alignment rejection and departure priority. Existing milestone contracts remain intact; their engine adapter now
 supplies pipe movement and discharge state. Full source/extracted-ZIP checks are
 required. Engine-boundary tests cannot verify FS25 physical steering, so a fresh
 in-game run must confirm recovery and unattended completion. Preserve the 3031

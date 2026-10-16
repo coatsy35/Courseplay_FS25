@@ -18,6 +18,12 @@ class OrdinaryRendezvousTests(unittest.TestCase):
     def setUp(self):
         milestone.MilestoneUnloadingTests.setUp(self)
         self.lua.execute('''
+            PathfinderUtil.setWorldPositionAndRotationOnTerrain=function(node,x,z,t)
+                node.x=x; node.z=z; node.t=t
+            end
+            v.cpGetFieldPolygon=function()
+                return {{x=-100,z=-100},{x=100,z=-100},{x=100,z=200},{x=-100,z=200}}
+            end
             c.settings={stopForUnload={getValue=function() return false end}}
             c.willWaitForUnloadToFinish=nil -- exercise the native full-wait distinction
             c.unloadState=c.states.WAITING_FOR_UNLOAD_ON_FIELD
@@ -35,6 +41,7 @@ class OrdinaryRendezvousTests(unittest.TestCase):
             u.driveBesideCombine=nil; u.startWaitingForSomethingToDo=nil
             u.renderText=function() end; u.info=function() end
             u.ppc.getLookaheadDistance=function() return 6 end
+            u.ppc.getRelevantWaypointIx=function() return 1 end
             CpUtil.isVehicleDebugActive=function() return false end
             u.pathfindingRange=AIDriveStrategyUnloadCombine.pathfindingRange
             CpMathUtil.clamp=function(v,a,b) return math.max(a,math.min(v,b)) end
@@ -69,15 +76,36 @@ class OrdinaryRendezvousTests(unittest.TestCase):
             local controller=u.pathfinderController
             assert(u.combineToUnload==harvester and u.state==u.states.WAITING_FOR_PATHFINDER)
             assert(controller.searchCount==1 and controller.goal.x==12.2)
-            assert(math.abs(controller.goal.z+8.4)<0.0001)
+            local data=u.queueStoppedApproach
+            assert(data and data.overshoot and controller.goal.z==data.farZ)
+            assert(data.farZ<data.rearZ-data.runIn-10 and data.rearZ<=-11.4)
             assert(controller.currentContext.maxFruitPercentValue==10)
             assert(controller.currentContext.offFieldPenaltyValue==7.5)
             assert(#controller.currentContext.vehiclesToIgnoreValue==0)
             assert(controller.currentContext.maxIterationsValue==52619)
-            noExtraRecovery(u); assert(not c.queueFinishClearance and not stopped)
+            assert(not c.queueFinishClearance and not u.queueFinalUnload and not stopped)
             controller.done(u,controller,true,{adjustForReversing=function() end},false)
-            place(12.2,-8.4,0)
-            assert(u:isOkToStartUnloadingCombine()); u:startUnloadingCombine()
+            assert(not u:isOkToStartUnloadingCombine(), 'do not cut directly to pipe before rear entry')
+            place(controller.goal.x,controller.goal.z,0)
+            u:onLastWaypointPassed()
+            assert(data.search and data.search.directOnly)
+            for i=1,200 do
+                g_currentMission.time=g_currentMission.time+30
+                Q.updateStoppedApproach(u)
+                if stopped or data.phase=='driving' then break end
+            end
+            assert(not stopped and data.phase=='driving')
+            local previous
+            for _,p in ipairs(data.path) do
+                assert(not previous or p.z>=previous-0.01, 'run-in cannot circle/backtrack')
+                assert(math.abs(p.t)<0.01, 'aligned rear entry must drive straight')
+                previous=p.z
+                place(p.x,p.z,p.t); g_currentMission.time=g_currentMission.time+100
+                Q.updateStoppedApproach(u)
+            end
+            assert(not u:isOkToStartUnloadingCombine(), 'native admission waits for endpoint validation')
+            u:onLastWaypointPassed()
+            assert(not stopped and not u.queueStoppedApproach)
             u:unloadMovingCombine()
             assert(u.speed>0 and u.state==u.states.UNLOADING_MOVING_COMBINE)
             -- Native transfer resumes harvesting; no parking/recovery state is installed.
@@ -91,8 +119,94 @@ class OrdinaryRendezvousTests(unittest.TestCase):
             u.state=u.states.IDLE; u.combineToUnload=nil
             assert(u:call(harvester,nil))
             assert(u.state==u.states.WAITING_FOR_PATHFINDER and u.pathfinderController.goal.z<0)
-            noExtraRecovery(u)
+            assert(u.queueStoppedApproach and u.queueStoppedApproach.overshoot)
+            assert(not c.queueFinishClearance and not u.queueFinalUnload)
         ''')
+
+    def begin_rear_route(self):
+        self.lua.execute('''
+            u.state=u.states.IDLE; u.combineToUnload=nil; u:call(harvester,nil)
+            controller=u.pathfinderController; data=u.queueStoppedApproach
+            controller.done(u,controller,true,{adjustForReversing=function() end},false)
+            place(controller.goal.x,controller.goal.z,0)
+        ''')
+
+    def test_angled_trailer_must_straighten_during_the_reserved_run_in(self):
+        self.begin_rear_route()
+        self.lua.execute('''
+            local joint=trailer.joint.node
+            trailer.rootNode.x=joint.x-6.5*math.sin(0.4)
+            trailer.rootNode.z=joint.z-6.5*math.cos(0.4)
+            trailer.rootNode.t=0.4; joint.t=0.4
+            assert(not Q.pipeEntryAligned(u) and not u:isOkToStartUnloadingCombine())
+            u:onLastWaypointPassed()
+            for i=1,200 do
+                Q.updateStoppedApproach(u)
+                if stopped or data.phase=='driving' then break end
+            end
+            assert(not stopped and data.phase=='driving')
+            assert(data.path[#data.path].z-data.path[1].z>=data.runIn)
+            -- The tractor reaching the entry alone must not authorise unloading.
+            place(data.goal.x,data.goal.z,0)
+            trailer.rootNode.t=0.4; joint.t=0.4
+            u:onLastWaypointPassed()
+            assert(stopped and u.speed==0 and u.state~=u.states.UNLOADING_MOVING_COMBINE)
+        ''')
+
+    def test_blocked_forward_run_in_cannot_fall_back_to_circling(self):
+        self.begin_rear_route()
+        self.lua.execute('''
+            u:onLastWaypointPassed(); local search=data.search
+            assert(search.directOnly)
+            overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,detector)
+                detector.collidingShapes=(z>-36 and z<-30) and 1 or 0
+            end
+            for i=1,200 do
+                Q.updateStoppedApproach(u)
+                if stopped then break end
+            end
+            assert(stopped and search.expanded==0 and not data.path and u.speed==0)
+        ''')
+
+    def test_crop_is_not_ignored_for_ordinary_rear_entry(self):
+        self.begin_rear_route()
+        self.lua.execute('''
+            densityCount=10; u:onLastWaypointPassed()
+            assert(stopped and u.speed==0 and not c.queueFinishClearance)
+            assert(not Q.finalApproachTarget(u))
+        ''')
+
+    def test_missing_rig_geometry_cannot_bypass_the_required_rear_run_in(self):
+        self.lua.execute('''
+            W.model=function() return nil,'unsupported test rig' end
+            u.state=u.states.IDLE; u.combineToUnload=nil; u:call(harvester,nil)
+            assert(stopped and u.speed==0 and not u.pathfinderController.goal)
+            assert(not u.queueStoppedApproach and not c.queueFinishClearance)
+        ''')
+
+    def test_native_search_keeps_its_lifecycle_before_the_far_rear_arrival(self):
+        self.lua.execute('''
+            u.state=u.states.IDLE; u.combineToUnload=nil; u:call(harvester,nil)
+            local data=u.queueStoppedApproach; local pending=u.pathfinderController.pathfinder
+            g_currentMission.time=180000; Q.updateStoppedApproach(u)
+            assert(not stopped and data==u.queueStoppedApproach and data.phase=='pathfinding')
+            assert(u.pathfinderController.pathfinder==pending and not u:isOkToStartUnloadingCombine())
+            -- Manual target cancellation cannot leave a stale approach owning the tractor.
+            harvester.active=false; Q.updateStoppedApproach(u)
+            assert(not u.queueStoppedApproach and not u.combineToUnload and not stopped)
+            assert(not u.pathfinderController.pathfinder)
+        ''')
+
+    def test_target_resuming_and_manual_departure_cancel_only_this_entry(self):
+        for change in ('c.state=c.states.WORKING; harvester.lastSpeedReal=10/3600', 'manual=true'):
+            with self.subTest(change=change):
+                self.setUp(); self.begin_rear_route()
+                self.lua.execute(change+'''
+                    Q.updateStoppedApproach(u)
+                    assert(not u.queueStoppedApproach and not stopped)
+                    assert(not c.queueFinishClearance and not u.queueFinalUnload)
+                    if manual then assert(nativeDeparture) end
+                ''')
 
     def test_all_other_native_front_cases_are_preserved(self):
         for change in ('c.state=c.states.WORKING', 'harvester.lastSpeedReal=2/3600',

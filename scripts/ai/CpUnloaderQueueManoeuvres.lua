@@ -1807,8 +1807,8 @@ function Q.hasStoppedRendezvousOvershoot(driver)
 end
 
 -- Extra alignment/recovery belongs only to the remaining end-of-course load.
--- An ordinary pocket/full-tank wait must retain the 3031 native approach,
--- admission and retries, even when the combine is stationary for a long time.
+-- Ordinary waits retain the 3031 native approach unless the separate exact
+-- front-overshoot condition above explicitly starts a checked rear entry.
 function Q.finalApproachTarget(driver)
     local vehicle=driver.combineToUnload
     if not Q.enabled(driver) or not vehicle or not vehicle.getIsCpActive or not vehicle:getIsCpActive() then return end
@@ -1817,6 +1817,39 @@ function Q.finalApproachTarget(driver)
             and c.isWaitingForUnload and c.alwaysNeedsUnloader and c.hasAutoAimPipe
             and c:isWaitingForUnload() and not c:alwaysNeedsUnloader() and not c:hasAutoAimPipe()
             and (vehicle.lastSpeedReal or 0)*3600<0.5 then return c end
+end
+
+-- A stored overshoot attempt may reuse the checked rear-entry phases, but
+-- cannot acquire final-unload/parking authority or affect other ordinary calls.
+function Q.checkedRearEntryTarget(driver)
+    local final=Q.finalApproachTarget(driver)
+    if final then return final end
+    local data=driver.queueStoppedApproach
+    local vehicle=driver.combineToUnload
+    if not data or not data.overshoot or data.combine~=vehicle or not Q.enabled(driver)
+            or not vehicle or not vehicle:getIsCpActive() then return end
+    local c=vehicle:getCpDriveStrategy()
+    if c and c.states and c.state==c.states.UNLOADING_ON_FIELD
+            and c.unloadState==c.states.WAITING_FOR_UNLOAD_ON_FIELD
+            and not c:alwaysNeedsUnloader() and not c:hasAutoAimPipe()
+            and (vehicle.lastSpeedReal or 0)*3600<0.5 then return c end
+end
+
+local function forwardRunIn(search,heading,runIn)
+    -- The direct candidate ends with its reserved straight alignment section.
+    -- Reject loops/backtracking; do not fall back to a local search around the pipe.
+    local points=search.direct
+    if not points or #points<2 then return false end
+    local a,b=points[#points-1],points[#points]
+    if math.sqrt((a.x-b.x)^2+(a.y-b.y)^2)<runIn-1 then return false end
+    local previous
+    for _,p in ipairs(points) do
+        if math.abs(H.math.delta(CpMathUtil.angleToGame(p.t),heading))>math.rad(45) then return false end
+        local forward=p.x*math.sin(heading)-p.y*math.cos(heading)
+        if previous and forward<previous-0.01 then return false end
+        previous=forward
+    end
+    return true
 end
 
 function Q.pipeEntryAligned(driver)
@@ -1846,20 +1879,29 @@ end
 
 function Q.stoppedApproachGoal(driver,x,z)
     -- Existing final-unload reverse recovery already owns its checked lane.
-    if driver.queueFinalUnload or not Q.finalApproachTarget(driver) then return x,z end
+    local overshoot=Q.hasStoppedRendezvousOvershoot(driver)
+    if driver.queueFinalUnload or (not overshoot and not Q.checkedRearEntryTarget(driver)) then return x,z end
     local data=driver.queueStoppedApproach
     if data and data.combine==driver.combineToUnload then return data.x,data.farZ end
     Q.clearStoppedApproach(driver)
-    local model=W.model(driver.vehicle)
-    if not model then return x,z end -- native path remains available for unsupported rigs
+    local model,reason=W.model(driver.vehicle)
+    if not model then
+        if overshoot then
+            stoppedApproachFailed(driver,reason or 'whole-rig geometry unavailable'); return x,z,false
+        end
+        return x,z -- preserve the existing final-only fallback
+    end
     local length=0
     for _,link in ipairs(model.links) do length=length+math.abs(link.length) end
     local rearZ=math.min(z or 0,-driver:getCombinesMeasuredBackDistance()-5)
     local runIn=math.max(12,3*length)
+    local turnRoom=overshoot and 2*driver.turningRadius or 0
     data={combine=driver.combineToUnload,phase='pathfinding',x=x or 0,rearZ=rearZ,
-        farZ=rearZ-runIn,started=g_currentMission.time,controller=driver.pathfinderController}
+        farZ=rearZ-runIn-turnRoom,overshoot=overshoot,runIn=runIn,
+        started=g_currentMission.time,controller=driver.pathfinderController}
     driver.queueStoppedApproach=data
-    driver:debug('Queue: final-combine rear entry %.1f, %.1f; %.1f m whole-rig run-in',data.x,data.farZ,runIn)
+    driver:debug('Queue: %s rear entry %.1f, %.1f; %.1f m whole-rig run-in',
+        overshoot and 'overshot rendezvous' or 'final-combine',data.x,data.farZ,runIn)
     return data.x,data.farZ
 end
 
@@ -1874,7 +1916,7 @@ function Q.stoppedApproachPath(driver,success,course)
 end
 
 function Q.stoppedAdmission(driver)
-    if not Q.finalApproachTarget(driver) then return end
+    if not Q.checkedRearEntryTarget(driver) then return end
     local data=driver.queueStoppedApproach
     if data and data.combine==driver.combineToUnload and data.phase~='ready' then return false end
     return Q.pipeEntryAligned(driver)
@@ -1884,7 +1926,7 @@ function Q.stoppedApproachLast(driver)
     local data=driver.queueStoppedApproach
     if not data or driver.course~=data.course or driver.state~=driver.states.DRIVING_TO_COMBINE then return false end
     if data.combine~=driver.combineToUnload then Q.clearStoppedApproach(driver); return false end
-    if not Q.finalApproachTarget(driver) then
+    if not Q.checkedRearEntryTarget(driver) then
         -- The native endpoint can arrive before update. Hand back with the
         -- same departure intent and native mode selection as the update path.
         Q.updateStoppedApproach(driver); return true
@@ -1909,6 +1951,12 @@ function Q.stoppedApproachLast(driver)
     data.goal={x=x,z=z,t=H.math.heading(reference)}
     data.search,reason=CpUnloaderQueueSearch.new(world,data.goal)
     if not data.search then stoppedApproachFailed(driver,reason); return true end
+    if data.overshoot then
+        data.search.directOnly=true
+        if not forwardRunIn(data.search,data.goal.t,data.runIn) then
+            stoppedApproachFailed(driver,'no forward rear run-in without circling'); return true
+        end
+    end
     data.phase='checking'; data.work=0
     return true
 end
@@ -1933,7 +1981,7 @@ function Q.updateStoppedApproach(driver)
         return
     end
     if data.departing and not finalDeparting(driver) then driver:requestDriveUnloadNow() end
-    if finalDeparting(driver) or not Q.finalApproachTarget(driver) then
+    if finalDeparting(driver) or not Q.checkedRearEntryTarget(driver) then
         if state==driver.states.WAITING_FOR_PATHFINDER and driver.pathfinderController then
             driver.pathfinderController.pathfinder=nil
         end
@@ -1993,7 +2041,7 @@ end
 
 function Q.stoppedApproachSpeed(driver,speed)
     local data=driver.queueStoppedApproach
-    if not data or not Q.finalApproachTarget(driver) then return speed end
+    if not data or not Q.checkedRearEntryTarget(driver) then return speed end
     if data.phase=='checking' then return 0 end
     if data.phase=='driving' then return data.clear and math.min(speed,5) or 0 end
     return speed
