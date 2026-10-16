@@ -1787,6 +1787,25 @@ function Q.finalUnloadSpeed(driver,speed)
     return speed
 end
 
+-- A full grain combine may stop during a moving rendezvous even with
+-- stopForUnload disabled. A fill node already ahead of its pipe cannot be
+-- reached by waiting for the combine to catch up. Let native invalid-position
+-- recovery release/re-call the unloader and plan its normal rear approach.
+-- This is independent of finished-harvester parking and installs no new state.
+function Q.hasStoppedRendezvousOvershoot(driver)
+    local vehicle=driver.combineToUnload
+    if not Q.enabled(driver) or not vehicle or not vehicle.getIsCpActive or not vehicle:getIsCpActive() then return false end
+    local c=vehicle:getCpDriveStrategy()
+    if not c or not c.states or c.state~=c.states.UNLOADING_ON_FIELD
+            or c.unloadState~=c.states.WAITING_FOR_UNLOAD_ON_FIELD
+            or c:willWaitForUnloadToFinish() or c:alwaysNeedsUnloader() or c:hasAutoAimPipe()
+            or c:isDischarging() or c:isPipeMoving()
+            or (vehicle.lastSpeedReal or 0)*3600>=0.5
+            or (driver.vehicle.lastSpeedReal or 0)*3600>=0.5 then return false end
+    local dz=driver:getBestTargetNodeDistanceFromPipe()
+    return dz~=nil and dz < -0.5
+end
+
 -- Extra alignment/recovery belongs only to the remaining end-of-course load.
 -- An ordinary pocket/full-tank wait must retain the 3031 native approach,
 -- admission and retries, even when the combine is stationary for a long time.

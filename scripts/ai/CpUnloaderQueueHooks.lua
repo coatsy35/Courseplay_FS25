@@ -91,8 +91,19 @@ function U:isOkToStartUnloadingCombine()
     return admission(self)
 end
 
+local frontAdmission = U.isInFrontAndAlignedToMovingCombine
+function U:isInFrontAndAlignedToMovingCombine(...)
+    if Q.hasStoppedRendezvousOvershoot(self) then
+        self:debugSparse('Queue: full stopped combine cannot reach a fill node ahead of its pipe; use native rear approach')
+        return false
+    end
+    return frontAdmission(self,...)
+end
+
 local needsPath = U.isPathfindingNeeded
 function U:isPathfindingNeeded(vehicle,target,...)
+    if vehicle==self.vehicle and Q.hasStoppedRendezvousOvershoot(self)
+            and target==self:getPipeOffsetReferenceNode() then return true end
     if vehicle==self.vehicle and Q.finalApproachTarget(self)
             and target==self:getPipeOffsetReferenceNode() and Q.pipeEntryAligned(self)==false then
         return true -- nearby but misaligned still needs the checked rear entry

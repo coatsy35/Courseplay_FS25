@@ -108,6 +108,8 @@ def check_queue(packager):
     expected |= {('U', 'unloadStoppedCombine'), ('U', 'startUnloadingStoppedCombine')}
     # End-of-course rear entry only. Ordinary hook behaviour is regression-tested.
     expected |= {('U', name) for name in ('isOkToStartUnloadingCombine', 'startUnloadingCombine', 'unloadMovingCombine', 'isPathfindingNeeded')}
+    # Ordinary full-wait overshoot: native recovery and rear path, independent of final parking.
+    expected |= {('U', 'isInFrontAndAlignedToMovingCombine')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
     print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)
@@ -128,6 +130,7 @@ if __name__ == '__main__':
                                 'unloader-queue/test_final_approach.py',
                                 'unloader-queue/test_stopped_approach.py',
                                 'unloader-queue/test_milestone_unloading.py',
+                                'unloader-queue/test_ordinary_rendezvous.py',
                                 'unloader-queue/test_departure_threshold.py',
                                 'unloader-queue/test_harvester_bypass.py',
                                 'unloader-queue/test_combined_recovery.py',

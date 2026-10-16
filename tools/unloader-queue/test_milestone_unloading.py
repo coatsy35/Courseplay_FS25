@@ -35,6 +35,8 @@ class MilestoneUnloadingTests(unittest.TestCase):
             c.isPipeInFruit=function() return false end
             c.course={isCloseToNextTurn=function() return false end}
             c.hasAutoAimPipe=function() return false end
+            c.isDischarging=function() return false end
+            c.isPipeMoving=function() return false end
             c.willWaitForUnloadToFinish=function() return waitUntilEmpty end
             c.getAreaToAvoid=function() return nil end
             c.getFillLevelPercentage=function() return fill/200 end

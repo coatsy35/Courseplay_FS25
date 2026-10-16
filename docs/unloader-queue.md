@@ -1,3 +1,44 @@
+## Build 3040 - recover a moving rendezvous after the combine fills and stops
+
+The preserved 3039 run loaded at 22:32:26 on 15 October. Tractor 323 accepted a
+moving rendezvous with combine 318 at 23:04:34.530 and entered native moving
+unloading at 23:04:40.183. At 23:04:42.072 the combine stopped full in ordinary
+WAITING_FOR_UNLOAD_ON_FIELD, around waypoint 1354/2421. The tractor made no
+further logged course/state progress and the combine retained its assignment
+through 08:43 on 16 October. The screenshot shows a fill target 7.6 m ahead of
+the pipe and a calculated speed of -10 km/h, clamped to zero by native CP.
+
+This incident never entered final parking. The 3039 final-parking changes are
+restricted to the combine strategy at its original course end; tractor staging
+is separate. The ordinary native admission, mode and speed methods are identical
+to the 3031 milestone. With stopForUnload disabled, native full-on-field waiting
+does not mean willWaitForUnloadToFinish: front admission therefore continued to
+accept a trailer whose fill node could no longer be reached by the full combine.
+The observed deadlock is established; the log does not prove why this particular
+rendezvous timing differed from the successful milestone run.
+
+Reject that front admission only for an active ordinary grain combine in the
+exact full-on-field waiting state, when both vehicles have stopped, neither
+transfer nor pipe movement is occurring, and the fill node is over 0.5 m ahead.
+The existing native moving-unload position check then releases the assignment.
+Queue lead selection and the native stopped-combine call use the unchanged rear
+target and pathfinder. The same exact case can request this path even inside
+the normal close-range exclusion; unrelated markers and targets are unchanged.
+No custom reverse route, new recovery timer, crop exception or ordinary-mode
+replacement is introduced. Full/manual departure retains native priority.
+
+Final empty-harvester parking, unfolding until parked, arrival staging, moving
+catches, active transfer, pockets, turns, continuous-output and auto-aim modes
+retain their existing paths. The new regression reproduces the logged deadlock
+on 3039, then runs native speed/admission, release/deregistration, queue recall,
+rear-path context and subsequent forward unloading with the correction. It also
+checks close-range isolation, native crop/turn/alignment rejection and departure
+priority. Existing milestone contracts remain intact; their engine adapter now
+supplies pipe movement and discharge state. Full source/extracted-ZIP checks are
+required. Engine-boundary tests cannot verify FS25 physical steering, so a fresh
+in-game run must confirm recovery and unattended completion. Preserve the 3031
+milestone and paused scheduled monitor. Evidence: out/incident-3039-ordinary-approach/.
+
 ## Build 3039 - complete arrival searches and park on completed centre runs
 
 The preserved 15 October 3038 run confirms AD handed tractor 324 to CP at
