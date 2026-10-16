@@ -1,3 +1,48 @@
+## Build 3044 - clear AD arrivals and recover stalled ordinary unloading
+
+The preserved 16 October 3043 log loaded the test mod at 16:22:28.424.
+T7.300/322 entered moving unloading for CR11/319 at 19:52:50.223 and
+remained assigned until its task stopped at 20:34:04.752. The photographed
+longitudinal error was -0.1 m. A deterministic fixture reproduces zero speed
+with an angled trailer: the old overshoot gate required less than -0.5 m,
+and its no-progress watcher covered final unloading only. No outward/rear
+recovery was logged for that stranded assignment. The evidence therefore
+does not establish that a previous loop put it there. Successful transfer
+after task restarts at 20:34 is not unattended recovery.
+
+Watch an ordinary stationary grain wait only while the whole rig is misaligned.
+After 12 seconds without movement or grain transfer, retain the assignment and
+validate one forward route outwards on the pipe side, back outside the header,
+then into a straight rear run-in. Existing front overshoots use the same route.
+A hard full-body corridor prevents crossing inward beside/in front of the
+combine; the unfolded header remains an obstacle. Sample the entire route and
+recheck the live stopping horizon. Reject crop, collisions, boundary violations,
+unsupported geometry and moved starts. Native moving catches, productive or
+aligned waits, departure thresholds and AD handover retain their behaviour.
+No harvester finish authority is assigned to a tractor.
+
+T7.300/325 captured its arrival at 19:59:51.676. At 20:35:28.668 it still
+reported 2,134.8 seconds elapsed and 66,072.5 ms cumulative search work, with
+only 105 nodes in candidate 9. These are search figures, not FPS. Entry
+clearing was coupled to twelve independent parking searches after direct
+routes met crop. Now first try a bounded, checked straight pull-off, long
+enough for the whole trailer to clear the arrival point. It remains available
+for native calls. This is a transit endpoint, never a parked destination;
+afterwards select an assigned stage or a parallel completed headland/centre
+row. A blocked straight exit falls back to checked parallel candidates.
+Keep wider final-parking clearance and clearance from a distinct AD return
+marker. Parking candidates now share one obstacle tree after direct checks,
+rather than duplicating the same exploration twelve times. Existing frame
+slices and all crop/collision/whole-rig checks remain in force.
+
+Regressions execute the entire outward route from the near-zero-error pose,
+check full-rig alignment and native handover, productive waits, interruption,
+blocked routes, immediate arrival transit, subsequent parallel parking and
+bounded shared search work. The three incident regressions fail against the
+preserved 3043 ZIP. Evidence is in out/incident-3043-unload-and-arrival/.
+The 3031 milestone and harvester final ordering/parking are unchanged.
+A fresh game run is still required to verify the actual entrance and manoeuvres.
+
 ## Build 3043 - ordered final unloading and coherent trailer parking searches
 
 The 16 October run loaded 3042 at 12:59:00.282. CR11/319 entered final

@@ -2026,21 +2026,28 @@ end
 
 -- A full grain combine may stop during a moving rendezvous even with
 -- stopForUnload disabled. A fill node already ahead of its pipe cannot be
--- reached by waiting for the combine to catch up. Let native invalid-position
--- recovery release/re-call the unloader and plan its normal rear approach.
--- This is independent of finished-harvester parking and installs no new state.
-function Q.hasStoppedRendezvousOvershoot(driver)
+-- reached by waiting for the combine to catch up. Preserve native release/recall,
+-- then constrain the recovery outside the header before returning behind.
+-- This is independent of finished-harvester parking and adds no driver state.
+function Q.ordinaryStoppedTarget(driver)
     local vehicle=driver.combineToUnload
     if not Q.enabled(driver) or not vehicle or not vehicle.getIsCpActive or not vehicle:getIsCpActive() then return false end
     local c=vehicle:getCpDriveStrategy()
     if not c or not c.states or c.state~=c.states.UNLOADING_ON_FIELD
             or c.unloadState~=c.states.WAITING_FOR_UNLOAD_ON_FIELD
-            or c:willWaitForUnloadToFinish() or c:alwaysNeedsUnloader() or c:hasAutoAimPipe()
+            or c:alwaysNeedsUnloader() or c:hasAutoAimPipe()
             or c:isDischarging() or c:isPipeMoving()
             or (vehicle.lastSpeedReal or 0)*3600>=0.5
             or (driver.vehicle.lastSpeedReal or 0)*3600>=0.5 then return false end
+    return c
+end
+
+function Q.hasStoppedRendezvousOvershoot(driver)
+    local c=Q.ordinaryStoppedTarget(driver)
+    if not c then return false end
     local dz=driver:getBestTargetNodeDistanceFromPipe()
-    return dz~=nil and dz < -0.5
+    return (not c:willWaitForUnloadToFinish() and dz~=nil and dz < -0.5)
+        or driver.queueStoppedRecovery==driver.combineToUnload
 end
 
 -- Extra alignment/recovery belongs only to the remaining end-of-course load.
@@ -2106,6 +2113,7 @@ end
 function Q.clearStoppedApproach(driver)
     local data=driver.queueStoppedApproach
     if data then W.delete(data.world); driver.queueStoppedApproach=nil end
+    driver.queueStoppedRecovery=nil
 end
 
 local function stoppedApproachFailed(driver,reason)
@@ -2140,6 +2148,72 @@ function Q.stoppedApproachGoal(driver,x,z)
     driver:debug('Queue: %s rear entry %.1f, %.1f; %.1f m whole-rig run-in',
         overshoot and 'overshot rendezvous' or 'final-combine',data.x,data.farZ,runIn)
     return data.x,data.farZ
+end
+
+-- A stranded ordinary rendezvous must leave on the pipe side, travel back
+-- outside the header, and only then turn into its straight rear run-in.
+function Q.beginStoppedEscape(driver)
+    local data=driver.queueStoppedApproach
+    if not data or not data.overshoot then return false end
+    local world,reason=W.new(driver)
+    if not world then stoppedApproachFailed(driver,reason); return true end
+    data.world=world
+    local reference=driver:getPipeOffsetReferenceNode()
+    local frame=W.pose(reference)
+    local function localPoint(p)
+        local dx,dz=p.x-frame.x,p.z-frame.z
+        return dx*math.cos(frame.t)-dz*math.sin(frame.t),dx*math.sin(frame.t)+dz*math.cos(frame.t)
+    end
+    local side=data.x>=0 and 1 or -1
+    local bodies=W.currentBodies(data.combine)
+    if not bodies then stoppedApproachFailed(driver,'combine/header geometry unavailable'); return true end
+    local headerSide,back=-math.huge,math.huge
+    local obstacles={}
+    for _,item in ipairs(bodies) do
+        local rectangle=W.rectangle(item.body,item.pose,1)
+        obstacles[#obstacles+1]=rectangle
+        for _,p in ipairs(rectangle) do
+            local x,z=localPoint(p)
+            headerSide=math.max(headerSide,side*x); back=math.min(back,z)
+        end
+    end
+    local nearest=math.huge
+    for i,body in ipairs(world.model.bodies) do
+        for _,p in ipairs(W.rectangle(body,world.startPoses[i])) do
+            local x=localPoint(p); nearest=math.min(nearest,side*x)
+        end
+    end
+    local guard=math.min(nearest,headerSide+1)
+    data.corridor=function(rectangle)
+        local minSide,maxZ=math.huge,-math.huge
+        for _,p in ipairs(rectangle) do
+            local x,z=localPoint(p); minSide=math.min(minSide,side*x); maxZ=math.max(maxZ,z)
+        end
+        if maxZ>back-2 and minSide<guard-0.05 then return false end
+        for _,obstacle in ipairs(obstacles) do
+            if G.overlap(rectangle,obstacle) then return false end
+        end
+        return true
+    end
+    local here=world.startPoses[1]
+    local x,z=localPoint(here)
+    local radius=H.minimumRadius(world.model,driver.turningRadius)
+    if not radius then stoppedApproachFailed(driver,'unsupported outward turning radius'); return true end
+    local out=side*(math.max(side*x,headerSide)+2*radius+4)
+    local rear=data.rearZ-data.runIn
+    local function pose(x,z,t)
+        local wx,wz=H.math.position(frame,x,z)
+        return {x=wx,z=wz,t=frame.t+t}
+    end
+    local goals={pose(out,z,math.pi),pose(out,rear-2*radius-data.runIn,math.pi),
+        pose(data.x,rear,0),pose(data.x,data.rearZ,0)}
+    data.goal=goals[#goals]
+    data.search,reason=CpUnloaderQueueSearch.via(world,goals,data.corridor)
+    if not data.search then stoppedApproachFailed(driver,reason); return true end
+    data.phase='checking'; data.work=0; data.outward=true
+    driver:setNewState(driver.states.WAITING_FOR_PATHFINDER); driver:setMaxSpeed(0)
+    driver:debug('Queue: checking outward escape, behind combine, then straight rear run-in')
+    return true
 end
 
 function Q.stoppedApproachPath(driver,success,course)
@@ -2249,14 +2323,22 @@ function Q.updateStoppedApproach(driver)
         repeat done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
         until done or readIntervalTimerMs(timer)>=2
         data.work=data.work+readIntervalTimerMs(timer); closeIntervalTimer(timer)
-        if not done and data.work<1000 then return end
+        if not done and data.work<(data.outward and 10000 or 1000) then return end
         if not path then stoppedApproachFailed(driver,reason or 'run-in search budget exhausted'); return end
+        local live=W.poses(data.world.model)
+        for i,p in ipairs(live) do
+            local initial=data.world.startPoses[i]
+            if distance(p,initial)>0.25 or math.abs(H.math.delta(p.t,initial.t))>math.rad(2) then
+                stoppedApproachFailed(driver,'rig moved while its outward/run-in route was being checked'); return
+            end
+        end
         local points={}
         -- Retain every checked point: thinning a curve introduces unchecked chords.
         for _,p in ipairs(path) do points[#points+1]={x=p.x,z=p.z} end
         data.path=path; data.search=nil; data.phase='driving'
         data.course=Course(driver.vehicle,points,true)
         data.progress=W.pose(driver.vehicle:getAIDirectionNode()); data.progressTime=g_currentMission.time
+        driver:setNewState(driver.states.DRIVING_TO_COMBINE)
         driver.ppc:setShortLookaheadDistance(); driver:startCourse(data.course,1)
     elseif data.phase=='driving' then
         local here=W.pose(driver.vehicle:getAIDirectionNode())
@@ -2270,7 +2352,7 @@ function Q.updateStoppedApproach(driver)
             if not model then stoppedApproachFailed(driver,reason); return end
             data.world.model=model
             local poses=W.poses(model)
-            data.clear=W.clear(data.world,poses)
+            data.clear=W.clear(data.world,poses,data.corridor)
             if data.clear then data.clear=Q.routeClear(data,poses,driver.ppc:getRelevantWaypointIx()) end
         end
     end
@@ -2284,11 +2366,14 @@ function Q.stoppedApproachSpeed(driver,speed)
     return speed
 end
 
--- A rendezvous may reach the last waypoint before its remaining grain transfers.
--- Ordinary moving/full-tank unloading remains entirely with native CP.
+-- Watch actual movement/transfer at a stationary grain rendezvous. Ordinary
+-- catches recover only when misaligned; moving and productive unloads stay native.
 function Q.watchStoppedMovingUnload(driver)
     local c=Q.finalApproachTarget(driver)
-    if not c or finalDeparting(driver) or not c.combineController then driver.queueStoppedWatch=nil; return false end
+    local ordinary=not c and Q.ordinaryStoppedTarget(driver)
+    c=c or ordinary
+    if not c or (ordinary and Q.pipeEntryAligned(driver)) or finalDeparting(driver)
+            or not c.combineController then driver.queueStoppedWatch=nil; return false end
     local fill=c.combineController:getFillLevel()
     if fill<0.01 then driver.queueStoppedWatch=nil; return false end
     local here=W.pose(driver.vehicle:getAIDirectionNode())
@@ -2304,6 +2389,7 @@ function Q.watchStoppedMovingUnload(driver)
     if data.attempts>=2 then stoppedApproachFailed(driver,'two stopped rendezvous retries made no progress'); return true end
     data.attempts=data.attempts+1; data.time=g_currentMission.time
     local x,z=driver:getPipeOffset(driver.combineToUnload)
+    if ordinary then driver.queueStoppedRecovery=driver.combineToUnload end
     driver:setMaxSpeed(0); driver:setNewState(driver.states.WAITING_FOR_PATHFINDER)
     driver:debug('Queue: stopped rendezvous made no transfer or movement; replan rear entry %d/2',data.attempts)
     driver:startPathfindingToWaitingCombine(x,z)

@@ -341,6 +341,8 @@ class ArrivalTests(unittest.TestCase):
             u.invertedStartPositionMarkerNode={x=-70,z=0,t=0}; place(-70,0,0)
             local data=Q.take(u,'prepare'); data.assignment={combine='a'}
             local goal=assert(Q.target(u))
+            assert(goal.transit and goal.straight and goal.x==-70 and goal.z>0)
+            goal=assert(Q.poolTarget(u,true))
             assert(goal.arrival and goal.firstValid and #goal.choices>1 and goal.x==-70)
             assert(math.abs(goal.z)<100 and not data.stage)
             for _,candidate in ipairs(goal.choices) do
@@ -358,6 +360,7 @@ class ArrivalTests(unittest.TestCase):
             -- A headland-free course can clear arrival on an aligned nearby
             -- centre row, without falling through to a distant assigned stage.
             Q.combines.pool=nil; Q.combines.duplicate=nil; place(-70,0,0)
+            data.arrivalExitRetry=10000
             goal=assert(Q.target(u))
             assert(goal.arrival and goal.x==0 and math.abs(goal.z)<100)
         ''')
@@ -386,6 +389,8 @@ class ArrivalTests(unittest.TestCase):
             Q.combines={a={driver=c,vehicle=c.vehicle,position={x=0,z=500},fill=0,capacity=20000,rate=50,callPercent=80}}
             u.isServingPosition=function() return true end
             Q.captureArrival(u); local data=Q.take(u,'prepare'); data.assignment={combine='a'}
+            assert(Q.target(u).transit and not data.stage)
+            data.arrivalExitRetry=10000
             assert(not Q.target(u) and not data.stage)
             place(0,300,0); assert(Q.target(u),'normal preparation must resume after clearing entrance')
         ''')
@@ -398,7 +403,8 @@ class ArrivalTests(unittest.TestCase):
             u.isServingPosition=function() return true end
             Q.captureArrival(u); Q.take(u,'prepare')
             for i=1,5 do Q.members[{vehicle={rootNode=i}}]={} end
-            local goal=assert(Q.target(u),'fleet index skipped all nearby staging ground')
+            assert(Q.target(u).transit)
+            local goal=assert(Q.poolTarget(u,true),'fleet index skipped all nearby staging ground')
             assert(goal.arrival and goal.z>=45 and goal.z<=85)
         ''')
 
@@ -524,32 +530,86 @@ class ArrivalTests(unittest.TestCase):
             for i=2,#path do poses=H.advance(world.model,poses,path[i]); assert(W.clear(world,poses)) end
         ''')
 
-    def test_expensive_arrival_obstacle_search_advances_to_checked_alternative(self):
+    def test_twelve_blocked_direct_entries_share_a_bounded_obstacle_search(self):
         self.lua.execute('''
             local S=CpUnloaderQueueSearch
-            local goals={{x=0,z=50,t=0},{x=0,z=60,t=0}}
+            local goals={}
+            for i=1,12 do goals[i]={x=0,z=50+i*3,t=0} end
             local search=assert(S.choices(world,goals)); search.arrival=true
-            local new,step=S.new,S.step
-            S.new=function(w,goal,corridor)
-                if goal==goals[1] then return {expensive=true} end
-                return new(w,goal,corridor)
+            local new=S.new
+            local states={}
+            S.new=function(...)
+                local state=assert(new(...)); state.direct=nil
+                states[#states+1]=state; return state
             end
-            S.step=function(s,budget)
-                if s.directOnly then return true,nil,'direct candidate blocked' end
-                if s.expensive then return false end
-                return step(s,budget)
-            end
-            local done,path
-            for i=1,10000 do
+            local done,path,work
+            for i=1,1200 do
                 local phase=S.choicePhase(search)
-                done,path=S.step(search,1)
+                work=i; done,path=S.step(search,1)
                 if done then break end
-                S.chargeChoices(search,0.1,phase)
+                S.chargeChoices(search,0.5,phase)
             end
-            assert(done and path and path.goal==goals[2],'fallback candidate monopolised arrival search')
+            assert(done and path and work<1200,'shared parking search did not finish bounded fixture')
+            assert(#states==12 and search.shared)
+            local trees=0
+            for _,state in ipairs(states) do if state.expanded>0 then trees=trees+1 end end
+            assert(trees==1,'duplicate obstacle trees remain')
             local poses=W.poses(world.model)
-            for i=2,#path do poses=H.advance(world.model,poses,path[i]); assert(W.clear(world,poses)) end
+            for i=2,#path do poses=W.advance(world.model,poses,path[i]); assert(W.clear(world,poses)) end
+            assert(path.goal.accept==nil and math.abs(H.math.delta(path[#path].t,path.goal.t))<0.01)
         ''')
+
+    def test_straight_exit_starts_without_combine_and_is_never_a_parking_slot(self):
+        self.lua.execute('''
+            Q.combines={}; Q.captureArrival(u)
+            local data=Q.take(u,'prepare')
+            local goal=assert(Q.target(u))
+            assert(goal.transit and goal.straight and goal.z<40 and goal.x==0)
+            Q.request(u,goal)
+            local done,path,steps
+            for i=1,1000 do
+                steps=i; done,path=CpUnloaderQueueSearch.step(data.search,1)
+                if done then break end
+            end
+            assert(done and path and steps<1000 and data.search.expanded==0)
+            for _,p in ipairs(path) do assert(p.x==0 and p.t==0 and p.z>=0) end
+            Q.startRoute(data,path)
+            assert(Q.owns(u) and data.operation=='prepare','entry clearing changed queue ownership')
+            place(goal.x,goal.z,goal.t); assert(Q.onLast(u))
+            assert(data.arrivalDeparted and not data.parkedGoal and not data.path)
+            assert(not Q.target(u),'temporary transit endpoint became a parking slot')
+            local points={}; for z=-50,130 do points[#points+1]={x=15,z=z} end
+            local course=Course(v,points,false)
+            Q.combines={a={driver={fieldWorkCourse=course},position={x=15,z=100}}}
+            u.isServingPosition=function() return true end
+            local parked=assert(Q.target(u))
+            assert(parked.parking and not parked.transit and parked.x==15)
+            assert(math.abs(math.sin(parked.t))<0.01,'parking not parallel to centre row')
+        ''')
+
+    def test_transit_keeps_wide_clearance_from_a_distinct_return_marker(self):
+        self.lua.execute('''
+            Q.captureArrival(u); Q.take(u,'prepare')
+            u.invertedStartPositionMarkerNode={x=12,z=28,t=0}
+            local goal=Q.arrivalExit(u); local model=W.model(v)
+            assert(not goal.accept(W.settledPoses(model,goal),model),
+                'short transit clearance weakened the distinct AD return lane')
+            u.invertedStartPositionMarkerNode={x=0,z=0,t=0}
+            assert(goal.accept(W.settledPoses(model,goal),model))
+        ''')
+
+    def test_blocked_straight_exit_does_not_drive_or_loop(self):
+        for obstacle in ('collision=1', 'densityCount=10'):
+            with self.subTest(obstacle=obstacle):
+                self.setUp()
+                self.lua.execute('''
+                    Q.combines={}; Q.captureArrival(u); local data=Q.take(u,'prepare')
+                    local goal=Q.target(u)
+                '''+obstacle+'''
+                    Q.request(u,goal)
+                    assert(not data.path and not data.search and not data.arrivalDeparted)
+                    assert(data.arrivalExitRetry>g_currentMission.time and not Q.target(u))
+                ''')
 
 
 if __name__ == '__main__':

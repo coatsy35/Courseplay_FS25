@@ -59,7 +59,8 @@ local function goalKey(p) return math.floor(p.x/4)..':'..math.floor(p.z/4) end
 -- marker may belong to an earlier AD destination and must remain unchanged.
 function Q.captureArrival(driver)
     local origin=W.pose(driver.vehicle:getAIDirectionNode())
-    Q.data(driver).arrivalOrigin=origin
+    local data=Q.data(driver)
+    data.arrivalOrigin=origin; data.arrivalDeparted=nil; data.arrivalExitRetry=nil
     driver:debug('Queue: captured arrival position %.1f, %.1f',origin.x,origin.z)
 end
 
@@ -89,6 +90,7 @@ function Q.failed(data,reason,phase)
             for _,goal in ipairs(data.goal.choices or {}) do data.failedGoals[goalKey(goal)]=now()+15000 end
         end
     end
+    if data.goal and data.goal.transit then data.arrivalExitRetry=now()+15000 end
     Q.reason(data,reason)
     data.nextAttempt=now()+3000
 end
@@ -406,24 +408,26 @@ function Q.findUnloader(combine,stopped,waypoint)
     return false
 end
 
-function Q.stagingClear(driver,poses,model)
+function Q.stagingClear(driver,poses,model,arrivalRadius)
     Q.pruneTurnReservations()
     local origin=arrivalOrigin(driver)
     local marker=driver.invertedStartPositionMarkerNode
     local returnOrigin=marker and W.pose(marker)
     for i,body in ipairs(model.bodies) do
         local rectangle=W.rectangle(body,poses[i],1)
-        for _,origin in ipairs({origin or false,returnOrigin or false}) do
-            if origin then
+        for index,markerOrigin in ipairs({origin or false,returnOrigin or false}) do
+            if markerOrigin then
                 -- Closest point on the complete oriented body, including edges
                 -- and containment; checking corners alone misses circle crossings.
                 local pose=poses[i]
-                local dx,dz=origin.x-pose.x,origin.z-pose.z
+                local dx,dz=markerOrigin.x-pose.x,markerOrigin.z-pose.z
                 local x=dx*math.cos(pose.t)-dz*math.sin(pose.t)
                 local z=dx*math.sin(pose.t)+dz*math.cos(pose.t)
                 local nearestX=math.max(body.right-1,math.min(body.left+1,x))
                 local nearestZ=math.max(body.back-1,math.min(body.front+1,z))
-                if math.sqrt((x-nearestX)^2+(z-nearestZ)^2)<2*driver.turningRadius+4 then return false end
+                local sameArrival=index==1 or (origin and distance(origin,markerOrigin)<1)
+                local radius=sameArrival and arrivalRadius or 2*driver.turningRadius+4
+                if math.sqrt((x-nearestX)^2+(z-nearestZ)^2)<radius then return false end
             end
         end
         for _,reservation in pairs(Q.turnTraffic or {}) do
@@ -475,8 +479,8 @@ function Q.target(driver)
     local data=Q.data(driver)
     -- Clear the arrival lane before investing in a distant assigned stage.
     -- A native unloading call may still take ownership immediately.
-    if not Q.arrivalClear(driver) then
-        return Q.poolTarget(driver,true)
+    if not data.arrivalDeparted and not Q.arrivalClear(driver) then
+        return Q.arrivalExit(driver) or Q.poolTarget(driver,true)
     end
     local assignment=data.assignment
     if not assignment or assignment.future then return Q.poolTarget(driver) end
@@ -537,6 +541,22 @@ function Q.arrivalClear(driver)
         if math.sqrt((x-nx)^2+(z-nz)^2)<2*driver.turningRadius+4 then return false end
     end
     return true
+end
+
+-- An entry is a transit point, not a parking space. Clear it with one checked
+-- straight movement before selecting a combine/parallel waiting row. Never
+-- retain this temporary endpoint as parkedGoal.
+function Q.arrivalExit(driver)
+    local data=Q.data(driver)
+    if (data.arrivalExitRetry or 0)>now() then return end
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    local length=AIUtil.getLength(driver.vehicle)
+    local travel=math.max(length+6,2*driver.turningRadius+8)
+    local x,z=H.math.position(here,0,travel)
+    local goal={x=x,z=z,t=here.t,arrival=true,transit=true,straight=true}
+    if not Q.targetAvailable(driver,goal) then return end
+    goal.accept=function(poses,model) return Q.stagingClear(driver,poses,model,4) end
+    return goal
 end
 
 -- Waiting slots use either parallel direction, never the rig's arbitrary current
@@ -716,7 +736,7 @@ function Q.schedule()
         local slot=search.slots and search.slots[search.index]
         selected.driver:debug('Queue: parking search pending %.1f s, CPU %.1f ms, candidate %s, nodes %d, last rejection %s, foreground %s',
             (now()-selected.searchStarted)/1000,selected.searchWorkMs,tostring(workPhase or search.index or 1),
-            slot and slot.state and slot.state.expanded or search.expanded or 0,tostring(search.reason),tostring(foreground))
+            search.shared and search.shared.expanded or slot and slot.state and slot.state.expanded or search.expanded or 0,tostring(search.reason),tostring(foreground))
     end
     if done then
         selected.search=nil
@@ -753,8 +773,9 @@ function Q.onLast(driver)
         return true
     end
     Q.cancel(driver)
-    data.parkedGoal=destination
-    data.nextAttempt=now()+1000
+    if destination.transit then data.arrivalDeparted=true end
+    data.parkedGoal=not destination.transit and destination or nil
+    data.nextAttempt=destination.transit and now() or now()+1000
     Q.reason(data,'holding '..data.operation)
     return true
 end

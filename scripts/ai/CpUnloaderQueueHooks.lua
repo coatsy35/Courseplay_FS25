@@ -76,6 +76,7 @@ function U:unloadStoppedCombine()
             self:startCourseFollowingCombine(); self:setMaxSpeed(0); return
         end
     end
+    if Q.ordinaryStoppedTarget(self) and Q.watchStoppedMovingUnload(self) then return end
     if Q.watchFinalUnload(self) then return end
     return stoppedUnload(self)
 end
@@ -150,6 +151,7 @@ function U:startPathfindingToWaitingCombine(x,z)
     x,z,entryAllowed=Q.stoppedApproachGoal(self,x,z)
     if entryAllowed==false then return end
     if self.queueStoppedApproach and Q.deferWaitingApproach(self,originalX,originalZ) then return end
+    if Q.beginStoppedEscape(self) then return end
     local result=waitingPath(self,x,z)
     -- The native context is created inside waitingPath and can synchronously
     -- install a backup. Bind it after that call, before the next update.

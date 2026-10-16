@@ -63,8 +63,24 @@ local function reverseTracking(world,poses)
     return index
 end
 
+local function heuristic(search,pose)
+    local best=distance(pose,search.goal)
+    for _,goal in ipairs(search.goals or {}) do best=math.min(best,distance(pose,goal)) end
+    return best
+end
+
 local function connectGoal(search,parent)
     if search.reverse or search.escape then return false end
+    if search.goals then
+        -- One obstacle tree serves every parallel slot. Try the nearest slot
+        -- first, then rotate alternatives instead of exploring the same ground
+        -- independently twelve times.
+        local ranked={}
+        for _,goal in ipairs(search.goals) do ranked[#ranked+1]=goal end
+        table.sort(ranked,function(a,b) return distance(parent.poses[1],a)<distance(parent.poses[1],b) end)
+        local index=math.max(0,math.floor((search.expanded or 0)/8)-1)%#ranked+1
+        search.goal=ranked[index]
+    end
     local world,goal,radius=search.world,search.goal,search.radius
     local poses=parent.poses
     local start=State3D(poses[1].x,-poses[1].z,CpMathUtil.angleFromGame(poses[1].t))
@@ -104,7 +120,10 @@ function S.new(world,goal,corridor)
     local search={world=world,goal=goal,corridor=corridor,radius=radius,open={root},seen={},expanded=0,root=root}
     local start=State3D(poses[1].x,-poses[1].z,CpMathUtil.angleFromGame(poses[1].t))
     local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
-    if goal.reverse then
+    if goal.straight then
+        search.direct={start,target}; search.directIx=2; search.directNode=root
+        search.directOnly=true
+    elseif goal.reverse then
         search.trackingIndex,reason=reverseTracking(world,poses)
         if not search.trackingIndex then return nil,reason end
         for _,p in ipairs(poses) do
@@ -114,6 +133,27 @@ function S.new(world,goal,corridor)
         search.direct={start,target}
         search.directIx=2; search.directNode=root
     else connectGoal(search,root) end
+    return search
+end
+
+-- A prescribed forward manoeuvre still uses the same incremental whole-rig
+-- validation. No unchecked waypoint or unconstrained lattice fallback is used.
+function S.via(world,goals,corridor)
+    local search,reason,phase=S.new(world,goals[#goals],corridor)
+    if not search then return nil,reason,phase end
+    local p=search.root.poses[1]
+    local start=State3D(p.x,-p.z,CpMathUtil.angleFromGame(p.t))
+    local points={start}
+    for _,goal in ipairs(goals) do
+        local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
+        local solution=DubinsSolver():solve(start,target,search.radius)
+        if not solution then return nil,'no outward forward connection' end
+        local segment=solution:getWaypoints(start,search.radius)
+        for i=2,#segment do points[#points+1]=segment[i] end
+        start=target
+    end
+    search.direct=points; search.directIx=2; search.directNode=search.root
+    search.directOnly=true
     return search
 end
 
@@ -206,7 +246,7 @@ function S.step(search,budget)
                 if edge.step==edge.count then
                     local travelled=edge.parent.distance+distance(a,b)
                     local node={poses=poses,parent=edge.parent,segment=edge.segment,distance=travelled,
-                        cost=travelled+(search.escape and 0 or distance(root,search.goal))}
+                        cost=travelled+(search.escape and 0 or heuristic(search,root))}
                     search.edge=nil
                     if search.direct then
                         search.directNode=node
@@ -281,6 +321,7 @@ end
 function S.choicePhase(search)
     if not search.choices then return end
     if search.arrival then
+        if search.shared then return end
         local slot=search.slots and search.slots[search.index]
         return (slot and slot.fallback and 'arrival ' or 'direct ')..search.index
     end
@@ -318,10 +359,16 @@ function S.chargeChoices(search,elapsed,startedPhase)
     return search.reason
 end
 
--- Arrival candidates retain their exact validation/search state between turns.
--- A rejected direct path proceeds from the existing root/open list, without
--- recreating and rechecking the same Dubins path on every fallback.
+-- Validate each inexpensive direct candidate fairly, then share one obstacle
+-- tree across all valid parking poses. This avoids twelve copies of the same
+-- crop/rig edge work at an AD entrance.
 function S.stepArrival(search,budget)
+    if search.shared then
+        local done,path,reason=S.step(search.shared,budget)
+        if path then path.goal=search.shared.goal end
+        search.reason=reason or search.shared.reason
+        return done,path,reason
+    end
     search.slots=search.slots or {}
     local index=search.index
     local slot=search.slots[index]
@@ -331,23 +378,29 @@ function S.stepArrival(search,budget)
         slot.failed=not slot.state
         if slot.state then slot.state.directOnly=true end
     end
-    if not slot.failed then
+    if not slot.failed and not slot.fallback then
         local done,path,reason=S.step(slot.state,budget)
         if path then path.goal=search.choices[index]; return true,path end
         if not done then return false end
         search.reason=reason
-        if not slot.fallback and not search.choices[index].reverse then
-            slot.fallback=true; slot.round=0
-            slot.state.done=nil; slot.state.directOnly=nil; slot.state.direct=nil
-            slot.state.edge=nil
-        else slot.failed=true end
+        slot.fallback=not search.choices[index].reverse
+        slot.failed=not slot.fallback
     end
     search.index=index%#search.choices+1
     search.workPhase=nil; search.phaseWorkMs=0
+    local goals,shared={},nil
     for i=1,#search.choices do
-        if not search.slots[i] or not search.slots[i].failed then return false end
+        local candidate=search.slots[i]
+        if not candidate or (not candidate.failed and not candidate.fallback) then return false end
+        if candidate.fallback then
+            goals[#goals+1]=search.choices[i]
+            shared=shared or candidate.state
+        end
     end
-    return true,nil,search.reason
+    if not shared then return true,nil,search.reason end
+    shared.done=nil; shared.directOnly=nil; shared.direct=nil; shared.edge=nil
+    shared.goals=goals; search.shared=shared
+    return false
 end
 
 function S.stepChoices(search,budget)
