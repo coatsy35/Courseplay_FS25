@@ -464,9 +464,10 @@ class YieldTests(unittest.TestCase):
                 if done then break end
             end
             assert(done and path,reason or 'yield search did not complete')
+            Q.startRoute(data,path); assert(data.course and u.course==data.course)
             local poses=W.poses(data.world.model)
             for i=2,#path do
-                poses=H.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+                poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
             end
             for i,p in ipairs(poses) do
                 local n=i==1 and v.rootNode or trailer.rootNode
@@ -474,7 +475,7 @@ class YieldTests(unittest.TestCase):
             end
             local x,z=H.math.position(v.rootNode,0,-3.3)
             trailer.joint.node.x=x; trailer.joint.node.z=z; trailer.joint.node.t=v.rootNode.t
-            Q.startRoute(data,path); assert(Q.onLast(u)); c.near=false
+            assert(Q.onLast(u)); c.near=false
             Q.yieldTarget(u,true); g_currentMission.time=2100; Q.yieldTarget(u,true)
             assert(data.operation=='prepare')
             -- Complete recovery into a real straight headland slot, including
@@ -495,9 +496,10 @@ class YieldTests(unittest.TestCase):
                 if done then break end
             end
             assert(done and path,reason or 'return to aligned parking failed')
+            Q.startRoute(data,path); assert(data.course and u.course==data.course)
             poses=W.poses(data.world.model)
             for i=2,#path do
-                poses=H.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+                poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
             end
             for _,p in ipairs(poses) do
                 assert(math.abs(H.math.delta(p.t,parking.t))<math.rad(5))
@@ -508,7 +510,7 @@ class YieldTests(unittest.TestCase):
             end
             local x,z=H.math.position(v.rootNode,0,-3.3)
             trailer.joint.node.x=x; trailer.joint.node.z=z; trailer.joint.node.t=v.rootNode.t
-            Q.startRoute(data,path); Q.onLast(u)
+            Q.onLast(u)
             assert(data.operation=='prepare' and data.parkedGoal==(path.goal or parking))
         ''')
 
