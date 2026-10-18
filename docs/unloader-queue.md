@@ -1,3 +1,36 @@
+## Build 3046 - release native trailer departures after pocket unloading
+
+The 18 October 3045 log shows both full trailers received native CP return routes:
+T7.300/322 at 16:32:00 and T7.300/323 at 16:39:34. The new pocket hold then stopped
+both, although their serviced CR11/319 was already WORKING. Native CP retains
+WAITING_FOR_UNLOADER_TO_LEAVE and its previous pocket substate after returning
+to work, so isAboutToReturnFromPocket() remains true. Build 3045 incorrectly used
+that predicate to arm a later ordinary departure hold and to prevent its release.
+The former test fixture cleared a Boolean pocket flag and missed this lifecycle.
+Evidence is retained in out/incident-3045-full-departure/.
+
+- Arm the trailer hold only during an active native UNLOADING_ON_FIELD pocket.
+  Execute native pocket state transitions in regression tests, including the
+  stale substate after returning to work and a later ordinary full departure.
+- Recognise physical exit on nearby segments of the resumed working course,
+  after the normal course offset is applied. Do not freeze the temporary pocket
+  offset or the original straight tangent. Require forward course progress and
+  net physical displacement of at least one measured chassis/header length.
+  On a curve, net displacement is conservative; reversing, leaving the working
+  row or changing out of WORKING resets the measurement. Stopped/replaced jobs
+  and replaced fieldwork courses discard their obsolete pocket hold.
+- Retain native reversing, marker route, collision checks, configurable fullness
+  threshold and AutoDrive handover. No native runtime, hook surface, scheduler,
+  preparation, approach recovery or harvester finish code changes are included.
+
+On 18 October 2026 the user confirmed that build 3045's end-of-field sequence
+worked: the combines emptied and moved out of the way. Preserve that behaviour
+and the 3031 completed-field milestone. This confirms the reported finish run,
+not every traffic or staging case. Regression coverage includes normal departures
+with stale pocket state, actual pocket exit, applied offsets, curved working rows,
+reverse motion, wrong-row/heading rejection and native handover. Source and
+extracted-ZIP release checks remain mandatory; 3046 needs in-game validation.
+
 ## Build 3045 - preparation fairness, pocket clearance and crossing recovery
 
 The preserved 3044 run exposes separate failures, rather than one end-of-field

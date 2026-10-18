@@ -552,27 +552,56 @@ function Q.releaseFinishedCombine(driver)
 end
 
 -- Preserve the serviced combine across native release/reversing/pathfinding.
--- A state transition or a timer is not proof that the pocket has been cleared.
+-- The native pocket substate survives resuming work; only the outer unloading
+-- state makes it an active pocket. Never arm a new hold from that stale substate.
 function Q.capturePocketDeparture(driver,vehicle,onlyIfFull)
     if not Q.enabled(driver) then return end
     local data=Q.data(driver)
     if data.pocketDeparturePause then return end
     local combine=vehicle and vehicle:getCpDriveStrategy()
-    if not combine or not combine.isAboutToReturnFromPocket or not combine:isAboutToReturnFromPocket() then return end
+    if not combine or not combine.states or combine.state~=combine.states.UNLOADING_ON_FIELD
+            or not combine.isAboutToReturnFromPocket or not combine:isAboutToReturnFromPocket() then return end
     if onlyIfFull and not (driver:isDriveUnloadNowRequested() or driver:getAllTrailersFull()) then return end
     local course,ix=Q.coursePosition(combine)
     local model=W.rigidModel(vehicle)
-    local row
-    if course and ix then
-        local x,_,z=course:getWaypointPosition(ix)
-        row={x=x,z=z,t=course:getWaypointYRotation(ix)}
-    end
     local length=model and model.front-model.back
-    if not row or not length or length<=0 then
+    if not course or not ix or course:getNumberOfWaypoints()<2 or not length or length<=0 then
         Q.reason(data,'pocket departure geometry unavailable; retaining native departure checks')
         return
     end
-    data.pocketDeparturePause={vehicle=vehicle,strategy=combine,row=row,length=length}
+    data.pocketDeparturePause={vehicle=vehicle,strategy=combine,course=course,length=length}
+end
+
+local function pocketRowProgress(combine,pause,pose)
+    if combine.state~=combine.states.WORKING or combine.course~=pause.course
+            or (combine.aiOffsetX or 0)~=0 then return end
+    local course,ix=Q.coursePosition(combine)
+    if not course or not ix then return end
+    -- Wait for the normal working offset to reach the course too. A frozen
+    -- pocket position includes aiOffsetX and is not the row we must rejoin.
+    local offsetX,offsetZ=course:getOffset()
+    local normalX=combine.settings.toolOffsetX:getValue()+(combine.tightTurnOffset or 0)
+    if math.abs(offsetX-normalX)>0.01 or math.abs(offsetZ-(combine.aiOffsetZ or 0))>0.01 then return end
+    local nearest,progress
+    -- PPC's relevant waypoint can be just ahead. Inspect only its neighbouring
+    -- segments, never a globally nearest row which may belong to another pass.
+    for i=math.max(1,ix-2),math.min(course:getNumberOfWaypoints()-1,ix+1) do
+        local ax,_,az=course:getWaypointPosition(i)
+        local bx,_,bz=course:getWaypointPosition(i+1)
+        local dx,dz=bx-ax,bz-az
+        local lengthSquared=dx*dx+dz*dz
+        if lengthSquared>0.01 then
+            local fraction=math.max(0,math.min(1,((pose.x-ax)*dx+(pose.z-az)*dz)/lengthSquared))
+            local ex,ez=pose.x-ax-fraction*dx,pose.z-az-fraction*dz
+            local gap=ex*ex+ez*ez
+            if gap<=1.5^2 and (not nearest or gap<nearest)
+                    and math.abs(H.math.delta(pose.t,math.atan2(dx,dz)))<=math.rad(15) then
+                nearest=gap
+                progress=course:getDistanceFromFirstWaypoint(i)+fraction*course:getDistanceToNextWaypoint(i)
+            end
+        end
+    end
+    return progress
 end
 
 function Q.holdPocketDeparture(driver,forwards,speed)
@@ -581,30 +610,28 @@ function Q.holdPocketDeparture(driver,forwards,speed)
     if not pause then return false end
     if not Q.enabled(driver) then data.pocketDeparturePause=nil; return false end
     local vehicle=pause.vehicle
-    if not vehicle:getIsCpActive() or vehicle:getCpDriveStrategy()~=pause.strategy then
-        -- A stopped/deleted job cannot complete this movement. Native route
-        -- collision/proximity checks still govern departure past that vehicle.
+    if not vehicle:getIsCpActive() or vehicle:getCpDriveStrategy()~=pause.strategy
+            or pause.strategy.fieldWorkCourse~=pause.course then
+        -- A stopped/replaced job or course cannot complete this pocket exit.
+        -- Native collision/proximity checks still govern departure past it.
         data.pocketDeparturePause=nil; return false
     end
-    local combine=pause.strategy
     local pose=W.pose(vehicle:getAIDirectionNode())
-    local row=pause.row
-    local ready=row and pause.length and combine.state==combine.states.WORKING
-        and not combine:isAboutToReturnFromPocket()
-    if ready then
-        local dx,dz=pose.x-row.x,pose.z-row.z
-        local lateral=dx*math.cos(row.t)-dz*math.sin(row.t)
-        local along=dx*math.sin(row.t)+dz*math.cos(row.t)
-        ready=math.abs(lateral)<=1.5 and math.abs(H.math.delta(pose.t,row.t))<=math.rad(15)
-            and along>=0
-        if ready then
-            pause.exitAlong=pause.exitAlong or along
-            if along-pause.exitAlong>=pause.length then
-                driver:debug('Queue: combine left pocket and advanced %.1f m; departure released',along-pause.exitAlong)
-                data.pocketDeparturePause=nil; return false
-            end
-        else pause.exitAlong=nil end
-    else pause.exitAlong=nil end
+    local progress=pocketRowProgress(pause.strategy,pause,pose)
+    if progress then
+        if not pause.exitPose or progress<(pause.lastProgress or progress)-0.05 then
+            pause.exitPose=pose; pause.exitProgress=progress
+        end
+        pause.lastProgress=progress
+        -- Net physical displacement cannot count oscillation, changed offsets
+        -- or waypoint progress as travel. On a curve this is conservative: the
+        -- actual forward path is at least as long as this measured clearance.
+        local travelled=distance(pose,pause.exitPose)
+        if progress-pause.exitProgress>=pause.length and travelled>=pause.length then
+            driver:debug('Queue: combine left pocket and advanced %.1f m; departure released',travelled)
+            data.pocketDeparturePause=nil; return false
+        end
+    else pause.exitPose=nil; pause.exitProgress=nil; pause.lastProgress=nil end
     if not data.nativeDeparture or driver.state~=driver.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL
             or not forwards then return false end
     if not pause.reported then

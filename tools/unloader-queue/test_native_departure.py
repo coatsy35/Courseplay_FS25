@@ -128,32 +128,75 @@ class NativeDepartureTests(unittest.TestCase):
         ''')
 
     def pocket_fixture(self):
+        # Use native pocket states/methods: native CP retains the pocket substate
+        # after resuming work. Only vehicle/course/implement engine boundaries are mocked.
+        source=(ROOT/'scripts/ai/strategies/AIDriveStrategyFieldWorkCourse.lua').read_text()
+        start=source.index('function AIDriveStrategyFieldWorkCourse:changeToFieldWork()')
+        self.lua.execute(source[start:source.index('\nend',start)+4])
         self.lua.execute('''
             W=CpUnloaderQueueWorld
             HeadlandLoopGeometry.math={delta=function(a,b) return (a-b+math.pi)%(2*math.pi)-math.pi end}
             W.pose=function(node) return {x=node.x,z=node.z,t=node.t} end
             W.rigidModel=function() return {front=8,back=-5} end
-            row={getNumberOfWaypoints=function() return 2 end,
-                getWaypointPosition=function() return 0,0,0 end,
-                getWaypointYRotation=function() return 0 end}
-            pocket=true
-            combine={isAboutToReturnFromPocket=function() return pocket end,
-                states={WORKING={},UNLOADING={}},course=row,fieldWorkCourse=row,
-                getClosestFieldworkWaypointIx=function() return 1 end}
-            combine.state=combine.states.UNLOADING
+            function setRow(points)
+                local total=0
+                for i,p in ipairs(points) do
+                    p.s=total
+                    local q=points[i+1]
+                    p.d=q and math.sqrt((q.x-p.x)^2+(q.z-p.z)^2) or 0
+                    total=total+p.d
+                end
+                row={points=points,offsetX=5,offsetZ=0,
+                    getNumberOfWaypoints=function(self) return #self.points end,
+                    getWaypointPosition=function(self,i)
+                        local p=self.points[i]; return p.x+self.offsetX,0,p.z+self.offsetZ
+                    end,
+                    getWaypointYRotation=function(self,i)
+                        i=math.min(i,#self.points-1)
+                        local p,q=self.points[i],self.points[i+1]
+                        return math.atan2(q.x-p.x,q.z-p.z)
+                    end,
+                    getDistanceFromFirstWaypoint=function(self,i) return self.points[i].s end,
+                    getDistanceToNextWaypoint=function(self,i) return self.points[i].d end,
+                    getOffset=function(self) return self.offsetX,self.offsetZ end,
+                    setOffset=function(self,x,z) self.offsetX=x; self.offsetZ=z end}
+            end
+            setRow({{x=0,z=0},{x=0,z=600}})
+            combine=setmetatable({states={WORKING={},WAITING_FOR_LOWER_DELAYED={},TURNING={}},
+                course=row,fieldWorkCourse=row,aiOffsetX=5,
+                settings={toolOffsetX={getValue=function() return 0 end}},
+                getClosestFieldworkWaypointIx=function() return relevantIx or 1 end,
+                changeToFieldWork=AIDriveStrategyFieldWorkCourse.changeToFieldWork,
+                debug=function() end,setMaxSpeed=function() end,lowerImplements=function() end,
+                isUnloadFinished=function() return true end},AIDriveStrategyCombineCourse)
+            for key,value in pairs(AIDriveStrategyCombineCourse.myStates) do combine.states[key]=value end
+            combine.state=combine.states.UNLOADING_ON_FIELD
+            combine.unloadState=combine.states.WAITING_FOR_UNLOAD_IN_POCKET
             cv={active=true,rootNode={x=5,z=-8,t=0},getCpDriveStrategy=function() return combine end}
             cv.getIsCpActive=function() return cv.active end
             cv.getAIDirectionNode=function() return cv.rootNode end
             u.vehicle.getAIDirectionNode=function() return {x=10,z=-20,t=0} end
+            function resumeWork()
+                -- Execute native unload -> waiting -> fieldwork/lowering transitions.
+                combine:driveUnloadOnField()
+                g_currentMission.time=g_currentMission.time+5001
+                combine:driveUnloadOnField()
+                assert(combine.state==combine.states.WAITING_FOR_LOWER_DELAYED)
+                combine.state=combine.states.WORKING -- engine reports implements ready
+                assert(combine:isAboutToReturnFromPocket(),'native stale flag must remain present')
+                combine:updateFieldworkOffset(row)
+            end
             function exitPocket(z)
-                pocket=false; combine.state=combine.states.WORKING
+                if combine.state==combine.states.UNLOADING_ON_FIELD then resumeWork() end
+                combine.state=combine.states.WORKING
                 cv.rootNode.x=0; cv.rootNode.z=z; cv.rootNode.t=0
             end
         ''')
 
     def arm_pocket_departure(self, pocket=True):
         self.pocket_fixture()
-        self.lua.globals().pocket = pocket
+        if not pocket:
+            self.lua.execute('combine.unloadState=combine.states.WAITING_FOR_UNLOAD_ON_FIELD')
         self.lua.execute('''
             u.state=u.states.MOVING_BACK_WITH_TRAILER_FULL
             u.state.properties={vehicle=cv}
@@ -169,7 +212,7 @@ class NativeDepartureTests(unittest.TestCase):
             g_currentMission.time=90000
             assert(Q.holdPocketDeparture(u,true,15))
             g_currentMission.time=100000; assert(Q.holdPocketDeparture(u,true,15),'timer released occupied pocket')
-            pocket=false; combine.state=combine.states.WORKING
+            resumeWork()
             assert(Q.holdPocketDeparture(u,true,15),'WORKING alone is not a physical exit')
             exitPocket(0); assert(Q.holdPocketDeparture(u,true,15))
             cv.rootNode.z=12.9; assert(Q.holdPocketDeparture(u,true,15))
@@ -194,7 +237,7 @@ class NativeDepartureTests(unittest.TestCase):
         self.arm_pocket_departure()
         self.lua.execute('''
             finishSearch(true); exitPocket(0); assert(Q.holdPocketDeparture(u,true,15))
-            combine.state=combine.states.UNLOADING
+            combine.state=combine.states.TURNING
             assert(Q.holdPocketDeparture(u,true,15))
             exitPocket(12); assert(Q.holdPocketDeparture(u,true,15))
             cv.rootNode.z=24.9; assert(Q.holdPocketDeparture(u,true,15))
@@ -230,6 +273,91 @@ class NativeDepartureTests(unittest.TestCase):
     def test_ordinary_full_departure_has_no_extra_pause(self):
         self.arm_pocket_departure(pocket=False)
         self.lua.execute('finishSearch(true); assert(not u.queueData.pocketDeparturePause); assert(not Q.holdPocketDeparture(u,true,15))')
+
+    def test_stale_native_pocket_substate_cannot_hold_a_later_moving_unload(self):
+        self.pocket_fixture()
+        self.lua.execute('''
+            resumeWork()
+            assert(combine:isAboutToReturnFromPocket())
+            u.getAllTrailersFull=function() return true end
+            Q.capturePocketDeparture(u,cv,true)
+            assert(not u.queueData.pocketDeparturePause,'ordinary working unload captured stale pocket')
+            u.state=u.states.MOVING_BACK_WITH_TRAILER_FULL; u.state.properties={vehicle=cv}
+            u:startUnloadingTrailers(); finishSearch(true)
+            assert(not u.queueData.pocketDeparturePause and not Q.holdPocketDeparture(u,true,15))
+            assert(u.course==route and route.aligned)
+            u:onLastWaypointPassed(); assert(result():find('handover'))
+        ''')
+
+    def test_pocket_substate_cannot_capture_final_unloading(self):
+        self.pocket_fixture()
+        self.lua.execute('''
+            resumeWork()
+            combine.state=combine.states.UNLOADING_ON_FIELD
+            combine.unloadState=combine.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
+            Q.capturePocketDeparture(u,cv)
+            assert(not u.queueData.pocketDeparturePause)
+        ''')
+
+    def test_working_state_waits_for_normal_course_offset_and_physical_row_entry(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            finishSearch(true); resumeWork()
+            row.offsetX=5 -- old offset not yet updated on the fieldwork course
+            cv.rootNode.z=0; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=20; assert(Q.holdPocketDeparture(u,true,15))
+            assert(not u.queueData.pocketDeparturePause.exitPose)
+            combine:updateFieldworkOffset(row)
+            assert(Q.holdPocketDeparture(u,true,15)) -- still on offset pocket line
+            cv.rootNode.x=0; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=32.9; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=33; assert(not Q.holdPocketDeparture(u,true,15))
+        ''')
+
+    def test_curved_working_row_releases_after_full_physical_length(self):
+        self.pocket_fixture()
+        self.lua.execute('''
+            setRow({{x=0,z=0},{x=0,z=6},{x=6,z=12},{x=12,z=18}})
+            combine.course=row; combine.fieldWorkCourse=row
+            Q.capturePocketDeparture(u,cv)
+            u:startUnloadingTrailers(); finishSearch(true); exitPocket(0)
+            assert(Q.holdPocketDeparture(u,true,15))
+            relevantIx=2; cv.rootNode.t=math.pi/4
+            cv.rootNode.x=5; cv.rootNode.z=11
+            assert(Q.holdPocketDeparture(u,true,15),'curve chord is not yet a full length')
+            cv.rootNode.x=6; cv.rootNode.z=12
+            assert(not Q.holdPocketDeparture(u,true,15),'frozen pocket tangent trapped curved-row departure')
+        ''')
+
+    def test_backward_motion_while_working_cannot_accumulate_clearance(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            finishSearch(true); exitPocket(0); assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=10; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=8; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=20.9; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=21; assert(not Q.holdPocketDeparture(u,true,15))
+        ''')
+
+    def test_wrong_parallel_row_and_misaligned_heading_do_not_count_as_exit(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            finishSearch(true); resumeWork()
+            cv.rootNode.x=15; cv.rootNode.z=0; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=100; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.x=0; cv.rootNode.t=math.pi; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.t=0; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=113; assert(not Q.holdPocketDeparture(u,true,15))
+        ''')
+
+    def test_replaced_fieldwork_course_drops_obsolete_pocket_hold(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            finishSearch(true); assert(Q.holdPocketDeparture(u,true,15))
+            combine.fieldWorkCourse={}
+            assert(not Q.holdPocketDeparture(u,true,15) and not u.queueData.pocketDeparturePause)
+            assert(u.course==route and not Q.owns(u))
+        ''')
 
     def test_missing_geometry_cannot_create_an_unreleasable_hold(self):
         self.pocket_fixture()
