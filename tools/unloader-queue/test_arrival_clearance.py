@@ -612,5 +612,143 @@ class ArrivalTests(unittest.TestCase):
                 ''')
 
 
+    def test_arrival_waits_for_fresh_boundary_before_first_search(self):
+        self.lua.execute('''
+            Q.refresh=function() end; Q.schedule=function() end
+            Q.combines={}; Q.captureArrival(u)
+            local ready=false
+            v.cpIsFieldBoundaryDetectionRunning=function() return not ready end
+            -- A previous job's polygon is still exposed during detection.
+            v.cpGetFieldPolygon=function()
+                if not ready then return {{x=-20,z=-20},{x=20,z=-20},{x=20,z=5},{x=-20,z=5}} end
+                return {{x=-50,z=-50},{x=50,z=-50},{x=50,z=100},{x=-50,z=100}}
+            end
+            for i=1,72 do
+                g_currentMission.time=i*34; Q.tick(u)
+                assert(not u.queueData.world and not u.queueData.search and not u.queueData.path,
+                    'arrival used the stale boundary while detection was running')
+                assert(not u.queueData.failedGoals and not u.queueData.arrivalExitRetry)
+            end
+            ready=true; Q.tick(u)
+            assert(u.queueData.search and u.queueData.goal.transit,
+                'fresh boundary did not immediately permit the first pull-off')
+            local done,path
+            for i=1,1000 do
+                done,path=CpUnloaderQueueSearch.step(u.queueData.search,1)
+                if done then break end
+            end
+            assert(done and path,'fresh arrival was diverted into a parking search')
+        ''')
+
+    def test_straight_verge_exit_clears_arrival_without_expanding_parking_boundary(self):
+        self.lua.execute('''
+            -- Field lies to the right; the AD arrival faces along its edge.
+            -- The native AI size may report only the tractor, while W models
+            -- both bodies. A 26 m pull-off previously exceeded the entry gate.
+            v.cpGetFieldPolygon=function()
+                return {{x=6,z=-100},{x=150,z=-100},{x=150,z=150},{x=6,z=150}}
+            end
+            AIUtil.getLength=function() return 6 end; u.turningRadius=9
+            Q.combines={}; Q.captureArrival(u); local data=Q.take(u,'prepare')
+            local goal=assert(Q.arrivalExit(u)); assert(goal.z==26)
+            local ordinary=assert(W.new(u))
+            assert(not W.clear(ordinary,W.settledPoses(ordinary.model,goal)),
+                'fixture no longer exposes the short entrance gate')
+            Q.request(u,goal); assert(data.search,data.reason)
+            local done,path
+            for i=1,1000 do
+                done,path=CpUnloaderQueueSearch.step(data.search,1)
+                if done then break end
+            end
+            assert(done and path and data.search.expanded==0,'straight exit did not finish directly')
+            local poses=W.poses(data.world.model)
+            for i=2,#path do
+                poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+            end
+            assert(goal.accept(poses,data.world.model),'trailer still occupies AD arrival')
+            assert(not W.clear(data.world,W.settledPoses(data.world.model,{x=-30,z=26,t=0})),
+                'straight exit admitted a sideways off-field excursion')
+            assert(not W.clear(data.world,W.settledPoses(data.world.model,{x=0,z=45,t=0})),
+                'straight exit admitted an unbounded trip along the verge')
+            Q.startRoute(data,path); place(goal.x,goal.z,goal.t); assert(Q.onLast(u))
+            assert(data.arrivalDeparted and not data.parkedGoal)
+            -- Once clear, parking must still use the field's existing boundary.
+            local parking=assert(W.new(u))
+            assert(not parking.entrance.transit)
+            W.delete(ordinary); W.delete(parking)
+        ''')
+
+    def test_verge_pull_off_still_rejects_crop_obstacles_and_islands(self):
+        for obstacle in ('densityCount=10', 'collision=1',
+                         'v.cpGetIslandPolygons=function() return {{{x=-5,z=20},{x=5,z=20},{x=5,z=30},{x=-5,z=30}}} end'):
+            with self.subTest(obstacle=obstacle):
+                self.setUp()
+                self.lua.execute('''
+                    v.cpGetFieldPolygon=function()
+                        return {{x=6,z=-100},{x=150,z=-100},{x=150,z=150},{x=6,z=150}}
+                    end
+                    AIUtil.getLength=function() return 6 end; u.turningRadius=9
+                    Q.captureArrival(u); local data=Q.take(u,'prepare')
+                    local goal=assert(Q.arrivalExit(u))
+                '''+obstacle+'''
+                    Q.request(u,goal)
+                    assert(not data.search and not data.path and not data.arrivalDeparted)
+                    assert(not data.reason:find('field boundary'),data.reason)
+                ''')
+
+
+
+    def test_verge_exit_uses_vehicle_heading_at_rotated_ad_arrivals(self):
+        for angle in (90, 170, 270):
+            with self.subTest(angle=angle):
+                self.setUp()
+                self.lua.globals().angle=angle
+                self.lua.execute('''
+                    local origin={x=-451.1,z=-328.9,heading=math.rad(angle)}
+                    local polygon={}
+                    for _,p in ipairs({{x=6,z=-100},{x=150,z=-100},{x=150,z=150},{x=6,z=150}}) do
+                        polygon[#polygon+1]=CpUnloaderQueueGeometry.point(origin,p.x,p.z)
+                    end
+                    v.cpGetFieldPolygon=function() return polygon end
+                    place(origin.x,origin.z,origin.heading)
+                    AIUtil.getLength=function() return 6 end; u.turningRadius=9
+                    Q.captureArrival(u); local data=Q.take(u,'prepare')
+                    local goal=assert(Q.arrivalExit(u)); Q.request(u,goal)
+                    assert(data.search,data.reason)
+                    local done,path
+                    for i=1,1000 do
+                        done,path=CpUnloaderQueueSearch.step(data.search,1)
+                        if done then break end
+                    end
+                    assert(done and path and data.search.expanded==0)
+                    local poses=W.poses(data.world.model)
+                    for i=2,#path do
+                        poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+                    end
+                    assert(goal.accept(poses,data.world.model))
+                ''')
+
+
+
+    def test_boundary_wait_does_not_delay_full_or_manual_departure(self):
+        self.lua.execute('''
+            Q.refresh=function() end; Q.schedule=function() end
+            v.cpIsFieldBoundaryDetectionRunning=function() return true end
+            u.settings.fullThreshold={getValue=function() return 85 end}
+            for _,full in ipairs({true,false}) do
+                for _,owned in ipairs({true,false}) do
+                    local departed=false
+                    u.getAllTrailersFull=function() return full end
+                    u.isDriveUnloadNowRequested=function() return not full end
+                    u.startUnloadingTrailers=function() departed=true end
+                    u.state=u.states.IDLE
+                    if owned then Q.take(u,'prepare') end
+                    Q.tick(u)
+                    assert(departed,'boundary wait delayed native full/manual departure')
+                end
+            end
+        ''')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -642,7 +642,7 @@ function Q.request(driver,goal,corridor)
     local data=Q.data(driver)
     Q.cancel(driver)
     data.goal=goal
-    local world,reason=W.new(driver)
+    local world,reason=W.new(driver,nil,goal)
     if not world then Q.failed(data,reason,'world'); return end
     data.world=world
     local phase
@@ -824,8 +824,20 @@ function Q.tick(driver)
         if data.nativeDeparture or driver:isDriveUnloadNowRequested() or Q.atDepartureThreshold(driver) then
             driver:startUnloadingTrailers(); return
         end
-        Q.take(driver,'prepare')
     end
+    -- A previous job's polygon remains available during asynchronous detection.
+    -- Do not reject/blacklist the first exit against that stale boundary.
+    if (driver.state==driver.states.IDLE or (Q.owns(driver) and data.operation=='prepare'))
+            and not driver:isDriveUnloadNowRequested() and not Q.atDepartureThreshold(driver)
+            and driver.vehicle.cpIsFieldBoundaryDetectionRunning and driver.vehicle:cpIsFieldBoundaryDetectionRunning() then
+        if Q.owns(driver) then
+            if data.world then Q.cancel(driver) end
+            driver:setMaxSpeed(0)
+        end
+        Q.reason(data,'waiting for current field boundary')
+        return
+    end
+    if driver.state==driver.states.IDLE then Q.take(driver,'prepare') end
     if Q.owns(driver) then
         -- Full/manual departure outranks ordinary queue work. Only a checked
         -- escape from its blocked departure may finish before native replanning.

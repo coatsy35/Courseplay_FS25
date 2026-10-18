@@ -1,3 +1,33 @@
+## Build 3047 - validate and clear the actual AD entrance
+
+The 18 October 3046 log records T7.300/323 handing over at 19:11:19.445,
+then rejecting its first 26 m straight pull-off with `destination: field boundary`
+at 19:11:19.584. Fresh boundary detection completes at 19:11:21.888.
+The old polygon remains exposed during detection. The rejected exit then sends
+the tractor into a parking search that remains pending after 45 seconds, with
+standing crop as the latest rejected sample. Evidence is retained in
+out/incident-3046-arrival/. The log does not retain the polygon or establish
+that every rejected crop sample was incorrect.
+
+Preparation now waits for boundary detection to finish before testing an exit.
+A separate geometry regression reproduces rejection of a safe pull-off parallel
+to the field edge: the fixed entrance capsule can end before the tractor's front
+reaches the straight goal, particularly when native AI length excludes a trailer.
+Only a checked, forward, straight arrival transit now extends that entrance by
+the measured whole rig's finite swept strip. This is not a wider parking area;
+normal parking searches retain the existing boundary. Every body still passes
+crop, island, collision and articulation checks, and the entire rig must clear
+the arrival before the transit completes. Harvester finish manoeuvres, native
+unloading, departure thresholds and the 3046 pocket fix are unchanged.
+
+The stale-boundary and edge-parallel regressions fail before this change and
+pass afterwards. Further cases cover rotated arrivals, including 170 degrees,
+obstacles, standing crop, islands and rejection outside the bounded strip.
+Source and extracted-ZIP release checks are required. These are mocked engine
+regressions; successful clearing and subsequent parallel parking during active
+harvesting still require in-game validation. Waiting at AD after all harvesters
+have finished and emptied is acceptable, as confirmed by the user.
+
 ## Build 3046 - release native trailer departures after pocket unloading
 
 The 18 October 3045 log shows both full trailers received native CP return routes:

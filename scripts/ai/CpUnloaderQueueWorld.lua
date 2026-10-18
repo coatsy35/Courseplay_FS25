@@ -11,7 +11,33 @@ local function distanceToSegment(p,a,b)
     return math.sqrt((p.x-q.x)^2+(p.z-q.z)^2),q
 end
 
-local function entryGate(strategy,model,boundary)
+-- Only the first straight AD pull-off may extend the verge entrance. Use the
+-- measured bodies' swept strip, not a larger off-field parking/search radius.
+local function arrivalTransit(strategy,model,goal)
+    if not goal or not (goal.arrival and goal.transit and goal.straight)
+            or strategy.queueData.operation~='prepare' then return end
+    local start=model.root
+    local dx,dz=goal.x-start.x,goal.z-start.z
+    local s,c=math.sin(start.t),math.cos(start.t)
+    local forward=dx*s+dz*c
+    local limit=math.max(AIUtil.getLength(strategy.vehicle)+6,2*strategy.turningRadius+8)
+    if forward<=0 or forward>limit+0.01 or math.abs(dx*c-dz*s)>0.01
+            or math.abs(H.math.delta(start.t,goal.t))>0.001 then return end
+    local left,right,front,back=-math.huge,math.huge,-math.huge,math.huge
+    for i,pose in ipairs(W.poses(model)) do
+        for _,p in ipairs(W.rectangle(model.bodies[i],pose)) do
+            local x,z=p.x-start.x,p.z-start.z
+            local lateral,longitudinal=x*c-z*s,x*s+z*c
+            left=math.max(left,lateral); right=math.min(right,lateral)
+            front=math.max(front,longitudinal); back=math.min(back,longitudinal)
+        end
+    end
+    front=front+forward
+    return G.rectangle({x=start.x,z=start.z,heading=start.t},
+        {width=left-right,length=front-back,xOffset=(left+right)/2,zOffset=(front+back)/2},0)
+end
+
+local function entryGate(strategy,model,boundary,goal)
     local operation=strategy.queueData and strategy.queueData.operation
     if operation~='prepare' and operation~='yield' then return nil,'not preparing or yielding' end
     local start=model.root
@@ -33,7 +59,8 @@ local function entryGate(strategy,model,boundary)
         if not nearest or d<nearest then nearest,entry=d,p end
     end
     if nearest and nearest<=100 then
-        return {start=start,entry=entry,width=width+length},'bounded entrance available'
+        return {start=start,entry=entry,width=width+length,transit=arrivalTransit(strategy,model,goal)},
+            'bounded entrance available'
     end
     return nil,nearest and string.format('field edge %.1f m away (limit 100 m)',nearest) or 'no field edge'
 end
@@ -46,7 +73,8 @@ local function inEntrance(world,rectangle)
         for j=0,count do
             local p={x=a.x+(b.x-a.x)*j/count,z=a.z+(b.z-a.z)*j/count}
             if not G.inside(world.boundary.polygon,p) and
-                    distanceToSegment(p,world.entrance.start,world.entrance.entry)>world.entrance.width then return false end
+                    distanceToSegment(p,world.entrance.start,world.entrance.entry)>world.entrance.width
+                    and not (world.entrance.transit and G.inside(world.entrance.transit,p)) then return false end
         end
     end
     return true
@@ -153,7 +181,7 @@ function W.rectangle(body, pose, buffer)
         xOffset=(body.left+body.right)/2, zOffset=(body.front+body.back)/2}, buffer or 0.3)
 end
 
-function W.new(strategy,model)
+function W.new(strategy,model,goal)
     local reason
     if not model then model,reason=W.model(strategy.vehicle) end
     if not model then return nil, reason end
@@ -161,7 +189,7 @@ function W.new(strategy,model)
     if not boundary then return nil, 'field boundary unavailable' end
     local world = {strategy=strategy, model=model, startPoses=W.poses(model),
         boundary=boundary, fruit={}, node=createTransformGroup('cpQueueProbe')}
-    world.entrance,world.entranceReason=entryGate(strategy,model,boundary)
+    world.entrance,world.entranceReason=entryGate(strategy,model,boundary,goal)
     link(getRootNode(), world.node)
     world.collision = PathfinderCollisionDetector(strategy.vehicle, {}, {}, false, CpUtil.getDefaultCollisionFlags())
     for _, desc in pairs(g_fruitTypeManager:getFruitTypes()) do
