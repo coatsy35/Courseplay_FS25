@@ -59,8 +59,12 @@ function U:getDriveData(...)
     Q.speed(self)
     local hold=Q.holdIncomingTurn(self)
     local gx,gz,forwards,speed,acceleration=drive(self,...)
-    if Q.trailerTrafficHold(self) or Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
-    if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
+    local pocketHold=Q.holdPocketDeparture(self,forwards,speed)
+    local trafficHold=Q.trailerTrafficHold(self)
+    if trafficHold or pocketHold then speed=0 end
+    local incomingHold=Q.holdIncomingTurn(self,speed) or hold
+    if incomingHold then speed=0 end
+    if Q.watchNativeDeparture(self,speed,pocketHold or trafficHold or incomingHold,forwards) then speed=0 end
     speed=Q.finalUnloadSpeed(self,speed)
     speed=Q.stoppedApproachSpeed(self,speed)
     return gx,gz,forwards,speed,acceleration
@@ -78,6 +82,7 @@ function U:unloadStoppedCombine()
     end
     if Q.ordinaryStoppedTarget(self) and Q.watchStoppedMovingUnload(self) then return end
     if Q.watchFinalUnload(self) then return end
+    Q.capturePocketDeparture(self,self.combineToUnload,true)
     return stoppedUnload(self)
 end
 
@@ -126,6 +131,7 @@ local movingUnload = U.unloadMovingCombine
 function U:unloadMovingCombine()
     if Q.releaseFinishedCombine(self) then return end
     if Q.watchStoppedMovingUnload(self) then return end
+    Q.capturePocketDeparture(self,self.combineToUnload,true)
     return movingUnload(self)
 end
 
@@ -304,14 +310,11 @@ function U:startUnloadingTrailers(...)
     self.queueStationaryPipe=nil; self.queueStoppedWatch=nil
     Q.clearFinalUnload(self)
     if Q.enabled(self) then
-        -- Remember a pocket departure only after native reverse clearance.
-        -- Pathfinding can take longer than the pause, so start its clock when
-        -- the resulting forward route is actually ready to move.
+        -- Native reverse clearance still creates room for the combine. Retain
+        -- its identity until it has physically left and travelled a full length.
         if self.state==self.states.MOVING_BACK_WITH_TRAILER_FULL then
             local vehicle=self.state.properties.vehicle
-            local combine=vehicle and vehicle:getCpDriveStrategy()
-            Q.data(self).pocketDeparturePause=combine and combine.isAboutToReturnFromPocket
-                and combine:isAboutToReturnFromPocket() and {} or nil
+            Q.capturePocketDeparture(self,vehicle)
         end
         if Q.owns(self) then Q.release(self) else Q.cancel(self) end
         local data=Q.data(self)

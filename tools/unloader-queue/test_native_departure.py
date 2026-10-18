@@ -127,56 +127,117 @@ class NativeDepartureTests(unittest.TestCase):
             Q.tick(u); assert(u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL)
         ''')
 
-    def arm_pocket_departure(self, pocket=True):
+    def pocket_fixture(self):
         self.lua.execute('''
+            W=CpUnloaderQueueWorld
+            HeadlandLoopGeometry.math={delta=function(a,b) return (a-b+math.pi)%(2*math.pi)-math.pi end}
+            W.pose=function(node) return {x=node.x,z=node.z,t=node.t} end
+            W.rigidModel=function() return {front=8,back=-5} end
+            row={getNumberOfWaypoints=function() return 2 end,
+                getWaypointPosition=function() return 0,0,0 end,
+                getWaypointYRotation=function() return 0 end}
             pocket=true
-            local combine={isAboutToReturnFromPocket=function() return pocket end}
-            u.state=u.states.MOVING_BACK_WITH_TRAILER_FULL
-            u.state.properties={vehicle={getCpDriveStrategy=function() return combine end}}
+            combine={isAboutToReturnFromPocket=function() return pocket end,
+                states={WORKING={},UNLOADING={}},course=row,fieldWorkCourse=row,
+                getClosestFieldworkWaypointIx=function() return 1 end}
+            combine.state=combine.states.UNLOADING
+            cv={active=true,rootNode={x=5,z=-8,t=0},getCpDriveStrategy=function() return combine end}
+            cv.getIsCpActive=function() return cv.active end
+            cv.getAIDirectionNode=function() return cv.rootNode end
+            u.vehicle.getAIDirectionNode=function() return {x=10,z=-20,t=0} end
+            function exitPocket(z)
+                pocket=false; combine.state=combine.states.WORKING
+                cv.rootNode.x=0; cv.rootNode.z=z; cv.rootNode.t=0
+            end
         ''')
-        self.lua.globals().pocket = pocket
-        self.lua.execute('u:startUnloadingTrailers()')
 
-    def test_pocket_pause_starts_when_forward_route_can_move_not_during_search(self):
+    def arm_pocket_departure(self, pocket=True):
+        self.pocket_fixture()
+        self.lua.globals().pocket = pocket
+        self.lua.execute('''
+            u.state=u.states.MOVING_BACK_WITH_TRAILER_FULL
+            u.state.properties={vehicle=cv}
+            u:startUnloadingTrailers()
+        ''')
+
+    def test_pocket_wait_requires_physical_exit_then_full_length_not_elapsed_time(self):
         self.arm_pocket_departure()
         self.lua.execute('''
             assert(u.queueData.pocketDeparturePause and starts==1)
             assert(not Q.holdPocketDeparture(u,true,0))
-            g_currentMission.time=9000
-            assert(not Q.holdPocketDeparture(u,true,0))
-            assert(not u.queueData.pocketDeparturePause.untilTime)
             finishSearch(true)
-            assert(not Q.holdPocketDeparture(u,true,0))
+            g_currentMission.time=90000
             assert(Q.holdPocketDeparture(u,true,15))
-            g_currentMission.time=10999; assert(Q.holdPocketDeparture(u,true,15))
-            g_currentMission.time=11000; assert(not Q.holdPocketDeparture(u,true,15))
+            g_currentMission.time=100000; assert(Q.holdPocketDeparture(u,true,15),'timer released occupied pocket')
+            pocket=false; combine.state=combine.states.WORKING
+            assert(Q.holdPocketDeparture(u,true,15),'WORKING alone is not a physical exit')
+            exitPocket(0); assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=12.9; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=13; assert(not Q.holdPocketDeparture(u,true,15))
             assert(not u.queueData.pocketDeparturePause)
-            g_currentMission.time=12000; assert(not Q.holdPocketDeparture(u,true,15))
             u:onLastWaypointPassed(); assert(result():find('handover'))
         ''')
 
-    def test_pocket_pause_does_not_hold_reverse_or_restart_after_native_recovery(self):
+    def test_reverse_and_search_do_not_erase_or_delay_observed_combine_clearance(self):
         self.arm_pocket_departure()
         self.lua.execute('''
             u.state=u.states.MOVING_BACK_BEFORE_PATHFINDING
-            assert(not Q.holdPocketDeparture(u,false,5))
-            assert(not u.queueData.pocketDeparturePause.untilTime)
-            u.state=u.states.WAITING_FOR_PATHFINDER
-            finishSearch(true); assert(not Q.holdPocketDeparture(u,false,5))
-            assert(Q.holdPocketDeparture(u,true,15))
-            u.state=u.states.BACKING_UP_FOR_REVERSING_COMBINE
-            assert(not Q.holdPocketDeparture(u,false,5))
-            assert(not u.queueData.pocketDeparturePause)
-            u.state=u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL
+            assert(not Q.holdPocketDeparture(u,false,5) and u.queueData.pocketDeparturePause)
+            exitPocket(0); assert(not Q.holdPocketDeparture(u,false,5))
+            cv.rootNode.z=13
+            assert(not Q.holdPocketDeparture(u,false,5) and not u.queueData.pocketDeparturePause)
+            u.state=u.states.WAITING_FOR_PATHFINDER; finishSearch(true)
             assert(not Q.holdPocketDeparture(u,true,15))
+        ''')
+
+    def test_combine_reversing_or_turning_resets_forward_clearance_measurement(self):
+        self.arm_pocket_departure()
+        self.lua.execute('''
+            finishSearch(true); exitPocket(0); assert(Q.holdPocketDeparture(u,true,15))
+            combine.state=combine.states.UNLOADING
+            assert(Q.holdPocketDeparture(u,true,15))
+            exitPocket(12); assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=24.9; assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=25; assert(not Q.holdPocketDeparture(u,true,15))
+        ''')
+
+    def test_capture_precedes_native_full_reverse_even_if_combine_resumes_before_reverse_ends(self):
+        self.pocket_fixture()
+        self.lua.execute('''
+            u.combineToUnload=cv; u.getAllTrailersFull=function() return true end
+            Q.watchStoppedMovingUnload=function() return false end
+            Q.releaseFinishedCombine=function() return false end
+            combine.isTurning=function() return false end; combine.isAboutToTurn=function() return false end
+            u.releaseCombine=function(self) self.combineJustUnloaded=self.combineToUnload; self.combineToUnload=nil end
+            u.startMovingBackFromCombine=function(self,state,vehicle)
+                assert(vehicle==cv); self.state=state; state.properties={vehicle=vehicle}
+            end
+            AIDriveStrategyUnloadCombine.unloadMovingCombine=function(self) self:changeToUnloadWhenTrailerFull() end
+        ''')
+        hooks=(ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
+        wrapper=hooks[hooks.index('local movingUnload ='):hooks.index('local allowed =')]
+        self.lua.execute('local Q=CpUnloaderQueue; local U=AIDriveStrategyUnloadCombine; '+wrapper)
+        self.lua.execute('''
+            u:unloadMovingCombine()
+            assert(u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL and u.queueData.pocketDeparturePause)
+            exitPocket(0); Q.holdPocketDeparture(u,false,5)
+            g_currentMission.time=10000; cv.rootNode.z=5
+            u:startUnloadingTrailers(); finishSearch(true)
+            assert(Q.holdPocketDeparture(u,true,15))
+            cv.rootNode.z=13; assert(not Q.holdPocketDeparture(u,true,15))
         ''')
 
     def test_ordinary_full_departure_has_no_extra_pause(self):
         self.arm_pocket_departure(pocket=False)
+        self.lua.execute('finishSearch(true); assert(not u.queueData.pocketDeparturePause); assert(not Q.holdPocketDeparture(u,true,15))')
+
+    def test_missing_geometry_cannot_create_an_unreleasable_hold(self):
+        self.pocket_fixture()
         self.lua.execute('''
-            finishSearch(true)
+            W.rigidModel=function() return nil end
+            Q.capturePocketDeparture(u,cv)
             assert(not u.queueData.pocketDeparturePause)
-            assert(not Q.holdPocketDeparture(u,true,15))
+            assert(u.queueData.reason:find('geometry unavailable'))
         ''')
 
     def test_pocket_pause_changes_only_returned_speed_and_preserves_native_route(self):
@@ -186,24 +247,67 @@ class NativeDepartureTests(unittest.TestCase):
             Q.speed=function() end; Q.holdIncomingTurn=function() return false end
             AIDriveStrategyUnloadCombine.getDriveData=function() return 12,34,true,15,0.8 end
         ''')
-        # Rebind only this production wrapper around the mocked engine drive result.
         hooks=(ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
-        wrapper=hooks[hooks.index('local drive = U.getDriveData'):hooks.index('local allowed =')]
+        wrapper=hooks[hooks.index('local drive = U.getDriveData'):hooks.index('local stoppedUnload =')]
         self.lua.execute('local Q=CpUnloaderQueue; local U=AIDriveStrategyUnloadCombine; '+wrapper)
         self.lua.execute('''
             local x,z,f,s,a=u:getDriveData()
             assert(x==12 and z==34 and f and s==0 and a==0.8 and u.course==route)
-            g_currentMission.time=2000
-            x,z,f,s,a=u:getDriveData()
+            exitPocket(0); u:getDriveData()
+            cv.rootNode.z=13; x,z,f,s,a=u:getDriveData()
             assert(x==12 and z==34 and f and s==15 and a==0.8 and u.course==route)
         ''')
 
-    def test_pocket_pause_is_removed_with_job(self):
+    def test_pocket_pause_is_removed_with_job_or_changed_combine_strategy(self):
         self.arm_pocket_departure()
         self.lua.execute('''
             finishSearch(true); assert(Q.holdPocketDeparture(u,true,15))
-            Q.remove(u)
-            assert(not Q.holdPocketDeparture(u,true,15) and not u.queueData)
+            cv.active=false
+            assert(not Q.holdPocketDeparture(u,true,15) and not u.queueData.pocketDeparturePause)
+            Q.remove(u); assert(not Q.holdPocketDeparture(u,true,15) and not u.queueData)
+        ''')
+
+    def departure_watch_fixture(self):
+        self.pocket_fixture()
+        self.lua.execute('''
+            u:startUnloadingTrailers(); finishSearch(true)
+            tractor={x=10,z=0,t=0}; u.vehicle.getAIDirectionNode=function() return tractor end
+            u.isBeingHeld=function() return false end
+            u.ppc={getRelevantWaypointIx=function() return 68 end}
+            warning=false; obstacle=math.huge
+            u.collisionAvoidanceController={isCollisionWarningActive=function() return warning end}
+            u.proximityController={checkBlockingVehicleFront=function() return obstacle end,
+                checkBlockingVehicleBack=function() return obstacle end}
+            Q.watchNativeDeparture(u,15,false,true)
+        ''')
+
+    def test_native_departure_replans_after_no_motion_but_caps_stationary_retries(self):
+        self.departure_watch_fixture()
+        self.lua.execute('''
+            g_currentMission.time=29999; assert(not Q.watchNativeDeparture(u,15,false,true))
+            g_currentMission.time=30000; assert(Q.watchNativeDeparture(u,15,false,true))
+            assert(starts==2 and not Q.owns(u)); finishSearch(true)
+            g_currentMission.time=60000; assert(Q.watchNativeDeparture(u,15,false,true)); finishSearch(true)
+            g_currentMission.time=90000; assert(not Q.watchNativeDeparture(u,15,false,true))
+            assert(starts==3 and not result():find('handover'))
+            tractor.z=2; Q.watchNativeDeparture(u,15,false,true)
+            g_currentMission.time=120000; assert(Q.watchNativeDeparture(u,15,false,true))
+        ''')
+
+    def test_active_obstacle_and_pocket_wait_do_not_trigger_departure_replan(self):
+        self.departure_watch_fixture()
+        self.lua.execute('''
+            for i=1,5 do
+                g_currentMission.time=i*30000
+                assert(not Q.watchNativeDeparture(u,0,true,true))
+            end
+            warning=true; g_currentMission.time=180000
+            assert(not Q.watchNativeDeparture(u,0,false,true))
+            warning=false; obstacle=10; g_currentMission.time=210000
+            assert(not Q.watchNativeDeparture(u,0,false,false))
+            assert(starts==1)
+            obstacle=math.huge; g_currentMission.time=240000
+            assert(Q.watchNativeDeparture(u,15,false,true) and starts==2)
         ''')
 
     def test_native_move_away_returning_idle_resumes_departure_not_preparation(self):

@@ -658,6 +658,11 @@ function Q.request(driver,goal,corridor)
     data.corridor=corridor
     if not data.search then Q.failed(data,reason,phase) end
     data.searchStarted=now()
+    data.lastAdvance=nil
+    data.searchAssignment=data.assignment and data.assignment.combine
+    data.searchSuccessor=data.assignment and data.assignment.successor
+    data.searchFuture=data.assignment and data.assignment.future
+    data.searchStage=data.stage and data.stage.phase
     data.searchWorkMs=0
     driver:debug('Queue: %s target %.1f, %.1f, %.1f m away%s',data.operation,goal.x,goal.z,
         distance(W.pose(driver.vehicle:getAIDirectionNode()),goal),goal.arrival and ' (clear AD arrival)' or '')
@@ -708,18 +713,38 @@ function Q.schedule()
         if d and d.pathfinderController and d.pathfinderController.pathfinder then foreground=true; break end
     end
     local selected
+    local time=now()
     local function priority(data)
-        return data.operation=='yield' and 0 or (data.goal and data.goal.arrival and 1 or 2)
+        if data.operation=='yield' then return 0 end
+        local assignment=data.assignment
+        local combine=assignment and Q.combines and Q.combines[assignment.combine]
+        if combine and not assignment.future then
+            local deadline=assignment.successor and assignment.deadline or P.deadline(combine)
+            if deadline and deadline<=Q.preparationEta(data.driver,combine)+15 then return 1 end
+        end
+        return data.goal and data.goal.arrival and 2 or 3
+    end
+    local function before(a,b)
+        local at=a.lastAdvance or a.searchStarted or time
+        local bt=b.lastAdvance or b.searchStarted or time
+        -- A priority request may borrow slices, never monopolise them. Every
+        -- eligible rig gets service after 250 ms, oldest first across classes.
+        local agedA,agedB=time-at>=250,time-bt>=250
+        if agedA~=agedB then return agedA end
+        if agedA and at~=bt then return at<bt end
+        local ap,bp=priority(a),priority(b)
+        if ap~=bp then return ap<bp end
+        if at~=bt then return at<bt end
+        return id(a.driver.vehicle)<id(b.driver.vehicle)
     end
     for _, data in pairs(Q.members) do
         if data.search and Q.owns(data.driver) and data.searchGeneration==data.generation
-                and (not selected or priority(data)<priority(selected)
-                    or (priority(data)==priority(selected)
-                        and (data.lastAdvance or 0)<(selected.lastAdvance or 0))) then selected=data end
+                and (not foreground or (data.goal and (data.goal.arrival or data.goal.parking))
+                    or data.trailerTraffic or data.operation=='prepare')
+                and (not selected or before(data,selected)) then selected=data end
     end
     if not selected then return end
     local arrival=selected.goal and (selected.goal.arrival or selected.goal.parking)
-    if foreground and not arrival and not selected.trailerTraffic then return end
     selected.lastAdvance=now()
     local workPhase=S.choicePhase(selected.search)
     local timer=openIntervalTimer()
@@ -742,11 +767,12 @@ function Q.schedule()
         selected.search=nil
         if path then Q.startRoute(selected,path)
         else Q.failed(selected,reason or 'no safe route') end
-    -- Arrival candidates are finite (bounded nodes, edges and travel), and
-    -- rotate fairly. Keep their progress until completion; a cumulative CPU
-    -- cutoff otherwise discards every candidate and repeats the same entrance.
-    elseif not arrival and selected.searchWorkMs>(selected.operation=='prepare' and 15000 or 1000) then
-        selected.search=nil; Q.failed(selected,'search budget exhausted; retaining CP control')
+    -- Difficult arrival trees must also end: reject these candidates briefly
+    -- so the next attempt can select another cleared row rather than run all night.
+    elseif selected.searchWorkMs>(selected.operation=='prepare' and 15000 or 1000)
+            or (arrival and now()-selected.searchStarted>180000) then
+        Q.failed(selected,'search budget exhausted; selecting another cleared position')
+        Q.cancel(selected.driver); selected.stage=nil
     elseif selected.operation=='yield' or arrival then
         local phaseReason=S.chargeChoices(selected.search,elapsed,workPhase)
         if phaseReason then Q.reason(selected,phaseReason) end
@@ -809,6 +835,21 @@ function Q.tick(driver)
         -- Arrival searches retain partial work while native pathfinding owns
         -- the frame. The shared update slice and individual searches remain bounded.
         if data.operation=='yield' and Q.updateYieldRecovery(driver) then return end
+        if data.search and data.operation=='prepare' and not (data.goal and data.goal.arrival)
+                and now()-(data.searchRetargetAt or data.searchStarted)>=3000 then
+            data.searchRetargetAt=now()
+            local assignment=data.assignment
+            local combine=assignment and Q.combines and Q.combines[assignment.combine]
+            local deadline=combine and (assignment.successor and assignment.deadline or P.deadline(combine))
+            local urgent=deadline and not assignment.future and deadline<=Q.preparationEta(driver,combine)+15
+            if (assignment and assignment.combine)~=data.searchAssignment
+                    or (assignment and assignment.successor)~=data.searchSuccessor
+                    or (assignment and assignment.future)~=data.searchFuture
+                    or (urgent and data.searchStage and data.searchStage<3) then
+                Q.cancel(driver); data.stage=nil; data.nextAttempt=now()
+                Q.reason(data,'preparation assignment/deadline changed; refreshing destination')
+            end
+        end
         if data.path then
             local position=W.pose(driver.vehicle:getAIDirectionNode())
             if not data.progressPosition or distance(position,data.progressPosition)>1 then

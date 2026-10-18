@@ -1,3 +1,56 @@
+## Build 3045 - preparation fairness, pocket clearance and crossing recovery
+
+The preserved 3044 run exposes separate failures, rather than one end-of-field
+fault. Arrival search 325 monopolised the shared scheduler for over 22 minutes;
+other preparation searches accumulated only about 1.8 ms of work. Unloader 322
+left a pocket on the former two-second gate before the harvester had physically
+cleared it. Later, CR11/318 yielded inside 319's turn exit; 319 repeatedly tried
+the blocked endpoint while 318 remained held. That circular wait persisted from
+00:27 to 08:27. Ordinary rear-entry rejection also stopped workers 323 and 324.
+Evidence is retained in out/incident-3044-late-preparation/,
+out/incident-3044-pocket-departure/ and out/incident-3044-overnight-departure/.
+
+- Give aged searches a shared slice across priority classes. Urgent preparation
+  precedes arrival parking when neither is overdue. Native foreground pathfinding
+  reduces the queue slice to 0.5 ms instead of suspending preparation indefinitely;
+  otherwise the existing 2 ms target remains. Only one search advances per frame.
+  Bound arrival searches as well as other preparation, and refresh a pending stage
+  when its assignment/role changes or its unloading deadline becomes urgent.
+- Capture a pocket combine before native full-trailer reversing releases it.
+  Preserve the native reverse, then hold forward departure until that combine is
+  back on its working row and has advanced its measured chassis/header length.
+  Observe this movement during reversing/pathfinding too. Elapsed time and the
+  WORKING state alone cannot release the hold. Invalid geometry is diagnosed
+  without creating an unreleasable hold; native obstacle checks remain active.
+- When a held combine already occupies the other combine's turn exit and the
+  checked bypass fails, release that blocker first if its immediate sweep clears
+  the waiting combine. Hold the original lead until the full chassis/header has
+  left the reserved area. Retain this clearance priority against a third combine,
+  reject stale pair callbacks, then retry the original turn endpoint.
+- Restrict ordinary overshoot recovery to nearby rigs. A distant field-entry
+  tractor retains native approach planning even when longitudinal pipe error is
+  negative. Try up to three outward/rear corridors; each retains full articulated
+  geometry, crop, boundary, header and live obstacle checks. If none is valid,
+  release the assignment and apply a 30-second recall delay instead of stopping
+  the worker. No failed route can fall back to an unchecked circle at the header.
+- Diagnose native return travel after 30 seconds without movement. Where neither
+  an explicit hold nor a detected collision/proximity obstacle explains it, ask
+  native CP to replan from the actual pose, at most twice without movement. Keep
+  native route creation, obstacle brakes, departure threshold and AD handover.
+  The log does not establish why 322 stopped at return waypoint 68: this is a
+  bounded recovery and diagnostic, not a proven identification of that cause.
+
+Regression coverage exercises five competing searches, native foreground work,
+changed preparation assignments, physical pocket exit/length, capture before a
+long reverse, occupied turn exits with up to five combines, stale callbacks,
+far-away field entry, safe candidate failure and bounded native replanning.
+The scheduling, timer, occupied-exit and distant-entry regressions also fail
+against the preserved 3044 ZIP. Existing milestone unloading, final parking,
+parallel parking and native contracts remain release requirements. No native runtime file or final-parking
+behaviour was changed. Build 3031 and all earlier artefacts remain intact.
+Source and extracted-ZIP release checks must pass; a fresh unattended in-game run
+is still required to validate the real vehicles, terrain and traffic.
+
 ## Build 3044 - clear AD arrivals and recover stalled ordinary unloading
 
 The preserved 16 October 3043 log loaded the test mod at 16:22:28.424.

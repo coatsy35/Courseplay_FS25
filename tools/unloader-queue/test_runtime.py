@@ -525,35 +525,67 @@ class EngineBoundaryTests(unittest.TestCase):
             local fake={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
             g_currentMission.vehicleSystem.vehicles={fake}; g_updateLoopIndex=2
             CpUnloaderQueue.schedule()
-            assert(queryCount==work and data.search==search)
+            assert(queryCount>work and data.search==search)
+            work=queryCount; CpUnloaderQueue.schedule(); assert(queryCount==work)
         ''')
 
     def test_growing_crop_rejected(self):
         self.lua.execute('densityCount=20; assert(not CpUnloaderQueueWorld.clear(world,poses))')
 
-    def test_native_search_wait_does_not_consume_preparation_budget(self):
+    def test_native_search_cannot_starve_preparation_and_uses_smaller_shared_slice(self):
         self.lua.execute('''
+            local Q,S=CpUnloaderQueue,CpUnloaderQueueSearch
             u.setMaxSpeed=function() end
-            local data=CpUnloaderQueue.take(u,'prepare')
-            data.world=world
-            data.search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))
-            data.searchGeneration=data.generation; data.searchStarted=0; data.searchWorkMs=0
+            local data=Q.take(u,'prepare')
+            data.search={}; data.searchGeneration=data.generation
+            data.searchStarted=0; data.searchWorkMs=0
             local search=data.search
             local native={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
             g_currentMission.vehicleSystem.vehicles={native}
-            local ticks=0
+            local ticks,steps=0,0
+            S.step=function() steps=steps+1; return false end
             openIntervalTimer=function() ticks=0; return 1 end
-            readIntervalTimerMs=function() ticks=ticks+1; return ticks end
+            readIntervalTimerMs=function() ticks=ticks+0.25; return ticks end
             closeIntervalTimer=function() end
             for i=1,200 do
                 g_updateLoopIndex=i; g_currentMission.time=i*100
-                CpUnloaderQueue.schedule()
+                Q.schedule(); Q.schedule()
             end
-            assert(data.search==search and data.searchWorkMs==0)
+            assert(steps==400 and data.search==search and data.searchWorkMs==150)
             g_currentMission.vehicleSystem.vehicles={}
-            g_updateLoopIndex=201; g_currentMission.time=20100
-            CpUnloaderQueue.schedule()
-            assert(data.search==search and data.searchWorkMs==3)
+            g_updateLoopIndex=201; Q.schedule()
+            assert(steps==408 and data.search==search and data.searchWorkMs==152.25)
+        ''')
+
+    def test_continuous_arrival_search_shares_work_with_all_five_rigs(self):
+        self.lua.execute('''
+            local Q,S=CpUnloaderQueue,CpUnloaderQueueSearch
+            local jobs={}; local count,total=0,0
+            Q.members={}
+            for i=1,5 do
+                local d={vehicle={rootNode=i},setMaxSpeed=function() end,debug=function() end}
+                local data=Q.take(d,'prepare')
+                data.search={owner=i}; data.searchGeneration=data.generation
+                data.searchStarted=0; data.searchWorkMs=0; data.steps=0; data.servedAt=0
+                if i==1 then data.goal={arrival=true} end
+                jobs[i]=data
+            end
+            S.step=function(search)
+                local data=jobs[search.owner]
+                assert(g_currentMission.time-data.servedAt<=450,'preparation starved by arrival')
+                data.servedAt=g_currentMission.time; data.steps=data.steps+1
+                count=count+1; total=total+1; return false
+            end
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 2 end
+            closeIntervalTimer=function() end
+            for frame=1,100 do
+                count=0; g_updateLoopIndex=frame; g_currentMission.time=frame*50
+                for i=1,5 do Q.schedule() end
+                assert(count==1,'more than one shared slice per frame')
+            end
+            assert(total==100)
+            for i=1,5 do assert(jobs[i].steps>=10 and jobs[i].search) end
         ''')
 
     def test_only_scheduled_search_uses_budget_and_active_exhaustion_still_stops(self):
@@ -576,7 +608,7 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(data.search and data.searchWorkMs==15000 and waiting.searchWorkMs==100)
             g_updateLoopIndex=2; g_currentMission.time=20200
             CpUnloaderQueue.schedule()
-            assert(not data.search and data.reason=='search budget exhausted; retaining CP control')
+            assert(not data.search and data.reason=='search budget exhausted; selecting another cleared position')
             assert(waiting.search and waiting.searchWorkMs==100)
         ''')
 

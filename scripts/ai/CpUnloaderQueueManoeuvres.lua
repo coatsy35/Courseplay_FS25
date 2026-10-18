@@ -551,33 +551,99 @@ function Q.releaseFinishedCombine(driver)
     return true
 end
 
--- Give the combine two extra seconds to clear its pocket before a full
--- unloader starts turning forwards onto its native departure route.
+-- Preserve the serviced combine across native release/reversing/pathfinding.
+-- A state transition or a timer is not proof that the pocket has been cleared.
+function Q.capturePocketDeparture(driver,vehicle,onlyIfFull)
+    if not Q.enabled(driver) then return end
+    local data=Q.data(driver)
+    if data.pocketDeparturePause then return end
+    local combine=vehicle and vehicle:getCpDriveStrategy()
+    if not combine or not combine.isAboutToReturnFromPocket or not combine:isAboutToReturnFromPocket() then return end
+    if onlyIfFull and not (driver:isDriveUnloadNowRequested() or driver:getAllTrailersFull()) then return end
+    local course,ix=Q.coursePosition(combine)
+    local model=W.rigidModel(vehicle)
+    local row
+    if course and ix then
+        local x,_,z=course:getWaypointPosition(ix)
+        row={x=x,z=z,t=course:getWaypointYRotation(ix)}
+    end
+    local length=model and model.front-model.back
+    if not row or not length or length<=0 then
+        Q.reason(data,'pocket departure geometry unavailable; retaining native departure checks')
+        return
+    end
+    data.pocketDeparturePause={vehicle=vehicle,strategy=combine,row=row,length=length}
+end
+
 function Q.holdPocketDeparture(driver,forwards,speed)
     local data=driver.queueData
     local pause=data and data.pocketDeparturePause
     if not pause then return false end
-    local states=driver.states
-    if not Q.enabled(driver) or not data.nativeDeparture then
-        data.pocketDeparturePause=nil
-        return false
+    if not Q.enabled(driver) then data.pocketDeparturePause=nil; return false end
+    local vehicle=pause.vehicle
+    if not vehicle:getIsCpActive() or vehicle:getCpDriveStrategy()~=pause.strategy then
+        -- A stopped/deleted job cannot complete this movement. Native route
+        -- collision/proximity checks still govern departure past that vehicle.
+        data.pocketDeparturePause=nil; return false
     end
-    if driver.state~=states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL then
-        if driver.state~=states.WAITING_FOR_PATHFINDER
-                and driver.state~=states.MOVING_BACK_BEFORE_PATHFINDING then
-            data.pocketDeparturePause=nil
-        end
-        return false
+    local combine=pause.strategy
+    local pose=W.pose(vehicle:getAIDirectionNode())
+    local row=pause.row
+    local ready=row and pause.length and combine.state==combine.states.WORKING
+        and not combine:isAboutToReturnFromPocket()
+    if ready then
+        local dx,dz=pose.x-row.x,pose.z-row.z
+        local lateral=dx*math.cos(row.t)-dz*math.sin(row.t)
+        local along=dx*math.sin(row.t)+dz*math.cos(row.t)
+        ready=math.abs(lateral)<=1.5 and math.abs(H.math.delta(pose.t,row.t))<=math.rad(15)
+            and along>=0
+        if ready then
+            pause.exitAlong=pause.exitAlong or along
+            if along-pause.exitAlong>=pause.length then
+                driver:debug('Queue: combine left pocket and advanced %.1f m; departure released',along-pause.exitAlong)
+                data.pocketDeparturePause=nil; return false
+            end
+        else pause.exitAlong=nil end
+    else pause.exitAlong=nil end
+    if not data.nativeDeparture or driver.state~=driver.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL
+            or not forwards then return false end
+    if not pause.reported then
+        driver:debug('Queue: holding pocket departure for physical exit and one full combine length')
+        pause.reported=true
     end
-    if not forwards or not speed or speed<=0 then return false end
-    local now=g_currentMission.time
-    if not pause.untilTime then
-        pause.untilTime=now+2000
-        driver:debug('Queue: waiting two seconds before forward departure from unloading pocket')
+    return true
+end
+
+-- Native marker travel remains native. Replan a motionless course from its
+-- actual pose, without overriding obstacle brakes or fabricating an AD event.
+function Q.watchNativeDeparture(driver,speed,held,forwards)
+    local data=driver.queueData
+    if not data or not data.nativeDeparture or Q.owns(driver)
+            or driver.state~=driver.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL then return false end
+    local time=g_currentMission.time
+    local pose=W.pose(driver.vehicle:getAIDirectionNode())
+    local watch=data.departureWatch
+    if not watch then watch={pose=pose,time=time,attempts=0}; data.departureWatch=watch end
+    if distance(pose,watch.pose)>1 then watch.pose=pose; watch.time=time; watch.attempts=0 end
+    if held or (driver.isBeingHeld and driver:isBeingHeld()) then watch.time=time; return false end
+    if time-watch.time<30000 or time-(watch.reported or 0)<30000 then return false end
+    watch.reported=time
+    local collision=driver.collisionAvoidanceController
+    local warning=collision and collision:isCollisionWarningActive()
+    local proximity=driver.proximityController
+    local gap
+    if proximity then
+        if forwards==false then gap=proximity:checkBlockingVehicleBack()
+        else gap=proximity:checkBlockingVehicleFront() end
     end
-    if now<pause.untilTime then return true end
-    data.pocketDeparturePause=nil
-    return false
+    local ix=driver.ppc and driver.ppc:getRelevantWaypointIx()
+    driver:debug('Queue: native departure stalled %.1f s at %.1f, %.1f waypoint %s speed %s collision %s obstacle %s; retry %d/2',
+        (time-watch.time)/1000,pose.x,pose.z,tostring(ix),tostring(speed),tostring(warning),tostring(gap),watch.attempts)
+    if warning or (gap and gap<15) or watch.attempts>=2 then return false end
+    watch.attempts=watch.attempts+1; watch.time=time
+    driver:setMaxSpeed(0)
+    driver:startUnloadingTrailers()
+    return true
 end
 
 local function parkedQueueTrailer(driver)
@@ -713,7 +779,26 @@ function Q.holdCombineTurn(combine,speed)
         combine.queueCombineHold=nil
         return false
     end
+    -- A blocker released to clear an occupied turn exit keeps that brief
+    -- priority across the fleet. A third combine must not recreate the wait
+    -- cycle; native proximity/collision brakes still apply to every vehicle.
+    for _,vehicle in pairs(vehicles) do
+        local holder=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+        local clearing=holder and holder.queueCombineHold
+        if clearing and clearing.clearing and clearing.lead==combine
+                and holder.aiTurn==clearing.turn and vehicle:getIsCpActive()
+                and combine.fieldWorkCourse==clearing.course and intersects(clearing.area,combine.vehicle) then
+            return false
+        end
+    end
     local pair=combine.queueCombineHold
+    if pair and pair.clearing then
+        local lead=pair.lead
+        if lead.vehicle:getIsCpActive() and lead.fieldWorkCourse==pair.course
+                and intersects(pair.area,lead.vehicle) then return true end
+        combine.queueCombineHold=nil
+        return false
+    end
     if pair then
         local lead=pair.lead
         if not lead.vehicle:getIsCpActive() or not ordinaryTravelTurn(lead)
@@ -796,7 +881,7 @@ local function nativeTrafficInTurn(combine,reservation)
     for _,vehicle in pairs(g_currentMission.vehicleSystem and g_currentMission.vehicleSystem.vehicles or {}) do
         local driver=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
         local pair=driver and driver.queueCombineHold
-        if pair and pair.lead==combine and pair.context==combine.turnContext
+        if pair and not pair.clearing and pair.lead==combine and pair.context==combine.turnContext
                 and vehicle:getIsCpActive() and intersects(reservation.area,vehicle) then
             if not AIUtil.isStopped(vehicle) then return driver end
             stationary=driver
@@ -972,6 +1057,7 @@ local function requestTurnClearance(combine,driver,area)
 end
 
 function Q.checkParkedTrailerTravel(combine)
+    if combine.queueCombineHold and combine.queueCombineHold.clearing then return true end
     local stale=combine.queueBypass
     if stale and (stale.turn~=combine.aiTurn or not ordinaryTravelTurn(combine)) then
         Q.clearHarvesterBypass(stale.driver)
@@ -1199,7 +1285,7 @@ function Q.tryHarvesterBypass(combine,vehicle,isBack,area)
     local data=driver and driver.queueData
     local parked=driver and parkedQueueTrailer(driver)
     local pair=driver and driver.queueCombineHold
-    local combineBlocker=pair and pair.lead==combine and pair.context==combine.turnContext
+    local combineBlocker=pair and not pair.clearing and pair.lead==combine and pair.context==combine.turnContext
     if (not data and not combineBlocker) or (Q.owns(driver) and not parked and data.operation~='yield') or nativeFollower(driver,combine)
             or not AIUtil.isStopped(vehicle) or not AIUtil.isStopped(combine.vehicle) then return false end
     -- A second harvester may need this trailer to yield instead of holding still.
@@ -1238,6 +1324,21 @@ function Q.tryHarvesterBypass(combine,vehicle,isBack,area)
         Q.clearHarvesterBypass(driver)
         combine.queueBypass=nil
         combine.queueTrailerWait={turn=self,driver=driver,area=area,retryAt=g_currentMission.time+5000}
+        if combineBlocker and driver.queueCombineHold==pair
+                and pair.context==combine.turnContext and pair.course==combine.fieldWorkCourse then
+            -- The losing combine may already occupy the winning turn's exit.
+            -- Check its immediate native sweep, then let it clear first. Do not
+            -- send a harvester a trailer-only yield request it cannot fulfil.
+            local clearance=Q.yieldArea(driver.vehicle,nil,12,300)
+            if clearance and not intersects(clearance,combine.vehicle) then
+                driver.queueCombineHold=nil
+                combine.queueCombineHold={lead=driver,clearing=true,area=area,
+                    course=driver.fieldWorkCourse,context=driver.turnContext,turn=self}
+                dropReservation(combine)
+                combine:debug('Queue: blocked turn exit; letting %s clear before retrying',CpUtil.getName(driver.vehicle))
+                return
+            end
+        end
         requestTurnClearance(combine,driver,area)
     end
     local completed=recovery.onPathfindingDone
@@ -2045,6 +2146,10 @@ end
 function Q.hasStoppedRendezvousOvershoot(driver)
     local c=Q.ordinaryStoppedTarget(driver)
     if not c then return false end
+    -- A distant tractor can be longitudinally ahead without being stranded
+    -- beside the header. Leave its field entry to native rear pathfinding.
+    local gap=distance(W.pose(driver.vehicle:getAIDirectionNode()),W.pose(driver.combineToUnload:getAIDirectionNode()))
+    if gap>math.max(40,3*driver.turningRadius+AIUtil.getLength(driver.vehicle)) then return false end
     local dz=driver:getBestTargetNodeDistanceFromPipe()
     return (not c:willWaitForUnloadToFinish() and dz~=nil and dz < -0.5)
         or driver.queueStoppedRecovery==driver.combineToUnload
@@ -2117,9 +2222,23 @@ function Q.clearStoppedApproach(driver)
 end
 
 local function stoppedApproachFailed(driver,reason)
-    driver:debug('Queue: stopped-combine approach stopped safely: %s',reason)
+    local entry=driver.queueStoppedApproach
+    local ordinary=(entry and entry.overshoot) or Q.ordinaryStoppedTarget(driver)
+    if entry and entry.outward and (entry.escapeAttempt or 0)<3 and entry.phase=='checking' then
+        W.delete(entry.world); entry.world=nil; entry.search=nil
+        Q.beginStoppedEscape(driver); return
+    end
+    driver:debug('Queue: stopped-combine approach rejected safely: %s',reason)
     Q.clearStoppedApproach(driver); driver:setMaxSpeed(0)
-    driver.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new())
+    if ordinary then
+        -- A failed candidate does not make this worker unusable. Release its
+        -- reservation so another rig can serve, with a bounded recall delay.
+        if driver.pathfinderController then driver.pathfinderController.pathfinder=nil end
+        local data=Q.data(driver)
+        data.approachRetryAt=g_currentMission.time+30000
+        data.waitingApproach=nil; data.deferredApproach=nil
+        driver:startWaitingForSomethingToDo()
+    else driver.vehicle:stopCurrentAIJob(AIMessageCpErrorNoPathFound.new()) end
 end
 
 function Q.stoppedApproachGoal(driver,x,z)
@@ -2155,6 +2274,8 @@ end
 function Q.beginStoppedEscape(driver)
     local data=driver.queueStoppedApproach
     if not data or not data.overshoot then return false end
+    data.escapeAttempt=(data.escapeAttempt or 0)+1
+    data.outward=true; data.phase='checking'
     local world,reason=W.new(driver)
     if not world then stoppedApproachFailed(driver,reason); return true end
     data.world=world
@@ -2199,8 +2320,9 @@ function Q.beginStoppedEscape(driver)
     local x,z=localPoint(here)
     local radius=H.minimumRadius(world.model,driver.turningRadius)
     if not radius then stoppedApproachFailed(driver,'unsupported outward turning radius'); return true end
-    local out=side*(math.max(side*x,headerSide)+2*radius+4)
-    local rear=data.rearZ-data.runIn
+    local extra=(data.escapeAttempt-1)*radius
+    local out=side*(math.max(side*x,headerSide)+2*radius+4+extra)
+    local rear=data.rearZ-data.runIn-extra
     local function pose(x,z,t)
         local wx,wz=H.math.position(frame,x,z)
         return {x=wx,z=wz,t=frame.t+t}

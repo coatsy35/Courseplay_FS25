@@ -186,6 +186,17 @@ class OrdinaryRendezvousTests(unittest.TestCase):
             assert(not c.queueFinishClearance and not u.queueFinalUnload)
         ''')
 
+    def test_distant_field_entry_keeps_native_approach_despite_negative_pipe_error(self):
+        self.lua.execute('''
+            place(120,30,0)
+            assert(u:getBestTargetNodeDistanceFromPipe()<0)
+            assert(not Q.hasStoppedRendezvousOvershoot(u))
+            u.state=u.states.IDLE; u.combineToUnload=nil
+            assert(u:call(harvester,nil))
+            assert(not u.queueStoppedApproach and not stopped)
+            assert(u.pathfinderController.goal and u.state==u.states.WAITING_FOR_PATHFINDER)
+        ''')
+
     def begin_rear_route(self):
         self.lua.execute('''
             u.state=u.states.IDLE; u.combineToUnload=nil; u:call(harvester,nil)
@@ -202,7 +213,8 @@ class OrdinaryRendezvousTests(unittest.TestCase):
             -- Tractor arrival alone still cannot authorise an angled trailer.
             trailer.rootNode.t=0.4; trailer.joint.node.t=0.4
             u:onLastWaypointPassed()
-            assert(stopped and u.speed==0 and u.state~=u.states.UNLOADING_MOVING_COMBINE)
+            assert(not stopped and u.speed==0 and u.state==u.states.IDLE)
+            assert(not assigned and not u.combineToUnload and u.queueData.approachRetryAt>g_currentMission.time)
         ''')
 
     def test_blocked_forward_run_in_cannot_fall_back_to_circling(self):
@@ -215,17 +227,20 @@ class OrdinaryRendezvousTests(unittest.TestCase):
             end
             for i=1,200 do
                 Q.updateStoppedApproach(u)
-                if stopped then break end
+                if not u.queueStoppedApproach then break end
             end
-            assert(stopped and search.expanded==0 and not data.path and u.speed==0)
+            assert(not stopped and search.expanded==0 and not data.path and u.speed==0)
+            assert(data.escapeAttempt==3 and u.state==u.states.IDLE and not assigned)
+            assert(not u:isAllowedToBeCalled(), "failed rig immediately recalled")
         ''')
 
     def test_crop_is_not_ignored_for_ordinary_rear_entry(self):
         self.begin_rear_route()
         self.lua.execute('''
             densityCount=10
-            for i=1,200 do Q.updateStoppedApproach(u); if stopped then break end end
-            assert(stopped and u.speed==0 and not c.queueFinishClearance)
+            for i=1,200 do Q.updateStoppedApproach(u); if not u.queueStoppedApproach then break end end
+            assert(not stopped and u.speed==0 and not c.queueFinishClearance)
+            assert(u.state==u.states.IDLE and not assigned and not u.combineToUnload)
             assert(not Q.finalApproachTarget(u))
         ''')
 
@@ -233,7 +248,8 @@ class OrdinaryRendezvousTests(unittest.TestCase):
         self.lua.execute('''
             W.model=function() return nil,'unsupported test rig' end
             u.state=u.states.IDLE; u.combineToUnload=nil; u:call(harvester,nil)
-            assert(stopped and u.speed==0 and not u.pathfinderController.goal)
+            assert(not stopped and u.speed==0 and not u.pathfinderController.goal)
+            assert(u.state==u.states.IDLE and not assigned)
             assert(not u.queueStoppedApproach and not c.queueFinishClearance)
         ''')
 
