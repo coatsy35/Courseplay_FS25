@@ -756,6 +756,105 @@ class HarvesterBypassTests(unittest.TestCase):
             assert(not Q.holdHeadlandCorner(c))
         ''')
 
+    def centre_transfer_fixture(self):
+        self.travel_fixture(trailer_x=100)
+        self.headland_corner_fixture()
+        self.lua.execute('''
+            hv.rootNode.z=15; hv:getAttachedImplements()[1].object.rootNode.z=20
+            hv.getIsCpFieldWorkActive=hv.getIsCpActive
+            c.ppc.getRelevantWaypointIx=function() return 4 end
+            leaderNode.x=-25; leaderNode.z=20; leaderNode.t=math.pi/2
+            lv.rootNode=leaderNode; lv.size={width=3.5,length=8}; lv.stopped=true
+            lv.getIsCpActive=lv.getIsCpFieldWorkActive
+            leadHeader={rootNode={x=-20,z=20,t=math.pi/2},size={width=15.2,length=2}}
+            lv.getAttachedImplements=function() return {{object=leadHeader}} end
+            setmetatable(lead,AIDriveStrategyCombineCourse)
+            lead.states.WORKING={}; lead.states.TURNING={}
+            lead.state=lead.states.DRIVING_TO_WORK_START_WAYPOINT
+            lead.settings=settings; lead.debug=function() end
+            lead.getCurrentCourse=function(self) return self.course end
+            lead.ppc={getRelevantWaypointIx=function() return 1 end}
+            lead.course=Course(lv,{{x=-25,z=20},{x=0,z=20},{x=60,z=20}},true)
+            transferCourse=lead.course
+        ''')
+
+    def test_centre_transfer_waits_for_actual_header_then_releases_the_occupant(self):
+        for first in ('c:getDriveData()', 'lead:getDriveData()'):
+            self.setUp(); self.centre_transfer_fixture()
+            self.lua.execute(first+'''
+                assert(select(4,lead:getDriveData())==0)
+                assert(lead.queueTransferHold and not Q.holdHeadlandCorner(c))
+                assert(select(4,c:getDriveData())==10,'headland follower could not clear')
+                assert(lead.course==transferCourse and c.course==fc)
+                hv.rootNode.z=60; hv:getAttachedImplements()[1].object.rootNode.z=65
+                c.ppc.getRelevantWaypointIx=function() return 13 end
+                assert(select(4,lead:getDriveData())==10)
+                assert(not lead.queueTransferHold and lead.course==transferCourse)
+            ''')
+
+    def test_centre_transfer_checks_header_tip_and_all_five_combine_bodies(self):
+        self.centre_transfer_fixture()
+        self.lua.execute('''
+            -- Move the tractor body clear; its header still occupies the sweep.
+            hv.rootNode.z=6; hv:getAttachedImplements()[1].object.rootNode.z=11
+            local fleet={lv}
+            for i=1,3 do
+                local body={rootNode={x=80+i*20,z=80,t=0},size={width=4,length=8},spec_combine={}}
+                body.getAIDirectionNode=function(self) return self.rootNode end
+                body.getAttachedImplements=function() return {} end
+                body.getIsCpFieldWorkActive=function() return true end
+                fleet[#fleet+1]=body
+            end
+            fleet[#fleet+1]=hv; g_currentMission.vehicleSystem.vehicles=fleet
+            assert(Q.holdCentreTransfer(lead,20),'fifth combine header omitted')
+            hv:getAttachedImplements()[1].object.rootNode.z=-10
+            assert(not Q.holdCentreTransfer(lead,20))
+        ''')
+
+    def test_full_connector_fallback_checks_current_remaining_route(self):
+        self.centre_transfer_fixture()
+        self.lua.execute('''
+            local points={}
+            for i=1,276 do points[i]={x=-301+2*i,z=20} end
+            lead.course=Course(lv,points,true)
+            local ix=100
+            lead.ppc.getRelevantWaypointIx=function() return ix end
+            local function position(x) leaderNode.x=x; leadHeader.rootNode.x=x+5 end
+            position(-101)
+            assert(not Q.holdCentreTransfer(lead,20),'distant future conflict held full connector')
+            ix=138; position(-25)
+            assert(Q.holdCentreTransfer(lead,20),'current connector collision omitted')
+            ix=166; position(31)
+            assert(not Q.holdCentreTransfer(lead,20),'passed connector still reserved')
+            assert(lead.course:getNumberOfWaypoints()==276 and lead.turnContext.turnStartWpIx==2)
+        ''')
+
+    def test_transfer_clearance_never_releases_follower_into_another_harvester(self):
+        self.centre_transfer_fixture()
+        self.lua.execute('''
+            assert(Q.holdCentreTransfer(lead,20))
+            local body={rootNode={x=0,z=35,t=0},size={width=4,length=8},spec_combine={}}
+            body.getAIDirectionNode=function(self) return self.rootNode end
+            body.getAttachedImplements=function() return {} end
+            g_currentMission.vehicleSystem.vehicles[3]=body
+            assert(Q.holdHeadlandCorner(c),'follower released into third combine')
+            g_currentMission.vehicleSystem.vehicles[3]=nil
+            assert(not Q.holdHeadlandCorner(c))
+        ''')
+
+    def test_transfer_check_uses_braking_distance_and_discards_replaced_courses(self):
+        self.centre_transfer_fixture()
+        self.lua.execute('''
+            hv.rootNode.x=15; hv:getAttachedImplements()[1].object.rootNode.x=15
+            assert(not Q.holdCentreTransfer(lead,0))
+            assert(Q.holdCentreTransfer(lead,32),'commanded travel speed ignored')
+            lead.course=Course(lv,{{x=-25,z=20},{x=-80,z=20}},true)
+            assert(not Q.holdCentreTransfer(lead,10))
+            lead.course=transferCourse; assert(Q.holdCentreTransfer(lead,32))
+            lead.state=lead.states.WORKING
+            assert(not Q.holdCentreTransfer(lead,32) and not lead.queueTransferHold)
+        ''')
+
     def test_success_stop_and_fullness_release_both_hold_references(self):
         for change in ('c.state=c.states.WORKING','hv.active=false','full=true','manual=true'):
             with self.subTest(change=change):

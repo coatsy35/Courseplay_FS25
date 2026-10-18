@@ -1,3 +1,48 @@
+## Build 3049 - restart safety, departure recovery and occupied transfer clearance
+
+The 18 October 3048 log records 2,032 Lua update errors after CR11/319 was
+manually restarted at 21:46:22 near waypoint 1637. Its temporary
+`AIDriveStrategyDriveToFieldWorkStart` controller has no harvesting methods.
+Trailer-traffic eligibility, introduced in commit `1480398a`, assumed CP-active
+meant a combine controller. It now validates every harvesting capability it
+uses before traffic allocation. A retained assignment waits through the
+temporary controller and becomes eligible again when harvesting resumes.
+Evidence: `out/incident-3048-trailers-around-turn/`.
+
+The same run repeatedly held and released loaded trailer /323 before a failed
+row-turn bypass. From 21:26:27 a stationary combine kept renewing the trailer's
+native backup request, preventing its saved departure retry from resuming.
+A departure now requires two seconds of continuous clearance before release,
+retains its braking envelope while held, and still checks a stopped blocking
+header's actual occupancy. A replaced route or native reverse invalidates the
+old hold. A stationary combine waiting for its checked recovery no longer
+renews backup requests for that recovery's departing trailer; native timeout
+restores the saved reverse/retry. Genuine reversing, unrelated requests and
+changed recovery contexts retain native handling. The logs do not establish
+the exact initial trailer placement.
+
+At 20:40, CR11/319's headland-to-centre transfer passed the held CR11/318 while
+native convoy spacing reported infinity for the different headings. Transfer
+travel was outside the ordinary row-turn checks. The native transfer now
+checks its complete body and unfolded header over its braking distance against
+occupied harvester space. If a held headland follower occupies that space,
+the lead stops; the follower can continue its existing course only if its
+own forward body/header sweep clears every other harvester. The lead resumes
+after the occupant clears. This also covers the full connector fallback and
+checks all five combines. If no safe forward clearance exists, both retain
+collision protection; this does not authorise an unchecked escape.
+Evidence: `out/incident-3048-combine-crossing/`.
+
+Regression coverage includes temporary controller replacement with retained
+unloader assignments, intermittent clearance, a stopped obstructing header,
+native backup timeout through saved departure retry, true reverse requests,
+header-only collisions, five-combine occupancy, both controller update orders,
+third-combine obstruction and progress through a 276-waypoint connector.
+Native courses, AD handover, configurable departure thresholds and the user's
+confirmed unload-first finish sequence remain unchanged. Source and extracted
+ZIP release checks are mandatory. These are engine-boundary regressions;
+3049 still requires an in-game run of the reported situations.
+
 ## Build 3048 - final unload selection, settled rear entry and departure clearance
 
 The 18 October 3046 log identifies two separate failures at the finish.

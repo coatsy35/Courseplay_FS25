@@ -198,6 +198,22 @@ class TrafficTests(unittest.TestCase):
             assert(u.driveUnloadNowRequested:get())
         ''')
 
+    def test_manual_combine_restart_defers_traffic_until_combine_controller_returns(self):
+        self.lua.execute('''
+            local originalController=owner:getCpDriveStrategy()
+            local originalCourse=u.course
+            local restart={states={DRIVING={}},getCurrentCourse=function() return fc end}
+            owner.getCpDriveStrategy=function() return restart end
+            for i=1,100 do
+                Q.checkTrailerTraffic(u)
+                assert(not Q.beginTrailerTraffic(u,ov))
+                assert(u.combineToUnload==owner and u.course==originalCourse and not Q.owns(u))
+            end
+            owner.getCpDriveStrategy=function() return originalController end
+            Q.checkTrailerTraffic(u)
+            assert(u.queueData.trailerTraffic and Q.trailerTrafficHold(o))
+        ''')
+
     def test_progress_timer_starts_with_this_clearance_not_old_parking(self):
         self.lua.execute('u.queueData.progressTime=0; g_currentMission.time=100000')
         self.begin()

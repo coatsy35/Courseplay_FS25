@@ -45,9 +45,48 @@ class WorkingDepartureTests(unittest.TestCase):
             assert(Q.holdWorkingDeparture(u,true,32))
             assert(u.course==original and not Q.owns(u) and not u.combineToUnload)
             advanceCombine(5); assert(Q.holdWorkingDeparture(u,true,0))
-            advanceCombine(80); assert(not Q.holdWorkingDeparture(u,true,32))
+            advanceCombine(80); assert(Q.holdWorkingDeparture(u,true,32))
+            g_currentMission.time=g_currentMission.time+2001
+            assert(not Q.holdWorkingDeparture(u,true,32))
             assert(u.course==original and not Q.owns(u))
             handovers=0; u:onLastWaypointPassed(); assert(handovers==1) -- real native endpoint/full event
+        ''')
+
+    def test_intermittent_clearance_does_not_release_a_departure_into_the_header(self):
+        self.lua.execute('''
+            assert(Q.holdWorkingDeparture(u,true,32))
+            for i=1,5 do
+                advanceCombine(80); assert(Q.holdWorkingDeparture(u,true,0))
+                g_currentMission.time=g_currentMission.time+1500
+                advanceCombine(5); assert(Q.holdWorkingDeparture(u,true,0))
+            end
+            advanceCombine(80); assert(Q.holdWorkingDeparture(u,true,32))
+            g_currentMission.time=g_currentMission.time+2001
+            assert(not Q.holdWorkingDeparture(u,true,32))
+            assert(u.course==original and not Q.owns(u))
+        ''')
+
+    def test_stopped_header_still_occupying_departure_route_does_not_count_as_clear(self):
+        self.lua.execute('''
+            assert(Q.holdWorkingDeparture(u,true,32))
+            advanceCombine(5); harvester.lastSpeedReal=0
+            for i=1,4 do
+                g_currentMission.time=g_currentMission.time+1000
+                assert(Q.holdWorkingDeparture(u,true,32))
+            end
+            advanceCombine(80); assert(Q.holdWorkingDeparture(u,true,32))
+            g_currentMission.time=g_currentMission.time+2001
+            assert(not Q.holdWorkingDeparture(u,true,32))
+        ''')
+
+    def test_changed_course_or_reverse_clears_the_previous_wait(self):
+        self.lua.execute('''
+            assert(Q.holdWorkingDeparture(u,true,32))
+            u.course=Course(v,{{x=11,z=-12},{x=30,z=-12}},true)
+            assert(not Q.holdWorkingDeparture(u,true,32))
+            u.course=original; assert(Q.holdWorkingDeparture(u,true,32))
+            assert(not Q.holdWorkingDeparture(u,false,8))
+            assert(not u.queueData.workingDepartureHold)
         ''')
 
     def test_header_tip_conflict_without_crossing_row_centrelines(self):
@@ -85,7 +124,9 @@ class WorkingDepartureTests(unittest.TestCase):
             u.isDriveUnloadNowRequested=function() return manual end
             assert(Q.holdWorkingDeparture(u,true,32))
             manual=false -- the native button pulse expires while the rig waits
-            advanceCombine(80); assert(not Q.holdWorkingDeparture(u,true,32))
+            advanceCombine(80); assert(Q.holdWorkingDeparture(u,true,32))
+            g_currentMission.time=g_currentMission.time+2001
+            assert(not Q.holdWorkingDeparture(u,true,32))
             assert(u.queueData.nativeDeparture and u.course==original)
             handovers=0; u:onLastWaypointPassed(); assert(handovers==1)
         ''')

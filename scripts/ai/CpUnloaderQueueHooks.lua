@@ -281,6 +281,7 @@ end
 local combineDrive = C.getDriveData
 function C:getDriveData(...)
     local finalHold=Q.holdFinalApproach(self)
+    local transferHold=Q.holdCentreTransfer(self)
     local cornerHold=Q.holdHeadlandCorner(self)
     local hold=Q.checkCombineTurns(self) or Q.checkParkedTrailerTravel(self) or cornerHold
     local gx,gz,forwards,speed,acceleration=combineDrive(self,...)
@@ -299,7 +300,8 @@ function C:getDriveData(...)
         end
         self.queueCornerHold=cornerHold
     end
-    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or cornerHold or hold or finalHold then speed=0 end
+    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or cornerHold or hold or finalHold
+            or Q.holdCentreTransfer(self,speed) or transferHold then speed=0 end
     return gx,gz,forwards,speed,acceleration
 end
 
@@ -378,7 +380,7 @@ end
 -- Invalidate a pending preparation route before native backup takes ownership.
 local backup = U.requestToBackupForReversingCombine
 function U:requestToBackupForReversingCombine(vehicle,...)
-    if Q.departureClearanceActive(self) then return end
+    if Q.departureClearanceActive(self) or Q.deferStationaryTurnBackup(self,vehicle) then return end
     if Q.deferTrailerYield(self,vehicle) then return end
     if Q.owns(self) then Q.release(self) end
     return backup(self,vehicle,...)

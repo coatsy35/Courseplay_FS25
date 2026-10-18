@@ -726,11 +726,61 @@ local function intersects(area,vehicle)
     return false
 end
 
+local function centreTransfer(combine)
+    local states,context,course=combine.states,combine.turnContext,combine.fieldWorkCourse
+    local ix=context and context.turnStartWpIx
+    return states and states.DRIVING_TO_WORK_START_WAYPOINT
+        and combine.state==states.DRIVING_TO_WORK_START_WAYPOINT and ix and ix>1 and course
+        and not course:isOnHeadland(ix) and course:isOnConnectingPath(ix-1)
+end
+
+-- The native headland-to-centre connector is a travel course, not an ordinary
+-- row turn. Check its full body/header braking sweep against occupied space.
+-- A headland hold does not mean the follower has physically cleared that space.
+function Q.holdCentreTransfer(combine,speed)
+    if not centreTransfer(combine) then combine.queueTransferHold=nil; return false end
+    local course=combine:getCurrentCourse()
+    if not course or not combine.ppc then combine.queueTransferHold=nil; return false end
+    local prior=combine.queueTransferHold
+    local velocity=math.max((combine.vehicle.lastSpeedReal or 0)*1000,(speed or 0)/3.6,
+        prior and prior.course==course and prior.velocity or 0)
+    local area=Q.yieldArea(combine.vehicle,course,math.max(12,velocity*velocity/4+velocity+8),300)
+    if not area then return true end -- do not approve an unmeasured header sweep
+    for _,vehicle in pairs(g_currentMission.vehicleSystem and g_currentMission.vehicleSystem.vehicles or {}) do
+        if vehicle~=combine.vehicle and vehicle.spec_combine and vehicle.getIsCpFieldWorkActive
+                and vehicle:getIsCpFieldWorkActive() and intersects(area,vehicle) then
+            if not prior then combine:debug('Queue: centre transfer waiting for occupied header sweep to clear') end
+            combine.queueTransferHold={course=course,area=area,velocity=velocity}
+            return true
+        end
+    end
+    if prior then combine:debug('Queue: occupied centre-transfer sweep clear; continuing native connector') end
+    combine.queueTransferHold=nil
+    return false
+end
+
+local function canClearCentreTransfer(combine,lead)
+    local hold=lead.queueTransferHold
+    if not hold or not centreTransfer(lead) or hold.course~=lead:getCurrentCourse()
+            or not AIUtil.isStopped(lead.vehicle) or not intersects(hold.area,combine.vehicle) then return false end
+    -- Permit the occupant's existing course only when it clears every physical
+    -- harvester, including the stopped lead. Native crop/obstacle checks remain.
+    local velocity=math.max((combine.vehicle.lastSpeedReal or 0)*1000,
+        combine.settings and combine.settings.fieldSpeed and combine.settings.fieldSpeed:getValue()/3.6 or 0)
+    local area=Q.yieldArea(combine.vehicle,nil,math.max(12,velocity*velocity/4+velocity+8),300)
+    if not area then return false end
+    for _,vehicle in pairs(g_currentMission.vehicleSystem and g_currentMission.vehicleSystem.vehicles or {}) do
+        if vehicle~=combine.vehicle and vehicle.spec_combine and intersects(area,vehicle) then return false end
+    end
+    return true
+end
+
 -- A centre-entry U-turn/reverse can bring the lead back towards its own
 -- historical trail. During that transition, do not use trail distance to
 -- decide whether a follower may enter a nearby headland corner. Keep the
 -- configured convoy separation in physical space until the lead clears it.
--- Only the headland follower is held; the centre-entry machine keeps priority.
+-- The centre-entry machine has priority unless a physically occupying follower
+-- must first clear its route under the transfer sweep checks above.
 function Q.holdHeadlandCorner(combine)
     local states,course=combine.states,combine.fieldWorkCourse
     local proximity=combine.fieldWorkerProximityController
@@ -761,7 +811,8 @@ function Q.holdHeadlandCorner(combine)
             local entering=ix and ix>1 and lead.fieldWorkCourse
                 and not lead.fieldWorkCourse:isOnHeadland(ix) and lead.fieldWorkCourse:isOnConnectingPath(ix-1)
                 and (lead.connectorEntry or (lead.states and lead.state==lead.states.DRIVING_TO_WORK_START_WAYPOINT))
-            if entering and distance(here,W.pose(vehicle:getAIDirectionNode()))<limit then
+            if entering and distance(here,W.pose(vehicle:getAIDirectionNode()))<limit
+                    and not canClearCentreTransfer(combine,lead) then
                 return vehicle
             end
         end
@@ -1007,6 +1058,18 @@ local function resumeBypass(combine,wait)
     combine.queueBypass=bypass
     if parkedQueueTrailer(wait.driver) then wait.driver.queueData.bypass=bypass end
     wait.turn.state=wait.turn.states.PREPARING_RECOVERY
+end
+
+-- A combine waiting for its failed detour is not reversing. Let an existing
+-- native backup request expire so its saved departure retry can resume.
+function Q.deferStationaryTurnBackup(driver,vehicle)
+    if not driver.queueData or not driver.queueData.nativeDeparture then return false end
+    local combine=vehicle and vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+    if not combine or not ordinaryTravelTurn(combine) or not AIUtil.isStopped(vehicle) then return false end
+    local wait=combine.queueTrailerWait or combine.queueBypass
+    local turn=combine.aiTurn
+    return wait and wait.driver==driver and wait.turn==turn
+        and (turn.state==turn.states.WAITING_FOR_PATHFINDER or turn.state==turn.states.PREPARING_RECOVERY)
 end
 
 -- Departure keeps native ownership except for this bounded, checked escape.
@@ -1544,10 +1607,18 @@ end
 function Q.holdWorkingDeparture(driver,forwards,speed)
     local data=driver.queueData
     if not data or not data.nativeDeparture or not Q.enabled(driver) or Q.owns(driver)
-            or driver.state~=driver.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL or not forwards then return false end
+            or driver.state~=driver.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL or not forwards then
+        if data then data.workingDepartureCheck=nil; data.workingDepartureHold=nil end
+        return false
+    end
     local course=driver.getCurrentCourse and driver:getCurrentCourse()
     if not course or not driver.ppc then return false end
-    local velocity=math.max((driver.vehicle.lastSpeedReal or 0)*1000,driver:getFieldSpeed()/3.6,(speed or 0)/3.6)
+    local prior=data.workingDepartureCheck
+    if not prior or prior.course~=course then
+        data.workingDepartureHold=nil; data.workingDepartureClearSince=nil
+    end
+    local velocity=math.max((driver.vehicle.lastSpeedReal or 0)*1000,driver:getFieldSpeed()/3.6,(speed or 0)/3.6,
+        data.workingDepartureHold and prior and prior.velocity or 0)
     local here=W.pose(driver.vehicle:getAIDirectionNode())
     local cached=data.workingDepartureCheck
     if cached and cached.course==course and velocity<=cached.velocity
@@ -1562,7 +1633,7 @@ function Q.holdWorkingDeparture(driver,forwards,speed)
         if vehicle~=driver.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
             local combine=vehicle:getCpDriveStrategy()
             if combine.states and combine.state==combine.states.WORKING and combine.course
-                    and (vehicle.lastSpeedReal or 0)*3600>0.5
+                    and ((vehicle.lastSpeedReal or 0)*3600>0.5 or data.workingDepartureHold==vehicle)
                     and distance(here,W.pose(vehicle:getAIDirectionNode()))<100 then
                 if not projected then
                     local _,_,rectangles=Q.yieldArea(driver.vehicle,course,horizon,300)
@@ -1575,7 +1646,7 @@ function Q.holdWorkingDeparture(driver,forwards,speed)
                 end
                 local travel=math.min(50,math.max(0,(vehicle.lastSpeedReal or 0)*1000)*crossingTime)
                 local area=Q.yieldArea(vehicle,combine.course,travel,300)
-                if area and not intersects(area,driver.vehicle) then
+                if area and (data.workingDepartureHold==vehicle or not intersects(area,driver.vehicle)) then
                     for _,rectangle in ipairs(projected) do
                         if area(rectangle) then cached.hold=vehicle; break end
                     end
@@ -1583,6 +1654,15 @@ function Q.holdWorkingDeparture(driver,forwards,speed)
             end
         end
         if cached.hold then break end
+    end
+    -- One clear frame is insufficient: a changing header sweep or native speed
+    -- must not make a stopped departure repeatedly accelerate into the crossing.
+    local held=data.workingDepartureHold
+    if cached.hold then
+        data.workingDepartureClearSince=nil
+    elseif held and AIDriveStrategyCombineCourse.isActiveCpCombine(held) then
+        data.workingDepartureClearSince=data.workingDepartureClearSince or g_currentMission.time
+        if g_currentMission.time-data.workingDepartureClearSince<2000 then cached.hold=held end
     end
     if cached.hold~=data.workingDepartureHold then
         driver:debug(cached.hold and 'Queue: holding native departure before working combine/header crossing'
@@ -1601,7 +1681,8 @@ local function trafficEligible(driver)
     local combine=driver.combineToUnload
     if combine then
         local c=combine:getIsCpActive() and combine:getCpDriveStrategy()
-        if not c or c:alwaysNeedsUnloader() or c:hasAutoAimPipe() or c:isDischarging() then return false end
+        if not c or not c.alwaysNeedsUnloader or not c.hasAutoAimPipe or not c.isDischarging
+                or c:alwaysNeedsUnloader() or c:hasAutoAimPipe() or c:isDischarging() then return false end
     end
     return driver.state==driver.states.IDLE or (Q.owns(driver) and driver.queueData.operation=='prepare')
         or driver.state==driver.states.DRIVING_TO_COMBINE

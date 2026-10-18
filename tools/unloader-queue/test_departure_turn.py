@@ -131,6 +131,59 @@ class DepartureTurnTests(unittest.TestCase):
                 end
             ''')
 
+    def backup_timeout_fixture(self):
+        self.lua.execute('''
+            failBypass()
+            for _,state in pairs(u.states) do state.properties=state.properties or {} end
+            u.states.BACKING_UP_FOR_REVERSING_COMBINE.properties.denyBackupRequest=true
+            u.state=u.states.BACKING_UP_FOR_REVERSING_COMBINE
+            u.state.properties.vehicle=hv
+            u.stateAfterMovedOutOfWay=u.states.MOVING_BACK_BEFORE_PATHFINDING
+            local savedContext={native=true}
+            u.stateAfterMovedOutOfWay.properties.pathfinderContext=savedContext
+            u.stateAfterMovedOutOfWay.properties.pathfinderController={retry=function(_,ctx)
+                assert(ctx==savedContext); retried=(retried or 0)+1
+            end}
+            local reverse=Course(tv,{{x=7,z=40},{x=7,z=20,rev=true}},true)
+            u.startRememberedCourse=function(self) self.course=reverse; restoredBackup=true end
+            u.setNewState=function(self,state) self.lastState=self.state; self.state=state end
+            u.vehicleRequestingBackUp={value=hv,expires=g_currentMission.time+3000,
+                get=function(self) if g_currentMission.time<self.expires then return self.value end end,
+                set=function(self,value,ms) self.value=value; self.expires=g_currentMission.time+ms end}
+            u.getDistanceFromCombine=function() return 30 end
+            u.proximityController={checkBlockingVehicleFront=function() return 30,hv end}
+            u.debugSparse=function() end; hv.getName=function() return 'CR11' end; hv.lastSpeedReal=0
+            u.minDistanceWhenMovingOutOfWay=12
+        ''')
+
+    def test_stationary_failed_turn_cannot_renew_backup_or_starve_native_departure_retry(self):
+        self.backup_timeout_fixture()
+        self.lua.execute('''
+            local expires=u.vehicleRequestingBackUp.expires
+            for i=1,31 do
+                g_currentMission.time=g_currentMission.time+100
+                u:requestToBackupForReversingCombine(hv)
+                assert(u.vehicleRequestingBackUp.expires==expires,'stationary wait renewed backup')
+                if u.state==u.states.BACKING_UP_FOR_REVERSING_COMBINE then u:backUpForReversingCombine() end
+            end
+            assert(restoredBackup and u.state==u.states.MOVING_BACK_BEFORE_PATHFINDING)
+            u:onLastWaypointPassed()
+            assert(retried==1 and u.state==u.states.WAITING_FOR_PATHFINDER)
+            assert(data.nativeDeparture and not Q.owns(u) and handovers==0)
+        ''')
+
+    def test_actual_reverse_and_unrelated_or_replaced_turn_keep_native_backup_requests(self):
+        for change in ('hv.stopped=false', 'c.queueTrailerWait=nil',
+                       'c.queueTrailerWait.driver={}', 'c.queueTrailerWait.turn={}',
+                       'c.aiTurn.state=c.aiTurn.states.TURNING', 'data.nativeDeparture=nil'):
+            self.setUp(); self.backup_timeout_fixture()
+            self.lua.execute(change+'''
+                local expires=u.vehicleRequestingBackUp.expires
+                g_currentMission.time=g_currentMission.time+100
+                u:requestToBackupForReversingCombine(hv)
+                assert(u.vehicleRequestingBackUp.expires==expires+100)
+            ''')
+
     def test_checked_articulated_escape_resumes_fresh_native_route_and_handover(self):
         self.lua.execute('''
             beginClearance()
