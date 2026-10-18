@@ -125,6 +125,7 @@ if __name__ == '__main__':
                                 'unloader-queue/test_harvester_turns.py',
                                 'unloader-queue/test_native_connectors.py',
                                 'unloader-queue/test_native_departure.py', 'unloader-queue/test_yield.py',
+                                 'unloader-queue/test_working_departure.py',
                                 'unloader-queue/test_finished_combine.py',
                                 'unloader-queue/test_finish_clearance.py',
                                 'unloader-queue/test_final_approach.py',

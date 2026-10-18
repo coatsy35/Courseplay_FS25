@@ -227,6 +227,30 @@ class HarvesterSnapshotTests(unittest.TestCase):
             CpUnloaderQueue.data(u)
         """)
 
+    def test_finished_empty_tank_does_not_reserve_the_nearby_partial_trailer(self):
+        self.lua.execute('''
+            rawCapacity=20000; tankLevel=0; contents=26922; free=32000-contents
+            c.isWaitingForUnloadAfterCourseEnded=function() return true end
+            h.getIsCpActive=function() return true end
+            local active=setmetatable({vehicle={rootNode=3,getAIDirectionNode=function() return 3 end},
+                combineController={getCapacity=function() return 20000 end,getFillLevel=function() return 4000 end}},
+                {__index=c})
+            active.vehicle.getCpDriveStrategy=function() return active end
+            g_currentMission.vehicleSystem.vehicles={h,active.vehicle}
+            CpUnloaderQueue.refresh()
+            assert(not CpUnloaderQueue.combines['1'])
+            assert(CpUnloaderQueue.plan.leads['3'].trailer=='2')
+            assert(CpUnloaderQueue.findUnloader(c,h,nil)==true)
+            -- At the configured departure threshold the same trailer leaves.
+            contents=27200; free=32000-contents; g_currentMission.time=1001
+            CpUnloaderQueue.refresh()
+            assert(not CpUnloaderQueue.plan.leads['3'])
+            -- Empty active working harvesters still receive preparation.
+            c.isWaitingForUnloadAfterCourseEnded=function() return false end
+            contents=0; free=32000; g_currentMission.time=2002; CpUnloaderQueue.refresh()
+            assert(CpUnloaderQueue.combines['1'])
+        ''')
+
     def test_native_controller_classifies_grain_beet_and_vegetable_tanks(self):
         for label,volume,level,fill_type in [('grain',20000,12000,1),('beet',45000,30000,3),('vegetables',12000,8000,4)]:
             with self.subTest(harvester=label):

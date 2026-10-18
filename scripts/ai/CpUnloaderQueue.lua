@@ -306,6 +306,14 @@ function Q.compatibleCapacity(driver,harvester)
     return 0,0,0
 end
 
+-- Finishing leaves the native unload state visible for the rest of that update.
+-- An empty terminal harvester must neither reserve nor call another trailer.
+function Q.finalUnloadComplete(driver)
+    return driver.isWaitingForUnloadAfterCourseEnded and driver:isWaitingForUnloadAfterCourseEnded()
+        and driver.combineController and not driver:alwaysNeedsUnloader()
+        and driver.combineController:getFillLevel()<0.01
+end
+
 function Q.refresh()
     if now()<Q.nextPlan then return end
     Q.nextPlan=now()+1000
@@ -313,7 +321,7 @@ function Q.refresh()
     for _, vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
         if AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
             local driver=vehicle:getCpDriveStrategy()
-            if driver.combineController and not driver.queueFinishClearance then
+            if driver.combineController and not driver.queueFinishClearance and not Q.finalUnloadComplete(driver) then
                 local continuous=driver:alwaysNeedsUnloader()
                 local total=continuous and 0 or driver.combineController:getCapacity()
                 if continuous or total>0 then
@@ -387,6 +395,8 @@ function Q.accountForTransfer(combines,trailers,previous)
 end
 
 function Q.findUnloader(combine,stopped,waypoint)
+    if Q.finalUnloadComplete(combine) or
+            (combine.vehicle.getIsCpActive and not combine.vehicle:getIsCpActive()) then return true end
     Q.refresh()
     local snapshot=Q.combines and Q.combines[id(combine.vehicle)]
     if snapshot and snapshot.continuous and (not snapshot.fillType or snapshot.fillType==FillType.UNKNOWN) then

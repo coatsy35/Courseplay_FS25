@@ -1,3 +1,53 @@
+## Build 3048 - final unload selection, settled rear entry and departure clearance
+
+The 18 October 3046 log identifies two separate failures at the finish.
+At 19:51:07.109 CR11/319 successfully stops after parking, but its remaining
+update calls T7.300/325 back to the now-empty combine. That trailer has
+26,922 litres (84.1%), below its configured 85% departure threshold. The stale
+call prevents it serving CR11/318. At 19:52:34.139 replacement T7.300/324's
+valid rear approach is rejected because its rig moved while the final run-in
+was being checked. Its stopped rig then occupies the next replacement's goal.
+Evidence: out/incident-3046-final-allocation/.
+
+An empty terminal harvester now reserves/calls no trailer, including the frame
+in which native job completion deletes its strategy. A non-empty final combine,
+ordinary empty working combine and continuous-output harvester retain service.
+The arriving rig brakes and settles for 500 ms before the final run-in origin
+is captured. Movement during validation discards that path and allows two
+fresh settled checks; persistent movement and real obstacles still fail safely.
+The departure percentage remains adjustable and is not overridden to top up a
+finished combine. At 84.1% a trailer is eligible, but it still leaves at 85%.
+
+Two earlier 3046 incidents (T7.300/323 at 19:40 and /322 at 19:47) entered native
+loaded return travel and converged with a working header. Their native return
+state lacks predictive crossing checks; proximity only stopped the rigs near
+the combine. Evidence: out/incident-3046-departure-beside-combine/ and
+out/incident-3046-second-departure/. Forward native returns now yield before
+entering a moving working combine's swept body/header area. The check includes
+the complete departing train, braking distance and clearance time, checks all
+nearby active working combines and refreshes within 100 ms. It holds only the
+trailer. Rigs already within the area retain native clearance; stopped harvesters,
+reverse manoeuvres, turn recovery, missing geometry and exhausted envelope
+limits retain native collision/proximity handling. Native marker routes,
+configurable thresholds, pocket exit/length rules and AD handover are preserved.
+
+Finished empty combines prefer a quarter turn followed by 8–20 metres parallel
+to the headland before connecting to a completed centre row. The available row
+spacing and actual turning radius determine whether that option exists. Every
+point retains full unfolded-header, boundary and collision checks. Existing
+checked direct alternatives remain available where the extra travel cannot fit.
+Unload-first sequencing, physical lead-first ordering for up to five combines,
+trailer clearance and folding only after parking remain unchanged. The 3047
+AD-arrival boundary and straight pull-off corrections are included.
+
+Regression coverage includes the actual native call after successful completion,
+below/at-threshold final allocation, rolling and swinging trailer arrival,
+validation-time movement, safe timeout/obstruction rejection, working-header
+crossings with five combines, reverse/current-occupant clearance, native full
+handover, rotated headland routes and narrow-spacing fallback. Source and
+extracted-ZIP release checks are mandatory. These are engine-boundary tests,
+not in-game physics acceptance; the combined build needs a fresh field run.
+
 ## Build 3047 - validate and clear the actual AD entrance
 
 The 18 October 3046 log records T7.300/323 handing over at 19:11:19.445,

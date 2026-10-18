@@ -55,6 +55,62 @@ class StoppedApproachTests(unittest.TestCase):
             end
         ''')
 
+    def test_braking_roll_and_trailer_swing_settle_before_origin_is_captured(self):
+        self.lua.execute('''
+            rearPath(); local data=u.queueStoppedApproach
+            local z=v.rootNode.z
+            for i=1,10 do
+                place(0,z+i*0.4,0); bendTrailer(0.1-i*0.008)
+                v.lastSpeedReal=0.0001
+                g_currentMission.time=g_currentMission.time+100; Q.updateStoppedApproach(u)
+                assert(not stopped and data.phase=='settling' and not data.world)
+                assert(Q.stoppedApproachSpeed(u,20)==0 and u.combineToUnload==harvester)
+            end
+            v.lastSpeedReal=0
+            for i=1,100 do
+                g_currentMission.time=g_currentMission.time+30; Q.updateStoppedApproach(u)
+                if stopped or data.phase=='driving' then break end
+            end
+            assert(not stopped and data.phase=='driving')
+            assert(math.abs(data.world.startPoses[1].z-v.rootNode.z)<0.01)
+            place(data.goal.x,data.goal.z,data.goal.t); u:onLastWaypointPassed()
+            assert(u.state==u.states.UNLOADING_STOPPED_COMBINE)
+        ''')
+
+    def test_motion_during_validation_discards_path_then_checks_new_origin(self):
+        self.lua.execute('''
+            rearPath(); local data=u.queueStoppedApproach
+            for i=1,100 do
+                g_currentMission.time=g_currentMission.time+30; Q.updateStoppedApproach(u)
+                if data.phase=='checking' then break end
+            end
+            assert(data.phase=='checking'); local stale=data.world
+            place(v.rootNode.x,v.rootNode.z+0.4,0)
+            for i=1,100 do
+                g_currentMission.time=g_currentMission.time+30; Q.updateStoppedApproach(u)
+                if data.phase=='settling' then break end
+            end
+            assert(not stopped and data.phase=='settling' and not data.search and not stale.node)
+            assert(not data.path and Q.stoppedApproachSpeed(u,20)==0)
+            for i=1,100 do
+                g_currentMission.time=g_currentMission.time+30; Q.updateStoppedApproach(u)
+                if data.phase=='driving' then break end
+            end
+            assert(not stopped and data.phase=='driving' and data.world~=stale)
+            assert(math.abs(data.world.startPoses[1].z-v.rootNode.z)<0.01)
+        ''')
+
+    def test_persistent_motion_does_not_install_an_unchecked_run_in(self):
+        self.lua.execute('''
+            rearPath(); v.lastSpeedReal=0.001
+            for i=1,101 do
+                g_currentMission.time=g_currentMission.time+100; Q.updateStoppedApproach(u)
+                if stopped then break end
+                assert(u.queueStoppedApproach.phase=='settling' and not u.queueStoppedApproach.path)
+            end
+            assert(stopped and not u.queueStoppedApproach)
+        ''')
+
     def test_native_backup_retry_retains_checked_stopped_entry(self):
         self.lua.execute('''
             local context=nativeBackupFixture()
@@ -68,7 +124,7 @@ class StoppedApproachTests(unittest.TestCase):
             assert(retried==1 and data.phase=='approaching' and u.state==u.states.DRIVING_TO_COMBINE)
             place(x,pipe.z+z,0)
             u:onLastWaypointPassed()
-            assert(data.phase=='checking' and not u:isOkToStartUnloadingCombine())
+            assert(data.phase=='settling' and not u:isOkToStartUnloadingCombine())
         ''')
 
     def test_native_backup_does_not_spend_the_travel_progress_allowance(self):
@@ -256,7 +312,10 @@ class StoppedApproachTests(unittest.TestCase):
             with self.subTest(obstruction=obstruction):
                 self.setUp()
                 self.lua.execute('''rearPath(); '''+obstruction+'''
-                    Q.updateStoppedApproach(u)
+                    for i=1,30 do
+                        g_currentMission.time=g_currentMission.time+30; Q.updateStoppedApproach(u)
+                        if stopped then break end
+                    end
                     assert(stopped and not u.queueStoppedApproach)
                 ''')
 

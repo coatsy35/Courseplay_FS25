@@ -85,6 +85,20 @@ class FinishClearanceTests(unittest.TestCase):
             end
         ''')
 
+    def test_completed_combine_cannot_recall_trailer_in_its_stopping_update(self):
+        self.lua.execute('''
+            Q.data(u)
+            c.timeToCallUnloader={get=function() return true end,set=function() end}
+            c.unloader={get=function() return nil end}
+            u.call=function() error('empty terminal combine recalled trailer') end
+            -- Exercise the actual native call through the existing dispatch hook,
+            -- both before deletion and after the successful stop in this frame.
+            c:callUnloaderWhenNeeded()
+            advance(); plan(); followParking()
+            assert(finishes==1 and not harvester:getIsCpActive())
+            c:callUnloaderWhenNeeded()
+        ''')
+
     def close_combine_fixture(self, lateral=-17, longitudinal=3):
         self.lua.globals().lateral = lateral
         self.lua.globals().longitudinal = longitudinal
@@ -592,6 +606,54 @@ class FinishClearanceTests(unittest.TestCase):
                 assert(c.speed==5)
             end
             assert(finishes==1 and not c.queueFinishClearance)
+        ''')
+
+    def test_finished_combine_travels_parallel_to_headland_before_entering_row(self):
+        for heading in (0, 1.57, 3.14):
+            with self.subTest(heading=heading):
+                self.setUp()
+                self.lua.globals().heading = heading
+                self.lua.execute('''
+                    -- Rotate both the completed row and complete unfolded rig.
+                    local worked={}
+                    for _,p in ipairs(c.fieldWorkCourse:getAllWaypoints()) do
+                        local x,z=H.math.position({x=0,z=0,t=heading},p.x,p.z)
+                        worked[#worked+1]={x=x,z=z}
+                    end
+                    c.fieldWorkCourse=Course(harvester,worked,false); c.course=c.fieldWorkCourse
+                    movePose({x=0,z=0,t=heading})
+                    g_currentMission.vehicleSystem.vehicles={harvester}
+                    advance(); plan()
+                    local data=c.queueFinishClearance; local route=data.route
+                    local option=route.options[route.option]
+                    assert(option.headland and option.headland>=8)
+                    local straight=0
+                    for i,p in ipairs(route.points) do
+                        assert(W.rigidClear(data.world,p))
+                        local previous=route.points[i-1]
+                        if previous and math.abs(math.abs(H.math.delta(p.t,heading))-math.pi/2)<0.001
+                                and math.abs(H.math.delta(previous.t,p.t))<0.001 then
+                            straight=straight+math.sqrt((p.x-previous.x)^2+(p.z-previous.z)^2)
+                        end
+                    end
+                    assert(straight>=8)
+                    assert(not c.fieldWorkCourse:isOnHeadland(route.ix))
+                    followParking(); assert(finishes==1)
+                ''')
+
+    def test_narrow_row_spacing_uses_a_checked_direct_fallback(self):
+        self.lua.execute('''
+            local worked={}
+            for z=60,-90,-2 do worked[#worked+1]={x=-22,z=z} end
+            worked[#worked+1]={x=0,z=-90}
+            for z=-88,0,2 do worked[#worked+1]={x=0,z=z} end
+            c.fieldWorkCourse=Course(harvester,worked,false); c.course=c.fieldWorkCourse
+            g_currentMission.vehicleSystem.vehicles={harvester}
+            advance(); plan()
+            local data=c.queueFinishClearance
+            assert(not data.route.options[data.route.option].headland)
+            for _,p in ipairs(data.route.points) do assert(W.rigidClear(data.world,p)) end
+            followParking(); assert(finishes==1)
         ''')
 
     def test_curve_header_tip_obstacle_rejects_that_candidate(self):

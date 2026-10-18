@@ -61,10 +61,11 @@ function U:getDriveData(...)
     local gx,gz,forwards,speed,acceleration=drive(self,...)
     local pocketHold=Q.holdPocketDeparture(self,forwards,speed)
     local trafficHold=Q.trailerTrafficHold(self)
-    if trafficHold or pocketHold then speed=0 end
+    local departureHold=Q.holdWorkingDeparture(self,forwards,speed)
+    if trafficHold or pocketHold or departureHold then speed=0 end
     local incomingHold=Q.holdIncomingTurn(self,speed) or hold
     if incomingHold then speed=0 end
-    if Q.watchNativeDeparture(self,speed,pocketHold or trafficHold or incomingHold,forwards) then speed=0 end
+    if Q.watchNativeDeparture(self,speed,pocketHold or trafficHold or incomingHold or departureHold,forwards) then speed=0 end
     speed=Q.finalUnloadSpeed(self,speed)
     speed=Q.stoppedApproachSpeed(self,speed)
     return gx,gz,forwards,speed,acceleration

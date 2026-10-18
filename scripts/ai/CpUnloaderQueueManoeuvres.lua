@@ -146,36 +146,49 @@ local function finishCandidates(data,combine)
     data.candidates=candidates; data.candidate=1; data.sample=0
 end
 
--- A shortest analytic curve is not an obstacle-avoiding route. Keep the usual
--- curve first, then try other forward words and checked longer lead-outs before
--- rejecting a completed row. This planner belongs only to final empty harvesters.
+-- Prefer an explicit headland straight between the two turns. The entire
+-- prefix and connection are swept; direct curves remain checked fallbacks when
+-- the boundary/header cannot accommodate the extra headland travel.
 local function finishRouteOptions(data,combine,route)
     local radius=combine.turningRadius
     if not radius or not H.math.finite(radius) or radius<=0 then return {} end
     local origin,goal=data.origin,route.goal
     local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
+    local lateral=(goal.x-origin.x)*math.cos(origin.t)-(goal.z-origin.z)*math.sin(origin.t)
     local options,seen={},{}
-    local function add(lead,types,preferred)
+    local function add(lead,types,priority,headland)
         local x,z=H.math.position(origin,0,lead)
-        local start=State3D(x,-z,CpMathUtil.angleFromGame(origin.t))
+        local heading,prefix=origin.t,lead
+        local side=lateral>=0 and 1 or -1
+        if headland then
+            x,z=H.math.position({x=x,z=z,t=heading},side*radius,radius)
+            heading=heading+side*math.pi/2
+            x,z=H.math.position({x=x,z=z,t=heading},0,headland)
+            prefix=prefix+radius*math.pi/2+headland
+        end
+        local start=State3D(x,-z,CpMathUtil.angleFromGame(heading))
         local solution,word=DubinsSolver(types):solve(start,target,radius)
         if not solution then return end
         local length=solution:getLength(radius)
-        local key=string.format('%.2f:%s',lead,word)
-        if lead+length<=200 and not seen[key] then
+        local key=string.format('%.2f:%.2f:%s',lead,headland or 0,word)
+        if prefix+length<=200 and not seen[key] then
             seen[key]=true
-            options[#options+1]={solution=solution,lead=lead,length=length,word=word,preferred=preferred}
+            options[#options+1]={solution=solution,lead=lead,length=length,word=word,priority=priority,
+                prefix=prefix,headland=headland,side=side}
         end
     end
-    add(3,nil,true)
+    -- Room for a quarter turn at each end and at least eight metres parallel
+    -- to the headland. A close row cannot satisfy that geometry without a loop.
+    if math.abs(lateral)>=2*radius+8 then add(3,nil,0,math.min(20,math.abs(lateral)-2*radius)) end
+    add(3,nil,1)
     local length=data.world.model.front-data.world.model.back
     local leads={3,0,math.min(40,math.max(8,length)),math.min(40,math.max(8,length)+radius)}
     for _,lead in ipairs(leads) do
-        for pathType=DubinsSolver.PathType.LSL,DubinsSolver.PathType.LRL do add(lead,{pathType}) end
+        for pathType=DubinsSolver.PathType.LSL,DubinsSolver.PathType.LRL do add(lead,{pathType},2) end
     end
     table.sort(options,function(a,b)
-        if a.preferred~=b.preferred then return a.preferred==true end
-        if a.lead+a.length~=b.lead+b.length then return a.lead+a.length<b.lead+b.length end
+        if a.priority~=b.priority then return a.priority<b.priority end
+        if a.prefix+a.length~=b.prefix+b.length then return a.prefix+a.length<b.prefix+b.length end
         if a.lead~=b.lead then return a.lead<b.lead end
         return a.word<b.word
     end)
@@ -198,14 +211,30 @@ function Q.finishRoute(data,combine,route)
         if i==0 or s>0 then points[#points+1]={x=x,z=z,t=origin.t,s=s} end
     end
     local step=0.25/(1+data.corner/radius)
+    if option.headland then
+        local start=points[#points]
+        local arc=radius*math.pi/2
+        count=math.ceil(arc/step)
+        for i=1,count do
+            local angle=math.pi/2*i/count
+            local x,z=H.math.position(start,option.side*radius*(1-math.cos(angle)),radius*math.sin(angle))
+            points[#points+1]={x=x,z=z,t=start.t+option.side*angle,s=option.lead+arc*i/count}
+        end
+        start=points[#points]; count=math.ceil(option.headland/0.25)
+        for i=1,count do
+            local length=option.headland*i/count
+            local x,z=H.math.position(start,0,length)
+            points[#points+1]={x=x,z=z,t=start.t,s=start.s+length}
+        end
+    end
     local samples=dubins_path_sample_many(option.solution.pathDescriptor,step)
     local distances=CpMathUtil.getSeries(0,option.length,step)
     for i=2,#samples do
         local p=samples[i]
-        points[#points+1]={x=p.x,z=-p.y,t=CpMathUtil.angleToGame(p.t),s=option.lead+distances[i]}
+        points[#points+1]={x=p.x,z=-p.y,t=CpMathUtil.angleToGame(p.t),s=option.prefix+distances[i]}
     end
     if distance(points[#points],goal)<0.000001 then table.remove(points) end
-    points[#points+1]={x=goal.x,z=goal.z,t=goal.t,s=option.lead+option.length}
+    points[#points+1]={x=goal.x,z=goal.z,t=goal.t,s=option.prefix+option.length}
     route.points=points; route.goal=points[#points]
     route.angle=H.math.delta(goal.t,origin.t)
     return true
@@ -1509,6 +1538,56 @@ function Q.yieldArea(combine,travelCourse,horizon,sampleLimit)
     return overlaps,nil,rectangles
 end
 
+-- A loaded trailer's native marker route can converge with a working header
+-- even when route centrelines do not cross. Yield before entering that sweep;
+-- never stop a rig already inside it, which must retain native clearance.
+function Q.holdWorkingDeparture(driver,forwards,speed)
+    local data=driver.queueData
+    if not data or not data.nativeDeparture or not Q.enabled(driver) or Q.owns(driver)
+            or driver.state~=driver.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL or not forwards then return false end
+    local course=driver.getCurrentCourse and driver:getCurrentCourse()
+    if not course or not driver.ppc then return false end
+    local velocity=math.max((driver.vehicle.lastSpeedReal or 0)*1000,driver:getFieldSpeed()/3.6,(speed or 0)/3.6)
+    local here=W.pose(driver.vehicle:getAIDirectionNode())
+    local cached=data.workingDepartureCheck
+    if cached and cached.course==course and velocity<=cached.velocity
+            and distance(here,cached.pose)<0.5 and g_currentMission.time-cached.time<100 then return cached.hold end
+    cached={course=course,velocity=velocity,pose=here,time=g_currentMission.time,hold=false}
+    data.workingDepartureCheck=cached
+    -- Braking at 2 m/s², plus reaction time and clearance. The trailer length
+    -- contributes to the combine's prediction until the complete rig passes.
+    local horizon=math.max(12,velocity*velocity/4+velocity+8)
+    local crossingTime=2+(horizon+AIUtil.getLength(driver.vehicle))/math.max(1,velocity)
+    local projected
+    for _,vehicle in pairs(g_currentMission.vehicleSystem and g_currentMission.vehicleSystem.vehicles or {}) do
+        if vehicle~=driver.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+            local combine=vehicle:getCpDriveStrategy()
+            if combine.states and combine.state==combine.states.WORKING and combine.course
+                    and (vehicle.lastSpeedReal or 0)*3600>0.5
+                    and distance(here,W.pose(vehicle:getAIDirectionNode()))<100 then
+                local travel=math.min(50,math.max(0,(vehicle.lastSpeedReal or 0)*1000)*crossingTime)
+                local area=Q.yieldArea(vehicle,combine.course,travel,300)
+                if area and not intersects(area,driver.vehicle) then
+                    if not projected then
+                        local _,_,rectangles=Q.yieldArea(driver.vehicle,course,horizon,300)
+                        projected=rectangles
+                    end
+                    for _,rectangle in ipairs(projected or {}) do
+                        if area(rectangle) then cached.hold=vehicle; break end
+                    end
+                end
+            end
+        end
+        if cached.hold then break end
+    end
+    if cached.hold~=data.workingDepartureHold then
+        driver:debug(cached.hold and 'Queue: holding native departure before working combine/header crossing'
+            or 'Queue: working combine/header crossing clear; resuming native departure')
+        data.workingDepartureHold=cached.hold
+    end
+    return cached.hold
+end
+
 -- Unloader-to-unloader clearance is separate from harvester end parking.
 -- Keep a live combine reservation until the complete rig reaches a parallel slot.
 local function trafficEligible(driver)
@@ -2382,6 +2461,49 @@ function Q.stoppedAdmission(driver)
     return Q.pipeEntryAligned(driver)
 end
 
+local function beginStoppedRunIn(driver,data)
+    local world,reason=W.new(driver)
+    if not world then stoppedApproachFailed(driver,reason); return true end
+    data.world=world
+    local reference=driver:getPipeOffsetReferenceNode()
+    local x,_,z=localToWorld(reference,data.x,0,data.rearZ)
+    data.goal={x=x,z=z,t=H.math.heading(reference)}
+    data.search,reason=CpUnloaderQueueSearch.new(world,data.goal)
+    if not data.search then stoppedApproachFailed(driver,reason); return true end
+    if data.overshoot then
+        data.search.directOnly=true
+        if not forwardRunIn(data.search,data.goal.t,data.runIn) then
+            stoppedApproachFailed(driver,'no forward rear run-in without circling'); return true
+        end
+    end
+    data.phase='checking'; data.work=0
+    return true
+end
+
+-- Brake before capturing a whole-rig search origin. The endpoint callback can
+-- run while the tractor is still rolling and the trailer is straightening.
+local function settleStoppedRunIn(driver,data)
+    driver:setMaxSpeed(0)
+    if g_currentMission.time>data.settleDeadline then
+        stoppedApproachFailed(driver,'rig did not settle before rear run-in'); return
+    end
+    local model,reason=W.model(driver.vehicle)
+    if not model then stoppedApproachFailed(driver,reason); return end
+    local poses=W.poses(model)
+    local stable=data.settlePoses and #poses==#data.settlePoses
+        and (driver.vehicle.lastSpeedReal or 0)*3600<0.1
+    for i,p in ipairs(poses) do
+        local before=data.settlePoses and data.settlePoses[i]
+        if not before or distance(p,before)>0.05 or math.abs(H.math.delta(p.t,before.t))>math.rad(0.5) then stable=false end
+    end
+    if not stable then
+        data.settlePoses=poses; data.settleSince=g_currentMission.time; return
+    end
+    if g_currentMission.time-data.settleSince<500 then return end
+    data.settlePoses=nil; data.settleSince=nil
+    beginStoppedRunIn(driver,data)
+end
+
 function Q.stoppedApproachLast(driver)
     local data=driver.queueStoppedApproach
     if not data or driver.course~=data.course or driver.state~=driver.states.DRIVING_TO_COMBINE then return false end
@@ -2403,21 +2525,7 @@ function Q.stoppedApproachLast(driver)
         return true
     end
     if data.phase~='approaching' then return true end
-    local world,reason=W.new(driver)
-    if not world then stoppedApproachFailed(driver,reason); return true end
-    data.world=world
-    local reference=driver:getPipeOffsetReferenceNode()
-    local x,_,z=localToWorld(reference,data.x,0,data.rearZ)
-    data.goal={x=x,z=z,t=H.math.heading(reference)}
-    data.search,reason=CpUnloaderQueueSearch.new(world,data.goal)
-    if not data.search then stoppedApproachFailed(driver,reason); return true end
-    if data.overshoot then
-        data.search.directOnly=true
-        if not forwardRunIn(data.search,data.goal.t,data.runIn) then
-            stoppedApproachFailed(driver,'no forward rear run-in without circling'); return true
-        end
-    end
-    data.phase='checking'; data.work=0
+    data.phase='settling'; data.settleDeadline=g_currentMission.time+10000
     return true
 end
 
@@ -2465,6 +2573,7 @@ function Q.updateStoppedApproach(driver)
             stoppedApproachFailed(driver,'rear entry made no progress'); return
         end
     end
+    if data.phase=='settling' then settleStoppedRunIn(driver,data); return end
     if data.phase=='checking' then
         driver:setMaxSpeed(0)
         local timer=openIntervalTimer()
@@ -2478,7 +2587,13 @@ function Q.updateStoppedApproach(driver)
         for i,p in ipairs(live) do
             local initial=data.world.startPoses[i]
             if distance(p,initial)>0.25 or math.abs(H.math.delta(p.t,initial.t))>math.rad(2) then
-                stoppedApproachFailed(driver,'rig moved while its outward/run-in route was being checked'); return
+                if not data.outward and (data.settleRetries or 0)<2 then
+                    data.settleRetries=(data.settleRetries or 0)+1
+                    W.delete(data.world); data.world=nil; data.search=nil
+                    data.phase='settling'; data.settleDeadline=g_currentMission.time+10000
+                    driver:debug('Queue: rear run-in origin moved; braking and checking again')
+                else stoppedApproachFailed(driver,'rig moved while its outward/run-in route was being checked') end
+                return
             end
         end
         local points={}
@@ -2510,7 +2625,7 @@ end
 function Q.stoppedApproachSpeed(driver,speed)
     local data=driver.queueStoppedApproach
     if not data or not Q.checkedRearEntryTarget(driver) then return speed end
-    if data.phase=='checking' then return 0 end
+    if data.phase=='checking' or data.phase=='settling' then return 0 end
     if data.phase=='driving' then return data.clear and math.min(speed,5) or 0 end
     return speed
 end
