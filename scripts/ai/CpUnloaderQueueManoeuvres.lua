@@ -1557,22 +1557,26 @@ function Q.holdWorkingDeparture(driver,forwards,speed)
     -- Braking at 2 m/s², plus reaction time and clearance. The trailer length
     -- contributes to the combine's prediction until the complete rig passes.
     local horizon=math.max(12,velocity*velocity/4+velocity+8)
-    local crossingTime=2+(horizon+AIUtil.getLength(driver.vehicle))/math.max(1,velocity)
-    local projected
+    local projected,crossingTime
     for _,vehicle in pairs(g_currentMission.vehicleSystem and g_currentMission.vehicleSystem.vehicles or {}) do
         if vehicle~=driver.vehicle and AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
             local combine=vehicle:getCpDriveStrategy()
             if combine.states and combine.state==combine.states.WORKING and combine.course
                     and (vehicle.lastSpeedReal or 0)*3600>0.5
                     and distance(here,W.pose(vehicle:getAIDirectionNode()))<100 then
+                if not projected then
+                    local _,_,rectangles=Q.yieldArea(driver.vehicle,course,horizon,300)
+                    projected=rectangles
+                    if not projected or not projected[1] then return false end
+                    -- The first rectangle encloses every attached body at the
+                    -- current pose. AIUtil length can describe only the tractor.
+                    local wholeLength=distance(projected[1][1],projected[1][4])
+                    crossingTime=2+(horizon+wholeLength)/math.max(1,velocity)
+                end
                 local travel=math.min(50,math.max(0,(vehicle.lastSpeedReal or 0)*1000)*crossingTime)
                 local area=Q.yieldArea(vehicle,combine.course,travel,300)
                 if area and not intersects(area,driver.vehicle) then
-                    if not projected then
-                        local _,_,rectangles=Q.yieldArea(driver.vehicle,course,horizon,300)
-                        projected=rectangles
-                    end
-                    for _,rectangle in ipairs(projected or {}) do
+                    for _,rectangle in ipairs(projected) do
                         if area(rectangle) then cached.hold=vehicle; break end
                     end
                 end

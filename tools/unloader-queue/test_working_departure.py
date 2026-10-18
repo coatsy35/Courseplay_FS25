@@ -64,6 +64,21 @@ class WorkingDepartureTests(unittest.TestCase):
             handovers=0; u:onLastWaypointPassed(); assert(handovers==1)
         ''')
 
+    def test_prediction_uses_attached_body_length_not_native_tractor_length(self):
+        self.lua.execute('''
+            AIUtil.getLength=function() error('tractor-only length used for complete departure') end
+            local native=Q.yieldArea; local horizons={}
+            Q.yieldArea=function(vehicle,course,horizon,limit)
+                if vehicle==harvester then horizons[#horizons+1]=horizon end
+                return native(vehicle,course,horizon,limit)
+            end
+            Q.holdWorkingDeparture(u,true,32)
+            trailer.size.length=trailer.size.length+20
+            g_currentMission.time=g_currentMission.time+101
+            Q.holdWorkingDeparture(u,true,32)
+            assert(#horizons==2 and horizons[2]>horizons[1]+2)
+        ''')
+
     def test_manual_departure_intent_survives_crossing_wait(self):
         self.lua.execute('''
             local manual=true
