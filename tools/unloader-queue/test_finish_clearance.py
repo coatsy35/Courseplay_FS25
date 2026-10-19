@@ -464,8 +464,182 @@ class FinishClearanceTests(unittest.TestCase):
             u:unloadMovingCombine()
             assert(reversed and not u.combineToUnload and u.state==u.states.MOVING_BACK)
             for i=1,20 do advance(); assert(not starts and not finishes) end
+            -- Native reverse has physically cleared the reserved finish lane.
+            place(65,-60,0); v.lastSpeedReal=0
             u.state=u.states.IDLE
             plan(); assert(starts==1 and not finishes)
+        ''')
+
+    def near_final_release(self):
+        self.lua.execute('''
+            c.state=c.states.WORKING; c.unloadState=nil
+            c.course:setCurrentWaypointIx(c.course:getNumberOfWaypoints()-10)
+            move(-20)
+            u.state=u.states.UNLOADING_MOVING_COMBINE; u.combineToUnload=harvester
+            u.isServingPosition=function() return true end
+            u.ppc.setNormalLookaheadDistance=function() end
+            u.startMovingBackFromCombine=function(self,state,target,hold)
+                assert(target==harvester and not hold)
+                self.state=state; state.properties.vehicle=target
+                reversed=(reversed or 0)+1
+            end
+            assert(Q.releaseFinishedCombine(u))
+            assert(reversed==1 and u.state==u.states.MOVING_BACK and not u.combineToUnload)
+            assert(not Q.releaseFinishedCombine(u) and reversed==1)
+            assert(not Q.holdFinalRelease(u),'priority wait prevented native reverse')
+            u.state=u.states.IDLE
+        ''')
+
+    def test_empty_before_last_waypoint_reverses_then_waits_for_physical_length(self):
+        self.near_final_release()
+        self.lua.execute('''
+            assert(Q.holdFinalRelease(u) and not u:isAllowedToBeCalled())
+            Q.tick(u); assert(u.speed==0 and u.state==u.states.IDLE)
+            local pause=u.queueData.finalRelease
+            -- Waypoint jumps and sideways displacement are not forward clearance.
+            c.course:setCurrentWaypointIx(c.course:getNumberOfWaypoints())
+            movePose({x=30,z=-20,t=0}); assert(Q.holdFinalRelease(u))
+            movePose({x=0,z=-20+pause.length-0.1,t=0}); assert(Q.holdFinalRelease(u))
+            move(-20+pause.length); assert(not Q.holdFinalRelease(u))
+            assert(not u.queueData.finalRelease)
+        ''')
+
+    def test_final_release_wait_cannot_deadlock_next_load_or_restarted_combine(self):
+        for change in ('fill=100; c.isWaitingForUnload=function() return true end',
+                       'harvester.active=false', 'c.fieldWorkCourse={}',
+                       'harvester.getCpDriveStrategy=function() return nil end'):
+            with self.subTest(change=change):
+                self.setUp(); self.near_final_release()
+                self.lua.execute(change+'''
+                    assert(not Q.holdFinalRelease(u))
+                    assert(not u.queueData.finalRelease)
+                ''')
+
+    def test_final_lane_reserves_header_and_complete_parked_trailer(self):
+        self.lua.execute('''
+            c.state=c.states.WORKING; c.unloadState=nil
+            c.course:setCurrentWaypointIx(c.course:getNumberOfWaypoints()-10); move(-20)
+            local model=W.model(v)
+            -- Tractor has cleared the lane, but its trailer still crosses it.
+            local goal={x=30,z=12,t=math.pi/2}
+            local poses=W.settledPoses(model,goal)
+            local area=assert(Q.finishLane(c))
+            assert(not area(W.rectangle(model.bodies[1],poses[1])))
+            assert(area(W.rectangle(model.bodies[2],poses[2])))
+            assert(not Q.stagingClear(u,poses,model))
+            assert(Q.stagingClear(u,W.settledPoses(model,{x=65,z=-60,t=0}),model))
+            harvester.active=false
+            assert(Q.stagingClear(u,poses,model),'completed job left stale reservation')
+        ''')
+
+    def test_already_parked_final_lane_blocker_gets_persistent_checked_yield(self):
+        self.lua.execute('''
+            place(0,24,math.pi/2); Q.take(u,'prepare')
+            AIUtil.isStopped=function() return true end
+            includeHarvesterCollision()
+            Q.clearFinishTraffic(c)
+            local data=u.queueData
+            assert(data.operation=='yield' and data.yieldRequests[harvester])
+            local request=data.yieldRequests[harvester]
+            assert(request.finishCourse==c.fieldWorkCourse and request.turnClearance)
+            request.clearSince=-201; request.checked=-201
+            Q.clearFinishTraffic(c)
+            assert(data.yieldRequests[harvester]==request and request.checked==-201)
+            -- Moving the tractor alone does not release a still-crossing trailer.
+            place(30,12,math.pi/2); Q.yieldTarget(u,true)
+            assert(data.yieldRequests[harvester])
+            place(65,-60,0); c.near=false
+            Q.yieldTarget(u,true); g_currentMission.time=g_currentMission.time+2001
+            Q.yieldTarget(u,true)
+            assert(not data.yieldRequests or not data.yieldRequests[harvester])
+            assert(Q.stagingClear(u,W.poses(W.model(v)),W.model(v)))
+        ''')
+
+    def test_short_final_row_released_trailer_can_clear_before_combine_parks(self):
+        self.near_final_release()
+        self.lua.execute('''
+            -- The remaining row is shorter than the required forward wait.
+            move(-15); place(0,24,math.pi/2)
+            c.state=c.states.UNLOADING_ON_FIELD
+            c.unloadState=c.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
+            AIUtil.isStopped=function() return true end
+            includeHarvesterCollision()
+            assert(Q.holdFinalRelease(u))
+            assert(Q.clearFinishTraffic(c))
+            assert(not u.queueData.finalRelease and u.queueData.operation=='yield')
+            assert(not Q.holdFinalRelease(u))
+            local goal=assert(Q.yieldTarget(u))
+            Q.request(u,goal); local data=u.queueData
+            local done,path,reason
+            for i=1,300000 do
+                done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
+                if done then break end
+            end
+            assert(done and path,reason or 'final-lane escape search did not complete')
+            Q.startRoute(data,path)
+            local poses=W.poses(data.world.model)
+            for i=2,#path do
+                poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+            end
+            for i,p in ipairs(poses) do
+                local node=i==1 and v.rootNode or trailer.rootNode
+                node.x=p.x; node.z=p.z; node.t=p.t
+            end
+            local x,z=H.math.position(v.rootNode,0,-3.3)
+            trailer.joint.node.x=x; trailer.joint.node.z=z; trailer.joint.node.t=v.rootNode.t
+            assert(Q.onLast(u)); c.near=false
+            Q.yieldTarget(u,true); g_currentMission.time=g_currentMission.time+2001
+            Q.yieldTarget(u,true)
+            assert(data.operation=='prepare' and not Q.clearFinishTraffic(c))
+            assert(Q.stagingClear(u,W.poses(W.model(v)),W.model(v)))
+        ''')
+
+    def test_full_post_reverse_trailer_keeps_native_departure_after_finish_escape(self):
+        self.near_final_release()
+        self.lua.execute('''
+            move(-15); place(0,24,math.pi/2)
+            c.state=c.states.UNLOADING_ON_FIELD
+            c.unloadState=c.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
+            AIUtil.isStopped=function() return true end
+            includeHarvesterCollision()
+            local data=u.queueData; data.nativeDeparture=true
+            u.getAllTrailersFull=function() return true end
+            u.state=u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL
+            u.invertedStartPositionMarkerNode={x=100,z=100,t=0}
+            assert(not Q.clearFinishTraffic(c))
+            assert(data.finalRelease and not Q.owns(u))
+            g_currentMission.time=g_currentMission.time+10001
+            assert(Q.clearFinishTraffic(c))
+            assert(not data.finalRelease and Q.departureClearanceActive(u) and data.nativeDeparture)
+            local replanned=0
+            u.startPathfindingToInvertedGoalPositionMarker=function() replanned=replanned+1 end
+            place(65,-60,0); c.near=false
+            Q.yieldTarget(u,true); g_currentMission.time=g_currentMission.time+2001
+            Q.yieldTarget(u,true)
+            assert(replanned==1 and data.nativeDeparture and not Q.owns(u))
+        ''')
+
+    def test_unavailable_finish_geometry_does_not_reserve_entire_field(self):
+        self.lua.execute('''
+            local native=W.rigidModel; W.rigidModel=function() return nil end
+            place(65,-60,0); Q.take(u,'prepare')
+            assert(not Q.finishLane(c) and not Q.clearFinishTraffic(c))
+            assert(Q.stagingClear(u,W.poses(W.model(v)),W.model(v)))
+            assert(u.queueData.operation=='prepare')
+            W.rigidModel=native
+        ''')
+
+    def test_finish_lane_never_takes_native_unloading_or_reverse(self):
+        self.lua.execute('''
+            AIUtil.isStopped=function() return true end
+            for _,state in ipairs({u.states.UNLOADING_MOVING_COMBINE,u.states.MOVING_BACK,
+                    u.states.MOVING_BACK_WITH_TRAILER_FULL}) do
+                place(0,24,math.pi/2); Q.data(u); u.state=state
+                u.combineToUnload=harvester
+                Q.clearFinishTraffic(c)
+                assert(u.state==state and u.combineToUnload==harvester)
+                assert(not u.queueData.yieldRequests)
+            end
         ''')
 
     def test_late_obstacle_and_native_stop_do_not_reset_progress_timeout(self):

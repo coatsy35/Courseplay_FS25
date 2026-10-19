@@ -94,7 +94,7 @@ def check_queue(packager):
         if path == 'modDesc.xml' and {e.attrib['filename'] for e in removed} != MODULES:
             raise RuntimeError('Queue module load inventory incomplete')
     hooks = (release.ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
-    methods = set(re.findall(r'function ([UCJ]):([A-Za-z]+)\(', hooks))
+    methods = set(re.findall(r'function ([UCJPK]):([A-Za-z]+)\(', hooks))
     expected = {('U', name) for name in ('setAIVehicle', 'update', 'getDriveData', 'isAllowedToBeCalled', 'call',
         'startUnloadingTrailers', 'onLastWaypointPassed', 'startPathfindingToWaitingCombine',
         'onPathfindingFailedToStationaryTarget', 'onPathfindingDoneToWaitingCombine',
@@ -110,6 +110,8 @@ def check_queue(packager):
     expected |= {('U', name) for name in ('isOkToStartUnloadingCombine', 'startUnloadingCombine', 'unloadMovingCombine', 'isPathfindingNeeded')}
     # Ordinary full-wait overshoot: native recovery and rear path, independent of final parking.
     expected |= {('U', 'isInFrontAndAlignedToMovingCombine')}
+    # Loaded marker routes retain off-field preference and proximity clearance.
+    expected |= {('P', 'findPathToNode'), ('K', 'init')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
     print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)

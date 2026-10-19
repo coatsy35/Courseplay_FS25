@@ -62,6 +62,40 @@ local function finalApproach(combine)
     if remaining<=120 then return remaining,goal end
 end
 
+-- Queue parking must leave the final straight, unloading lane and header exit
+-- free before the combine reaches its last waypoint. Native unloaders may still
+-- service that space; this is a waiting-slot reservation, not a collision bypass.
+function Q.finishLane(combine)
+    if not combine or not combine.vehicle or not combine.vehicle.getIsCpActive
+            or not combine.states or not combine.isAttachedHarvester
+            or not combine.isChopper or not combine.isTurning or not combine.vehicle:getIsCpActive() then return end
+    local remaining,goal=finalApproach(combine)
+    if not remaining then return end
+    local model=W.rigidModel(combine.vehicle)
+    if not model then return end
+    local radius=combine.turningRadius or 0
+    local left,right=-math.huge,math.huge
+    for _,rect in ipairs(rigidRectangles(model,{x=0,z=0,t=0},0)) do
+        for _,p in ipairs(rect) do left=math.max(left,p.x); right=math.min(right,p.x) end
+    end
+    local back=model.back-math.max(remaining,35)
+    local front=model.front+40+radius
+    local area=G.rectangle({x=goal.x,z=goal.z,heading=goal.t},
+        {width=left-right+2*radius,length=front-back,xOffset=(left+right)/2,zOffset=(front+back)/2},2)
+    return function(rectangle) return G.overlap(rectangle,area) end
+end
+
+function Q.finishLanes()
+    local areas={}
+    for _,vehicle in pairs(g_currentMission.vehicleSystem and g_currentMission.vehicleSystem.vehicles or {}) do
+        if vehicle.spec_combine and vehicle.getCpDriveStrategy then
+            local area=Q.finishLane(vehicle:getCpDriveStrategy())
+            if area then areas[#areas+1]=area end
+        end
+    end
+    return areas
+end
+
 function Q.holdFinalApproach(combine)
     local remaining,goal=finalApproach(combine)
     if not remaining or remaining==0 then return end
@@ -450,6 +484,7 @@ function Q.driveFinishClearance(combine)
             end
         end
         data.waitingTrailer=nil
+        if Q.clearFinishTraffic(combine) then combine:setMaxSpeed(0); return end
         data.clearanceStarted=data.clearanceStarted or time
     end
     local here=W.pose(combine.vehicle:getAIDirectionNode())
@@ -560,12 +595,22 @@ function Q.releaseFinishedCombine(driver)
             and driver.state~=driver.states.UNLOADING_MOVING_COMBINE) then return false end
     if combine:getIsCpActive() then
         local c=combine:getCpDriveStrategy()
-        if not c or not c.isWaitingForUnloadAfterCourseEnded or not c:isWaitingForUnloadAfterCourseEnded()
-                or not c.combineController or c.combineController:getFillLevel()>=0.01
-                or c:alwaysNeedsUnloader() then return false end
+        if not c or not c.isWaitingForUnloadAfterCourseEnded or not c.combineController
+                or c.combineController:getFillLevel()>=0.01 or c:alwaysNeedsUnloader() then return false end
+        local nearing=Q.finishLane(c)~=nil
+        if not c:isWaitingForUnloadAfterCourseEnded() and not nearing then return false end
+        local model=nearing and W.rigidModel(combine)
+        if model then
+            Q.data(driver).finalRelease={vehicle=combine,strategy=c,course=c.fieldWorkCourse,
+                origin=W.pose(combine:getAIDirectionNode()),length=model.front-model.back}
+        end
     elseif not combine.queueFinishedEmptyCombine then return false end
     local leave=Q.atDepartureThreshold(driver) or driver:isDriveUnloadNowRequested()
-    if not leave then leave=not Q.hasRemainingCombine(driver,combine) end
+    if not leave then
+        local c=combine:getIsCpActive() and combine:getCpDriveStrategy()
+        local stillHarvesting=c and not c:isWaitingForUnloadAfterCourseEnded()
+        leave=not stillHarvesting and not Q.hasRemainingCombine(driver,combine)
+    end
     Q.cancel(driver)
     local data=driver.queueData
     if data then
@@ -578,6 +623,29 @@ function Q.releaseFinishedCombine(driver)
     driver:startMovingBackFromCombine(leave and driver.states.MOVING_BACK_WITH_TRAILER_FULL
         or driver.states.MOVING_BACK,combine,false)
     return true
+end
+
+-- Reverse clearance remains native. Afterwards the released rig waits until
+-- the harvester has moved a complete body/header length or completed parking.
+-- A new stationary unload request releases the wait, avoiding a single-trailer
+-- deadlock when only a short piece of the final row remains to harvest.
+function Q.holdFinalRelease(driver)
+    local data=driver.queueData
+    local pause=data and data.finalRelease
+    if not pause then return false end
+    local combine=pause.vehicle:getCpDriveStrategy()
+    local clear=not pause.vehicle:getIsCpActive() or combine~=pause.strategy
+        or combine.fieldWorkCourse~=pause.course
+    if not clear then
+        local here=W.pose(pause.vehicle:getAIDirectionNode())
+        local progress=(here.x-pause.origin.x)*math.sin(pause.origin.t)
+            +(here.z-pause.origin.z)*math.cos(pause.origin.t)
+        local needsUnload=combine.combineController:getFillLevel()>=0.01
+            and combine.isWaitingForUnload and combine:isWaitingForUnload()
+        clear=progress>=pause.length or needsUnload
+    end
+    if clear then data.finalRelease=nil; return false end
+    return not Q.nativeClearanceActive(driver)
 end
 
 -- Preserve the serviced combine across native release/reversing/pathfinding.
@@ -687,15 +755,17 @@ function Q.watchNativeDeparture(driver,speed,held,forwards)
     local collision=driver.collisionAvoidanceController
     local warning=collision and collision:isCollisionWarningActive()
     local proximity=driver.proximityController
-    local gap
+    local gap,vehicle,object,terrain
     if proximity then
-        if forwards==false then gap=proximity:checkBlockingVehicleBack()
-        else gap=proximity:checkBlockingVehicleFront() end
+        if forwards==false then gap,vehicle,object,terrain=proximity:checkBlockingVehicleBack()
+        else gap,vehicle,object,terrain=proximity:checkBlockingVehicleFront() end
     end
+    local staticObstacle=not vehicle and (object~=nil or terrain==true)
     local ix=driver.ppc and driver.ppc:getRelevantWaypointIx()
-    driver:debug('Queue: native departure stalled %.1f s at %.1f, %.1f waypoint %s speed %s collision %s obstacle %s; retry %d/2',
-        (time-watch.time)/1000,pose.x,pose.z,tostring(ix),tostring(speed),tostring(warning),tostring(gap),watch.attempts)
-    if warning or (gap and gap<15) or watch.attempts>=2 then return false end
+    driver:debug('Queue: native departure stalled %.1f s at %.1f, %.1f waypoint %s speed %s collision %s obstacle %s (%s); retry %d/2',
+        (time-watch.time)/1000,pose.x,pose.z,tostring(ix),tostring(speed),tostring(warning),tostring(gap),
+        vehicle and 'vehicle' or staticObstacle and 'static' or 'unknown',watch.attempts)
+    if warning or (gap and gap<15 and not staticObstacle) or watch.attempts>=2 then return false end
     watch.attempts=watch.attempts+1; watch.time=time
     driver:setMaxSpeed(0)
     driver:startUnloadingTrailers()
@@ -707,6 +777,40 @@ local function parkedQueueTrailer(driver)
     return data and Q.owns(driver) and data.operation=='prepare' and not data.nativeDeparture
         and not Q.atDepartureThreshold(driver) and not driver:isDriveUnloadNowRequested()
         and not driver.combineToUnload and AIUtil.isStopped(driver.vehicle)
+end
+
+-- A rig parked before the finish reservation became active must be asked to
+-- clear explicitly: a stationary combine may never fire a proximity callback.
+function Q.clearFinishTraffic(combine)
+    local area=Q.finishLane(combine)
+    if not area then return false end
+    local pending=false
+    for driver,data in pairs(Q.members) do
+        local request=data.yieldRequests and data.yieldRequests[combine.vehicle]
+        local released=data.finalRelease and data.finalRelease.strategy==combine
+            and not Q.nativeClearanceActive(driver) and AIUtil.isStopped(driver.vehicle)
+        if not request and (parkedQueueTrailer(driver) or released) then
+            local blocked=false
+            for _,item in ipairs(W.currentBodies(driver.vehicle) or {}) do
+                if area(W.rectangle(item.body,item.pose)) then blocked=true end
+            end
+            if blocked then
+                if data.nativeDeparture then Q.requestDepartureClearance(combine,driver,area)
+                else Q.priority(driver,combine.vehicle) end
+                request=data.yieldRequests and data.yieldRequests[combine.vehicle]
+                if request then
+                    data.finalRelease=nil
+                    request.finishCourse=combine.fieldWorkCourse
+                    request.turnClearance=area; request.checked=nil
+                    request.turn=nil; request.turnContext=nil
+                    data.nextAttempt=0
+                    driver:debug('Queue: clearing reserved final lane for %s',CpUtil.getName(combine.vehicle))
+                end
+            end
+        end
+        pending=pending or (request and request.finishCourse==combine.fieldWorkCourse) or false
+    end
+    return pending
 end
 
 local function ordinaryTravelTurn(combine)
@@ -1096,7 +1200,7 @@ function Q.resumeNativeDeparture(driver,reason)
     driver:startPathfindingToInvertedGoalPositionMarker()
 end
 
-local function requestDepartureClearance(combine,driver,area)
+function Q.requestDepartureClearance(combine,driver,area)
     local data=driver.queueData
     if not data or not data.nativeDeparture or not Q.enabled(driver)
             or not driver.vehicle:getIsCpActive() then return false end
@@ -1154,7 +1258,7 @@ end
 -- An existing request must keep its search, progress and clearance timer.
 local function requestTurnClearance(combine,driver,area)
     local data=driver.queueData
-    if data and data.nativeDeparture then return requestDepartureClearance(combine,driver,area) end
+    if data and data.nativeDeparture then return Q.requestDepartureClearance(combine,driver,area) end
     if not data or not Q.owns(driver)
             or (data.operation~='yield' and not parkedQueueTrailer(driver)) then return false end
     local request=data.yieldRequests and data.yieldRequests[combine.vehicle]
@@ -1925,7 +2029,9 @@ function Q.yieldTarget(driver,checkOnly)
     local areas,combine,anyBlocked,preferForward={},nil,false,false
     local time=g_currentMission.time
     for vehicle,request in pairs(data.yieldRequests or {}) do
-        if not AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+        if not AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle)
+                or (request.finishCourse and (vehicle:getCpDriveStrategy().fieldWorkCourse~=request.finishCourse
+                    or not Q.finishLane(vehicle:getCpDriveStrategy()))) then
             data.yieldRequests[vehicle]=nil
         else
             local strategy=vehicle:getCpDriveStrategy()

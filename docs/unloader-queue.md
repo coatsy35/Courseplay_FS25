@@ -1,3 +1,59 @@
+## Build 3051 - final-lane priority and loaded return clearance
+
+The 19 October 3049 log shows trailer /323 emptying CR11/318 at
+10:31:02.054, before the combine reaches its final waypoint. Native moving
+unload immediately becomes idle, and queue preparation parks the trailer at
+10:31:37.671. The combine resumes its last straight at 10:31:42.802 and enters
+final unloading at 10:31:59.425. From 10:32:36 its parking routes repeatedly
+fail on nearby trailer/header geometry; one rejection explicitly names /323.
+The finished-combine reverse rule did not cover that earlier emptying, and
+ordinary turn reservations did not protect the final straight. Evidence:
+out/incident-3049-finish-crossing/log-2026-10-19T09-58-36-856Z.txt.
+
+Emptying on the final straight now uses native reverse clearance before any
+new assignment or waiting position. Afterwards the trailer waits for physical
+forward travel of a complete combine/header length or successful completion.
+A new unload request, replaced strategy/course or stopped job releases stale
+waits. If the reversed trailer itself obstructs final parking, it must clear
+through the existing checked yield first; loaded trailers retain their native
+departure and return to native marker pathfinding after that clearance.
+
+Waiting positions now exclude the final approach, unfolded header and exit
+space before the last waypoint. Cached targets and active preparation routes
+are rechecked. An already parked obstructing trailer receives an explicit,
+persistent finish-lane clearance request; the combine waits for it. Missing
+geometry does not create a field-wide reservation. These rules apply only to
+eligible grain harvesters on their original final straight/end sequence.
+Ordinary unloading, native reverse, configurable fullness and physical
+lead-first finishing remain separate.
+
+The same log shows loaded trailer /322 finding a native return route at
+10:29:53.453 after retries reduced off-field cost to zero. At 10:30:35.101 it
+is stationary at waypoint 48, (-399.5, -619.3), with a 1.196 m proximity
+obstruction. The unchanged pose repeats for over 27 minutes. The screenshot
+shows the rig by the verge/tree; the log establishes the proximity stop,
+not the identity of the object. The watchdog treated every close obstacle
+as a vehicle that could eventually move away.
+
+Only native loaded return-to-marker requests now retain the default off-field
+cost across retries, with a bounded exemption for the marker alignment. Their
+native tractor and first reversing implement collision boxes include 2 m
+clearance (normal proximity stop distance plus 0.5 m), replacing 0.25 m. This
+aligns route planning with braking; it is not a hard field-boundary rule or
+proof of clearance for additional articulated trailers, which native routing
+does not model independently. A confirmed non-vehicle/terrain obstruction
+can trigger at most two stationary replans. Vehicle warnings, unknown blockers,
+priority holds, native backup, collision brakes and the actual AD handover
+remain intact. No queue-created handover or unchecked motion is introduced.
+
+Regressions cover early final-row emptying, actual forward displacement,
+short-row reverse/yield deadlock, a complete articulated escape, full-trailer
+native resumption, whole-trailer lane occupancy, missing geometry, static
+versus vehicle obstruction, retry costs, marker-only exemption and unrelated
+native paths. Build 3050's measured AD-arrival fix is retained. Source and
+extracted ZIP release checks are mandatory; an in-game run of these 3049
+incidents is still required.
+
 ## Build 3050 - measured AD arrival clearance
 
 The 19 October 3049 log repeatedly rejects the same 26 m straight pull-off

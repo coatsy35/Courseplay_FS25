@@ -438,6 +438,110 @@ class NativeDepartureTests(unittest.TestCase):
             assert(Q.watchNativeDeparture(u,15,false,true) and starts==2)
         ''')
 
+    def test_static_obstacle_replans_with_brakes_retained_but_vehicle_wait_does_not(self):
+        self.departure_watch_fixture()
+        self.lua.execute('''
+            obstacle=1.196
+            local blocker={}; local tree={}
+            u.proximityController.checkBlockingVehicleFront=function() return obstacle,blocker,tree,false end
+            g_currentMission.time=30000
+            assert(not Q.watchNativeDeparture(u,0,false,true) and starts==1)
+            blocker=nil; g_currentMission.time=60000
+            assert(Q.watchNativeDeparture(u,0,false,true) and starts==2)
+            assert(u.state==u.states.WAITING_FOR_PATHFINDER and not Q.owns(u))
+            finishSearch(true)
+            g_currentMission.time=90000
+            assert(Q.watchNativeDeparture(u,0,false,true) and starts==3); finishSearch(true)
+            g_currentMission.time=120000
+            assert(not Q.watchNativeDeparture(u,0,false,true) and starts==3)
+            assert(not result():find('handover'),'static recovery invented an AD handover')
+        ''')
+
+    def marker_clearance_fixture(self):
+        # Exercise the production controller request and constraints constructor.
+        # Engine scanning/collision and asynchronous search are the boundaries.
+        self.lua.execute((ROOT/'scripts/ai/PathfinderController.lua').read_text())
+        self.lua.execute((ROOT/'scripts/pathfinder/PathfinderConstraints.lua').read_text())
+        self.lua.execute('''
+            Logger=setmetatable({level={debug=1}},{__call=function() return {debug=function() end} end})
+            CpDebug={DBG_PATHFINDER=1}
+            AIUtil.getTurningRadius=function() return 10 end
+            AIUtil.getTowBarLength=function() return 6 end
+            u.vehicle.size={width=3}
+            u.vehicle.getCpSettings=function() return {penaltyFactor={getValue=function() return 1 end}} end
+            PathfinderContext.preferredPathAffinity=5
+            contextFields={'maxFruitPercent','offFieldPenalty','useFieldNum','allowReverse','maxIterations',
+                'areaToIgnoreOffFieldPenalty'}
+            PathfinderContext=setmetatable({defaultOffFieldPenalty=7.5,preferredPathAffinity=5},{__call=function(_,vehicle)
+                local ctx={_vehicle=vehicle}
+                for _,key in ipairs(contextFields) do
+                    ctx[key]=function(self,value) self['_'..key]=value; return self end
+                end
+                return ctx
+            end})
+            PathfinderUtil.NodeArea=function(node,x,z,width,length)
+                return {node=node,x=x,z=z,width=width,length=length,
+                    contains=function(self,px,pz)
+                        return px>self.x and px<self.x+self.width and pz>self.z and pz<self.z+self.length
+                    end}
+            end
+            PathfinderUtil.VehicleData=function()
+                local tractorBox={width=1.75,length=3.25,xOffset=0,zOffset=0}
+                local trailerBox={width=1.75,length=6.25,xOffset=0,zOffset=-6}
+                return {getVehicleOverlapBoxParams=function() return tractorBox end,
+                    getTowedImplementOverlapBoxParams=function() return trailerBox end}
+            end
+            PathfinderCollisionDetector=function() return {} end
+            PathfinderUtil.startPathfindingFromVehicleToNode=function(node,x,z,ctx)
+                captured=ctx; checked=PathfinderConstraints(ctx)
+                return {isActive=function() return true end},{done=false}
+            end
+            u.pathfinderController=setmetatable({debug=function() end,error=function() error('controller') end},PathfinderController)
+            g_time=0
+        ''')
+        self.lua.execute((ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text())
+
+    def test_marker_route_keeps_field_cost_and_braking_clearance_on_every_retry(self):
+        self.marker_clearance_fixture()
+        self.lua.execute('''
+            u:startUnloadingTrailers()
+            assert(captured.queueDepartureClearance)
+            local exit=captured._areaToIgnoreOffFieldPenalty
+            assert(exit:contains(4.5,-27) and exit:contains(4.5,0))
+            assert(not exit:contains(4.5,100) and not exit:contains(30,-27))
+            for _,cost in ipairs({7.5,5.25,3,0}) do
+                captured:offFieldPenalty(cost)
+                assert(u.pathfinderController:retry(captured))
+                assert(checked.offFieldPenalty==7.5)
+                local tractor=checked.vehicleData:getVehicleOverlapBoxParams()
+                local trailer=checked.vehicleData:getTowedImplementOverlapBoxParams()
+                -- An obstacle 1.196 m beyond either body's side must now overlap
+                -- the checked envelope; a 2.1 m gap remains outside it.
+                for _,box in ipairs({tractor,trailer}) do
+                    assert(box.width>1.5+1.196 and box.width<1.5+2.1)
+                end
+                assert(captured._maxFruitPercent==10 and captured._allowReverse)
+            end
+        ''')
+
+    def test_other_native_paths_keep_original_padding_and_retry_cost(self):
+        for excluded in ('u.queueData.nativeDeparture=nil',
+                         'u.invertedStartPositionMarkerNode=99',
+                         'u.augerWagon=true'):
+            with self.subTest(excluded=excluded):
+                self.setUp(); self.marker_clearance_fixture()
+                self.lua.execute('''
+                    Q.data(u).nativeDeparture=true
+                    local pc=u.pathfinderController
+                    pc:registerListeners(u,u.onPathfindingDoneToInvertedGoalPositionMarker)
+                '''+excluded+'''
+                    local ctx=PathfinderContext(u.vehicle):maxFruitPercent(10):offFieldPenalty(0)
+                    pc:findPathToNode(ctx,42,4.5,-27,3)
+                    assert(not captured.queueDepartureClearance and checked.offFieldPenalty==0)
+                    assert(checked.vehicleData:getVehicleOverlapBoxParams().width==1.75)
+                    assert(checked.vehicleData:getTowedImplementOverlapBoxParams().width==1.75)
+                ''')
+
     def test_native_move_away_returning_idle_resumes_departure_not_preparation(self):
         self.lua.execute('''
             u:startUnloadingTrailers(); u.state=u.states.MOVING_AWAY_FROM_OTHER_VEHICLE

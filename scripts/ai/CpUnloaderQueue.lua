@@ -420,11 +420,13 @@ end
 
 function Q.stagingClear(driver,poses,model)
     Q.pruneTurnReservations()
+    local finishAreas=Q.finishLanes()
     local origin=arrivalOrigin(driver)
     local marker=driver.invertedStartPositionMarkerNode
     local returnOrigin=marker and W.pose(marker)
     for i,body in ipairs(model.bodies) do
         local rectangle=W.rectangle(body,poses[i],1)
+        for _,area in ipairs(finishAreas) do if area(rectangle) then return false end end
         for _,markerOrigin in ipairs({origin or false,returnOrigin or false}) do
             if markerOrigin then
                 -- Closest point on the complete oriented body, including edges
@@ -505,7 +507,10 @@ function Q.target(driver)
         if saved and saved.combine==assignment.combine and saved.course==course
                 and saved.successor==assignment.successor then
             stage=math.max(stage,saved.phase) -- no oscillation as measured intake varies
-            if stage==saved.phase and saved.goal and Q.targetAvailable(driver,saved.goal) then return saved.goal end
+            if stage==saved.phase and saved.goal and Q.targetAvailable(driver,saved.goal) then
+                local model=W.model(driver.vehicle)
+                if model and saved.goal.accept(W.settledPoses(model,saved.goal),model) then return saved.goal end
+            end
         end
         local gap=distance(W.pose(driver.vehicle:getAIDirectionNode()),combine.position)
         local lag=stage==3 and math.max(27,AIUtil.getLength(driver.vehicle)+8)
@@ -827,6 +832,7 @@ function Q.tick(driver)
         Q.cancel(driver); data.operation=nil; data.departureClearance=nil
     end
     Q.refresh()
+    if Q.holdFinalRelease(driver) then driver:setMaxSpeed(0); return end
     if Q.owns(driver) and Q.holdForHarvesterBypass(driver) then return end
     local departureClearance=Q.departureClearanceActive(driver)
     if data.nativeDeparture and driver.state~=driver.states.IDLE and not departureClearance then return end
@@ -979,6 +985,10 @@ function Q.speed(driver)
             local courseIx=math.max(1,driver.ppc:getRelevantWaypointIx())
             local ix=data.courseToPath and data.courseToPath[courseIx] or courseIx
             if clear then clear,reason=Q.routeClear(data,poses,ix) end
+            if clear and data.operation=='prepare' and data.goal and data.goal.accept
+                    and not data.goal.accept(W.settledPoses(data.world.model,data.goal),data.world.model) then
+                clear,reason=false,'waiting destination now reserved'
+            end
             data.liveReason=reason
             data.liveClear=clear
         end

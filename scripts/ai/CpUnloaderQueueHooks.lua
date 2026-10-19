@@ -4,6 +4,45 @@ local Q = CpUnloaderQueue
 local U = AIDriveStrategyUnloadCombine
 local C = AIDriveStrategyCombineCourse
 
+-- Loaded return routes need room for the native proximity brake (1.5 m),
+-- not just the pathfinder's 0.25 m collision padding. Scope both changes to
+-- this exact marker request; combine approaches and other drivers stay native.
+if PathfinderController and PathfinderConstraints then
+    local P,K=PathfinderController,PathfinderConstraints
+    local findNode=P.findPathToNode
+    function P:findPathToNode(context,node,x,z,...)
+        local driver=self.callbackObject
+        if driver and driver.pathfinderController==self and Q.enabled(driver)
+                and driver.queueData and driver.queueData.nativeDeparture
+                and node==driver.invertedStartPositionMarkerNode
+                and self.callbackSuccessFunction==driver.onPathfindingDoneToInvertedGoalPositionMarker then
+            context.queueDepartureClearance=true
+            -- The destination may legitimately lie outside the field. Restrict
+            -- the exemption to its final alignment, keeping the field cost elsewhere.
+            local length=AIUtil.getLength(driver.vehicle)
+            local width=math.max(8,driver.vehicle.size.width+4)
+            context:areaToIgnoreOffFieldPenalty(PathfinderUtil.NodeArea(node,x-width/2,
+                math.min(z,0)-length,width,math.abs(z)+2*length))
+        end
+        return findNode(self,context,node,x,z,...)
+    end
+    local constraintsInit=K.init
+    function K:init(context,...)
+        constraintsInit(self,context,...)
+        if context.queueDepartureClearance then
+            self.offFieldPenalty=math.max(self.offFieldPenalty,PathfinderContext.defaultOffFieldPenalty)
+            self.initialOffFieldPenalty=self.offFieldPenalty
+            local margin=(ProximityController and ProximityController.stopThresholdNormal or 1.5)+0.5
+            for _,box in pairs({self.vehicleData:getVehicleOverlapBoxParams(),
+                    self.vehicleData:getTowedImplementOverlapBoxParams()}) do
+                box.width=box.width+margin-0.25; box.length=box.length+margin-0.25
+            end
+            self.logger:debug(self.vehicle,
+                'Queue: loaded return keeps off-field penalty %.1f and %.1f m obstacle clearance',self.offFieldPenalty,margin)
+        end
+    end
+end
+
 local setVehicle = U.setAIVehicle
 function U:setAIVehicle(vehicle,...)
     local result=setVehicle(self,vehicle,...)
@@ -62,10 +101,11 @@ function U:getDriveData(...)
     local pocketHold=Q.holdPocketDeparture(self,forwards,speed)
     local trafficHold=Q.trailerTrafficHold(self)
     local departureHold=Q.holdWorkingDeparture(self,forwards,speed)
-    if trafficHold or pocketHold or departureHold then speed=0 end
+    local finalReleaseHold=Q.holdFinalRelease(self)
+    if trafficHold or pocketHold or departureHold or finalReleaseHold then speed=0 end
     local incomingHold=Q.holdIncomingTurn(self,speed) or hold
     if incomingHold then speed=0 end
-    if Q.watchNativeDeparture(self,speed,pocketHold or trafficHold or incomingHold or departureHold,forwards) then speed=0 end
+    if Q.watchNativeDeparture(self,speed,pocketHold or trafficHold or incomingHold or departureHold or finalReleaseHold,forwards) then speed=0 end
     speed=Q.finalUnloadSpeed(self,speed)
     speed=Q.stoppedApproachSpeed(self,speed)
     return gx,gz,forwards,speed,acceleration
@@ -138,6 +178,7 @@ end
 
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
+    if Q.holdFinalRelease(self) then return false end
     if self.queueData and (self.queueData.approachRetryAt or 0)>g_currentMission.time then return false end
     if self.queueData and (self.queueData.bypass or self.queueData.trailerTraffic or Q.trailerTrafficHold(self)) then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
@@ -188,6 +229,7 @@ end
 
 local call = U.call
 function U:call(combine,waypoint)
+    if Q.holdFinalRelease(self) then return false end
     if self.queueData and self.queueData.bypass then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then
