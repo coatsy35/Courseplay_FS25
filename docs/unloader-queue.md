@@ -27,7 +27,10 @@ remain available in Git history.
 Release with build_queue.py 3053 --match-release pointing at the preserved
 3031 ZIP. This requires every packaged file and inventory entry to match that
 ZIP byte-for-byte except the numbered manifest version, in addition to the
-source and extracted ZIP release checks. Keep the established unloader test
+source and extracted ZIP release checks. Three source files also retain the
+original ZIP line endings: CpUnloaderQueueSearch.lua, CpUnloaderQueueWorld.lua
+and turns/HeadlandLoopModel.lua. Their code is unchanged; the original ZIP
+and Git checkout had different newline encodings. Keep the established unloader test
 filename/title and leave the live mod untouched.
 
 This is a controlled return to a field-completing baseline, not evidence that
