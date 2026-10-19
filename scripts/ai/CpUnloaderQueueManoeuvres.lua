@@ -761,6 +761,17 @@ function Q.watchNativeDeparture(driver,speed,held,forwards)
         else gap,vehicle,object,terrain=proximity:checkBlockingVehicleFront() end
     end
     local staticObstacle=not vehicle and (object~=nil or terrain==true)
+    if not vehicle and not staticObstacle and proximity and gap then
+        local pack=forwards==false and proximity.backwardLookingProximitySensorPack
+            or proximity.forwardLookingProximitySensorPack
+        -- Map trees/buildings may have a raycast shape but no mission node object.
+        -- Require the actual nearest sensor hit; an unclassified distance alone
+        -- must not turn a vehicle/priority wait into a recovery attempt.
+        for _,sensor in ipairs(pack and pack.sensors or {}) do
+            if sensor.objectId and math.abs(sensor:getClosestObjectDistance()-gap)<0.01
+                    and not sensor:getClosestRootVehicle() then staticObstacle=true; break end
+        end
+    end
     local ix=driver.ppc and driver.ppc:getRelevantWaypointIx()
     driver:debug('Queue: native departure stalled %.1f s at %.1f, %.1f waypoint %s speed %s collision %s obstacle %s (%s); retry %d/2',
         (time-watch.time)/1000,pose.x,pose.z,tostring(ix),tostring(speed),tostring(warning),tostring(gap),

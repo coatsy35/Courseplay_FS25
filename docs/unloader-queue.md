@@ -41,8 +41,8 @@ native tractor and first reversing implement collision boxes include 2 m
 clearance (normal proximity stop distance plus 0.5 m), replacing 0.25 m. This
 aligns route planning with braking; it is not a hard field-boundary rule or
 proof of clearance for additional articulated trailers, which native routing
-does not model independently. A confirmed non-vehicle/terrain obstruction
-can trigger at most two stationary replans. Vehicle warnings, unknown blockers,
+does not model independently. A confirmed non-vehicle/terrain obstruction, including a raw map shape
+without a mission node object, can trigger at most two stationary replans. Vehicle warnings, unknown blockers,
 priority holds, native backup, collision brakes and the actual AD handover
 remain intact. No queue-created handover or unchecked motion is introduced.
 

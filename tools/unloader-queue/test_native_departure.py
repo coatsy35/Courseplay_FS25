@@ -457,6 +457,24 @@ class NativeDepartureTests(unittest.TestCase):
             assert(not result():find('handover'),'static recovery invented an AD handover')
         ''')
 
+    def test_map_shape_without_mission_object_can_recover_after_static_stop(self):
+        self.departure_watch_fixture()
+        self.lua.execute('''
+            obstacle=1.196
+            local rootVehicle=nil
+            local sensor={objectId=4321,getClosestObjectDistance=function() return obstacle end,
+                getClosestRootVehicle=function() return rootVehicle end}
+            u.proximityController.forwardLookingProximitySensorPack={sensors={sensor}}
+            g_currentMission.time=30000
+            rootVehicle={}
+            assert(not Q.watchNativeDeparture(u,0,false,true),'vehicle-shaped hit was treated as static')
+            rootVehicle=nil; sensor.objectId=nil; g_currentMission.time=60000
+            assert(not Q.watchNativeDeparture(u,0,false,true),'unknown distance was treated as a map shape')
+            sensor.objectId=4321; g_currentMission.time=90000
+            assert(Q.watchNativeDeparture(u,0,false,true) and starts==2)
+            assert(u.state==u.states.WAITING_FOR_PATHFINDER and not Q.owns(u))
+        ''')
+
     def marker_clearance_fixture(self):
         # Exercise the production controller request and constraints constructor.
         # Engine scanning/collision and asynchronous search are the boundaries.
