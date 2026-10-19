@@ -1,4 +1,60 @@
-## Build 3053 - restore the completed-field milestone
+## Build 3054 - retain later fixes and recover a crop-blocked waiting trailer
+
+The user rejected the 3053 rollback and explicitly requested that all later
+fixes be kept. This build restores the complete 3052 runtime and regression
+suite from 3ba040f09f5649fbb73d47c702c3fd31989057f5, then applies the changes
+below. The 3031 milestone and every numbered release remain preserved. Build
+3053 is superseded; it is not the basis for this build's runtime behaviour.
+
+The 3052 incident trace below establishes the immediate deadlock: trailer
+/322 loses its moving rendezvous at 17:03:57.118, becomes idle, then its
+parking searches repeatedly reject the initial pose as standing crop. A later
+combine turn crosses that stationary rig. The log does not identify which
+body or fruit type caused the rejection, or prove the precise route into the
+corner. Diagnostics now report the rejecting body, position and density data.
+
+A stationary queue preparation can now leave crop already beneath the rig.
+The search captures the original body footprints once and checks every newly
+occupied area outside them for standing crop. It separately checks physical
+body footprints, so the initial 0.3 m safety halo cannot be used to enter fresh
+crop. Existing boundary, island, corridor, obstacle, articulation and whole-rig
+sampling checks remain active. The capture never expands with movement; the
+planned destination and actual arrival must pass the ordinary full-footprint
+crop checks and parallel alignment. Moving rigs, invalid density, harvester
+finish manoeuvres and unrelated operations cannot activate this recovery.
+Native priority-takeover preflights remain unchanged; normal preparation is
+the recovery entry for the logged cancelled rendezvous.
+
+Polygon subtraction covers all newly occupied ground, including vertices
+exactly on an original footprint edge. Convex fragments use conservative
+rectangular density queries. Valid zero-pixel slivers are permitted only after
+a valid full-body density query found crop; malformed counts and unavailable
+full-body density still fail closed. Clear full rectangles skip subtraction.
+Conservative covers can reject an awkward exit, so actual map-density geometry
+and search performance still need in-game validation.
+
+Moving-combine approach requests now retain their originally requested field
+penalty across native retries, including the intentionally lower first- and
+second-headland values. Retries can no longer drop that original cost to zero.
+As with the retained loaded-return correction, native tractor/first-trailer
+collision boxes include 2 m clearance, matching proximity braking plus margin.
+This is a routing preference, not a hard field boundary or a whole-train native
+path guarantee. Crop penalties, rendezvous cancellation, reservations and
+native unloading ownership are unchanged. A cancelled route is not resumed
+towards its obsolete combine target.
+
+The 3050 measured AD pull-off, parallel staging, preparation fairness, rear-only
+approach recovery, configurable departures and AD handover, pocket/working
+combine priority, final unloading and lead-first harvester parking (up to five
+combines), extra headland travel and 3052 remote-turn guards are all retained.
+Regressions cover forward/reverse/turning crop exits, strict destinations, new
+crop and physical-halo rejection, tiny fragments, geometry edge cases, invalid
+density and moving captures, plus native approach retries and unrelated paths.
+Run the complete source and extracted-ZIP release checks. A fresh in-game field
+run is still required; passing engine-boundary tests does not establish that
+every reported traffic, staging or finishing situation is resolved in-game.
+
+## Build 3053 - restore the completed-field milestone (superseded)
 
 Build 3052 did not resolve the reported corner blockage. The 19 October log
 records trailer /322 starting a native approach to CR11/318 at 17:02:51.466,

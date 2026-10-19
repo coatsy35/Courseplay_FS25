@@ -94,7 +94,7 @@ def check_queue(packager):
         if path == 'modDesc.xml' and {e.attrib['filename'] for e in removed} != MODULES:
             raise RuntimeError('Queue module load inventory incomplete')
     hooks = (release.ROOT/'scripts/ai/CpUnloaderQueueHooks.lua').read_text()
-    methods = set(re.findall(r'function ([UCJ]):([A-Za-z]+)\(', hooks))
+    methods = set(re.findall(r'function ([UCJPK]):([A-Za-z]+)\(', hooks))
     expected = {('U', name) for name in ('setAIVehicle', 'update', 'getDriveData', 'isAllowedToBeCalled', 'call',
         'startUnloadingTrailers', 'onLastWaypointPassed', 'startPathfindingToWaitingCombine',
         'onPathfindingFailedToStationaryTarget', 'onPathfindingDoneToWaitingCombine',
@@ -104,6 +104,14 @@ def check_queue(packager):
     # Authorised 3031 final-unload parking: native method bodies remain intact.
     expected |= {('C', name) for name in ('driveUnloadOnField', 'onLastWaypointPassed',
         'isWaitingForUnloadAfterCourseEnded', 'isReadyToUnload', 'getCanCutterBeTurnedOff', 'updateFieldworkOffset', 'delete')}
+    # Final-only stalled unload recovery; normal native method bodies are intact.
+    expected |= {('U', 'unloadStoppedCombine'), ('U', 'startUnloadingStoppedCombine')}
+    # End-of-course rear entry only. Ordinary hook behaviour is regression-tested.
+    expected |= {('U', name) for name in ('isOkToStartUnloadingCombine', 'startUnloadingCombine', 'unloadMovingCombine', 'isPathfindingNeeded')}
+    # Ordinary full-wait overshoot: native recovery and rear path, independent of final parking.
+    expected |= {('U', 'isInFrontAndAlignedToMovingCombine')}
+    # Loaded marker routes and moving approaches retain field cost and proximity clearance.
+    expected |= {('P', 'findPathToNode'), ('P', 'findPathToGoal'), ('K', 'init')}
     if methods != expected:
         raise RuntimeError('Integration hook surface changed')
     print('PASS: native runtime parity outside reviewed connector entry, steering/corridor corrections and queue hooks; settings qualified', flush=True)
@@ -119,11 +127,19 @@ if __name__ == '__main__':
                                 'unloader-queue/test_harvester_turns.py',
                                 'unloader-queue/test_native_connectors.py',
                                 'unloader-queue/test_native_departure.py', 'unloader-queue/test_yield.py',
+                                 'unloader-queue/test_working_departure.py',
                                 'unloader-queue/test_finished_combine.py',
                                 'unloader-queue/test_finish_clearance.py',
+                                'unloader-queue/test_final_approach.py',
+                                'unloader-queue/test_stopped_approach.py',
+                                'unloader-queue/test_milestone_unloading.py',
+                                'unloader-queue/test_ordinary_rendezvous.py',
                                 'unloader-queue/test_departure_threshold.py',
                                 'unloader-queue/test_harvester_bypass.py',
                                 'unloader-queue/test_combined_recovery.py',
-                                'unloader-queue/test_arrival_clearance.py'),
+                                'unloader-queue/test_departure_turn.py',
+                                'unloader-queue/test_arrival_clearance.py',
+                                'unloader-queue/test_parallel_parking.py',
+                                'unloader-queue/test_crop_exit.py'),
                   stage='queue-operational-candidate-requires-in-game-validation',
                   reference_zip=args.match_release)

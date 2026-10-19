@@ -227,6 +227,30 @@ class HarvesterSnapshotTests(unittest.TestCase):
             CpUnloaderQueue.data(u)
         """)
 
+    def test_finished_empty_tank_does_not_reserve_the_nearby_partial_trailer(self):
+        self.lua.execute('''
+            rawCapacity=20000; tankLevel=0; contents=26922; free=32000-contents
+            c.isWaitingForUnloadAfterCourseEnded=function() return true end
+            h.getIsCpActive=function() return true end
+            local active=setmetatable({vehicle={rootNode=3,getAIDirectionNode=function() return 3 end},
+                combineController={getCapacity=function() return 20000 end,getFillLevel=function() return 4000 end}},
+                {__index=c})
+            active.vehicle.getCpDriveStrategy=function() return active end
+            g_currentMission.vehicleSystem.vehicles={h,active.vehicle}
+            CpUnloaderQueue.refresh()
+            assert(not CpUnloaderQueue.combines['1'])
+            assert(CpUnloaderQueue.plan.leads['3'].trailer=='2')
+            assert(CpUnloaderQueue.findUnloader(c,h,nil)==true)
+            -- At the configured departure threshold the same trailer leaves.
+            contents=27200; free=32000-contents; g_currentMission.time=1001
+            CpUnloaderQueue.refresh()
+            assert(not CpUnloaderQueue.plan.leads['3'])
+            -- Empty active working harvesters still receive preparation.
+            c.isWaitingForUnloadAfterCourseEnded=function() return false end
+            contents=0; free=32000; g_currentMission.time=2002; CpUnloaderQueue.refresh()
+            assert(CpUnloaderQueue.combines['1'])
+        ''')
+
     def test_native_controller_classifies_grain_beet_and_vegetable_tanks(self):
         for label,volume,level,fill_type in [('grain',20000,12000,1),('beet',45000,30000,3),('vegetables',12000,8000,4)]:
             with self.subTest(harvester=label):
@@ -347,6 +371,97 @@ class EngineBoundaryTests(unittest.TestCase):
             poses=CpUnloaderQueueWorld.poses(world.model)
         ''')
 
+    def test_real_coupling_offsets_do_not_jump_at_zero_motion(self):
+        self.lua.execute('''
+            local W=CpUnloaderQueueWorld
+            local H=HeadlandLoopGeometry
+            v.rootNode.t=0.2
+            trailer.rootNode.t=-0.1
+            local hx,hz=H.math.position(v.rootNode,0.2,-3.3)
+            trailer.joint.node.x=hx; trailer.joint.node.z=hz
+            trailer.rootNode.x,trailer.rootNode.z=H.math.position(
+                {x=hx,z=hz,t=trailer.rootNode.t},0.2,-6.5)
+            local model=assert(W.model(v))
+            local initial=W.poses(model)
+            local predicted=W.advance(model,initial,initial[1])
+            for i,p in ipairs(initial) do
+                assert(math.abs(p.x-predicted[i].x)<0.000001)
+                assert(math.abs(p.z-predicted[i].z)<0.000001)
+                assert(p.t==predicted[i].t)
+            end
+            -- The former centreline approximation jumps at a stationary root.
+            local old=H.advance(model,initial,initial[1])
+            assert(math.sqrt((old[2].x-initial[2].x)^2+(old[2].z-initial[2].z)^2)>0.25)
+            local w=assert(W.new(u))
+            local search=assert(CpUnloaderQueueSearch.new(w,{x=60*math.sin(0.2),z=60*math.cos(0.2),t=0.2}))
+            local done,path,reason
+            for i=1,200000 do
+                done,path,reason=CpUnloaderQueueSearch.step(search,1)
+                if done then break end
+            end
+            assert(done and path,tostring(reason)..':'..search.expanded..':'..tostring(search.reason))
+            local poses=w.startPoses
+            for i=2,#path do
+                poses=W.advance(w.model,poses,path[i])
+                assert(W.clear(w,poses))
+            end
+            for _,p in ipairs(poses) do assert(math.abs(H.math.delta(p.t,0.2))<math.rad(10)) end
+        ''')
+
+    def test_delayed_parking_candidates_share_one_complete_start_snapshot(self):
+        self.lua.execute('''
+            local W=CpUnloaderQueueWorld
+            local before=world.startPoses or W.poses(world.model)
+            trailer.rootNode.x=trailer.rootNode.x+1
+            trailer.rootNode.t=0.1
+            local search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=40,t=0}))
+            for i,p in ipairs(before) do
+                local stored=search.root.poses[i]
+                assert(stored.x==p.x and stored.z==p.z and stored.t==p.t,
+                    'a late candidate mixed captured and live rig poses')
+            end
+        ''')
+
+    def test_queue_planar_internal_drawbar_retains_each_measured_pivot(self):
+        self.lua.execute('''
+            local vehicle,_,drill,cart=fixture({internal=true})
+            local H=HeadlandLoopGeometry; local W=CpUnloaderQueueWorld
+            local hitch={x=cart.joint.node.x,z=cart.joint.node.z,t=0.03}
+            cart.joint.rootNode.x,cart.joint.rootNode.z=H.math.position(hitch,0,-2)
+            cart.joint.rootNode.t=0.03
+            cart.internalPivotNode.x,cart.internalPivotNode.z=H.math.position(hitch,0,-3.78)
+            local pivot={x=cart.internalPivotNode.x,z=cart.internalPivotNode.z,t=-0.04}
+            cart.rootNode.x,cart.rootNode.z=H.math.position(pivot,0,-4.3); cart.rootNode.t=-0.04
+            local model=assert(W.model(vehicle)); assert(#model.links==3)
+            local poses=W.poses(model)
+            local after=W.advance(model,poses,poses[1])
+            for i,p in ipairs(poses) do
+                assert(math.abs(after[i].x-p.x)<0.000001 and math.abs(after[i].z-p.z)<0.000001)
+                assert(math.abs(after[i].t-p.t)<0.000000001)
+            end
+        ''')
+
+    def test_lattice_finishes_with_a_checked_run_in_within_total_distance_bound(self):
+        self.lua.execute('''
+            local W=CpUnloaderQueueWorld; local S=CpUnloaderQueueSearch
+            local search=assert(S.new(world,{x=0,z=60,t=0}))
+            search.direct=nil -- rejected initial curve, retain the obstacle search
+            local done,path,steps
+            for i=1,5000 do
+                done,path=S.step(search,1)
+                if done then steps=i; break end
+            end
+            assert(done and path and steps<1000,'lattice did not reuse its checked straight run-in')
+            assert(search.expanded>=8 and search.expanded<30)
+            local poses=world.startPoses; local travelled=0
+            for i=2,#path do
+                travelled=travelled+math.sqrt((path[i].x-path[i-1].x)^2+(path[i].z-path[i-1].z)^2)
+                poses=W.advance(world.model,poses,path[i]); assert(W.clear(world,poses))
+            end
+            assert(travelled<=180 and math.abs(poses[1].z-60)<0.001)
+            for _,p in ipairs(poses) do assert(math.abs(p.t)<math.rad(10)) end
+        ''')
+
     def test_single_trailer_uses_real_chain_model(self):
         self.lua.execute('assert(#world.model.links==1); assert(CpUnloaderQueueWorld.clear(world,poses))')
 
@@ -434,35 +549,67 @@ class EngineBoundaryTests(unittest.TestCase):
             local fake={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
             g_currentMission.vehicleSystem.vehicles={fake}; g_updateLoopIndex=2
             CpUnloaderQueue.schedule()
-            assert(queryCount==work and data.search==search)
+            assert(queryCount>work and data.search==search)
+            work=queryCount; CpUnloaderQueue.schedule(); assert(queryCount==work)
         ''')
 
     def test_growing_crop_rejected(self):
         self.lua.execute('densityCount=20; assert(not CpUnloaderQueueWorld.clear(world,poses))')
 
-    def test_native_search_wait_does_not_consume_preparation_budget(self):
+    def test_native_search_cannot_starve_preparation_and_uses_smaller_shared_slice(self):
         self.lua.execute('''
+            local Q,S=CpUnloaderQueue,CpUnloaderQueueSearch
             u.setMaxSpeed=function() end
-            local data=CpUnloaderQueue.take(u,'prepare')
-            data.world=world
-            data.search=assert(CpUnloaderQueueSearch.new(world,{x=0,z=30,t=0}))
-            data.searchGeneration=data.generation; data.searchStarted=0; data.searchWorkMs=0
+            local data=Q.take(u,'prepare')
+            data.search={}; data.searchGeneration=data.generation
+            data.searchStarted=0; data.searchWorkMs=0
             local search=data.search
             local native={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
             g_currentMission.vehicleSystem.vehicles={native}
-            local ticks=0
+            local ticks,steps=0,0
+            S.step=function() steps=steps+1; return false end
             openIntervalTimer=function() ticks=0; return 1 end
-            readIntervalTimerMs=function() ticks=ticks+1; return ticks end
+            readIntervalTimerMs=function() ticks=ticks+0.25; return ticks end
             closeIntervalTimer=function() end
             for i=1,200 do
                 g_updateLoopIndex=i; g_currentMission.time=i*100
-                CpUnloaderQueue.schedule()
+                Q.schedule(); Q.schedule()
             end
-            assert(data.search==search and data.searchWorkMs==0)
+            assert(steps==400 and data.search==search and data.searchWorkMs==150)
             g_currentMission.vehicleSystem.vehicles={}
-            g_updateLoopIndex=201; g_currentMission.time=20100
-            CpUnloaderQueue.schedule()
-            assert(data.search==search and data.searchWorkMs==3)
+            g_updateLoopIndex=201; Q.schedule()
+            assert(steps==408 and data.search==search and data.searchWorkMs==152.25)
+        ''')
+
+    def test_continuous_arrival_search_shares_work_with_all_five_rigs(self):
+        self.lua.execute('''
+            local Q,S=CpUnloaderQueue,CpUnloaderQueueSearch
+            local jobs={}; local count,total=0,0
+            Q.members={}
+            for i=1,5 do
+                local d={vehicle={rootNode=i},setMaxSpeed=function() end,debug=function() end}
+                local data=Q.take(d,'prepare')
+                data.search={owner=i}; data.searchGeneration=data.generation
+                data.searchStarted=0; data.searchWorkMs=0; data.steps=0; data.servedAt=0
+                if i==1 then data.goal={arrival=true} end
+                jobs[i]=data
+            end
+            S.step=function(search)
+                local data=jobs[search.owner]
+                assert(g_currentMission.time-data.servedAt<=450,'preparation starved by arrival')
+                data.servedAt=g_currentMission.time; data.steps=data.steps+1
+                count=count+1; total=total+1; return false
+            end
+            openIntervalTimer=function() return 1 end
+            readIntervalTimerMs=function() return 2 end
+            closeIntervalTimer=function() end
+            for frame=1,100 do
+                count=0; g_updateLoopIndex=frame; g_currentMission.time=frame*50
+                for i=1,5 do Q.schedule() end
+                assert(count==1,'more than one shared slice per frame')
+            end
+            assert(total==100)
+            for i=1,5 do assert(jobs[i].steps>=10 and jobs[i].search) end
         ''')
 
     def test_only_scheduled_search_uses_budget_and_active_exhaustion_still_stops(self):
@@ -485,7 +632,7 @@ class EngineBoundaryTests(unittest.TestCase):
             assert(data.search and data.searchWorkMs==15000 and waiting.searchWorkMs==100)
             g_updateLoopIndex=2; g_currentMission.time=20200
             CpUnloaderQueue.schedule()
-            assert(not data.search and data.reason=='search budget exhausted; retaining CP control')
+            assert(not data.search and data.reason=='search budget exhausted; selecting another cleared position')
             assert(waiting.search and waiting.searchWorkMs==100)
         ''')
 
@@ -655,6 +802,8 @@ class EngineBoundaryTests(unittest.TestCase):
         self.lua.execute('''
             u.setMaxSpeed=function() end
             local data=CpUnloaderQueue.take(u,'prepare')
+            -- A still-moving native rig cannot capture a stationary crop exit.
+            u.vehicle.lastSpeedReal=0.005
             densityStates={[8]=100}
             local goal={x=0,z=30,t=0}
             CpUnloaderQueue.request(u,goal)

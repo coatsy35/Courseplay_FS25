@@ -11,7 +11,33 @@ local function distanceToSegment(p,a,b)
     return math.sqrt((p.x-q.x)^2+(p.z-q.z)^2),q
 end
 
-local function entryGate(strategy,model,boundary)
+-- Only the first straight AD pull-off may extend the verge entrance. Use the
+-- measured bodies' swept strip, not a larger off-field parking/search radius.
+local function arrivalTransit(strategy,model,goal)
+    if not goal or not (goal.arrival and goal.transit and goal.straight)
+            or strategy.queueData.operation~='prepare' then return end
+    local start=model.root
+    local dx,dz=goal.x-start.x,goal.z-start.z
+    local s,c=math.sin(start.t),math.cos(start.t)
+    local forward=dx*s+dz*c
+    local limit=W.arrivalTravelDistance(strategy,model)
+    if forward<=0 or forward>limit+0.01 or math.abs(dx*c-dz*s)>0.01
+            or math.abs(H.math.delta(start.t,goal.t))>0.001 then return end
+    local left,right,front,back=-math.huge,math.huge,-math.huge,math.huge
+    for i,pose in ipairs(W.poses(model)) do
+        for _,p in ipairs(W.rectangle(model.bodies[i],pose)) do
+            local x,z=p.x-start.x,p.z-start.z
+            local lateral,longitudinal=x*c-z*s,x*s+z*c
+            left=math.max(left,lateral); right=math.min(right,lateral)
+            front=math.max(front,longitudinal); back=math.min(back,longitudinal)
+        end
+    end
+    front=front+forward
+    return G.rectangle({x=start.x,z=start.z,heading=start.t},
+        {width=left-right,length=front-back,xOffset=(left+right)/2,zOffset=(front+back)/2},0)
+end
+
+local function entryGate(strategy,model,boundary,goal)
     local operation=strategy.queueData and strategy.queueData.operation
     if operation~='prepare' and operation~='yield' then return nil,'not preparing or yielding' end
     local start=model.root
@@ -33,7 +59,8 @@ local function entryGate(strategy,model,boundary)
         if not nearest or d<nearest then nearest,entry=d,p end
     end
     if nearest and nearest<=100 then
-        return {start=start,entry=entry,width=width+length},'bounded entrance available'
+        return {start=start,entry=entry,width=width+length,transit=arrivalTransit(strategy,model,goal)},
+            'bounded entrance available'
     end
     return nil,nearest and string.format('field edge %.1f m away (limit 100 m)',nearest) or 'no field edge'
 end
@@ -46,7 +73,8 @@ local function inEntrance(world,rectangle)
         for j=0,count do
             local p={x=a.x+(b.x-a.x)*j/count,z=a.z+(b.z-a.z)*j/count}
             if not G.inside(world.boundary.polygon,p) and
-                    distanceToSegment(p,world.entrance.start,world.entrance.entry)>world.entrance.width then return false end
+                    distanceToSegment(p,world.entrance.start,world.entrance.entry)>world.entrance.width
+                    and not (world.entrance.transit and G.inside(world.entrance.transit,p)) then return false end
         end
     end
     return true
@@ -57,7 +85,7 @@ function W.pose(node)
     return {x=x, z=z, t=H.math.heading(node)}
 end
 
-function W.model(vehicle)
+local function detectedModel(vehicle)
     local model, reason = H.detect(vehicle)
     if model or reason ~= 'fewer than two supported towing pivots' then return model, reason end
     -- The shared detector has already checked every coupling. Its two-pivot
@@ -79,6 +107,39 @@ function W.model(vehicle)
     return model
 end
 
+function W.model(vehicle)
+    local model, reason = detectedModel(vehicle)
+    if not model then return nil,reason end
+    -- Measure one coherent planar chain, including small real coupling offsets
+    -- and terrain pitch. Dropping either lateral offset makes the first predicted
+    -- axle jump even when the tractor has not moved; finer sampling cannot fix it.
+    local poses=W.poses(model)
+    local function offset(p,x,z)
+        local dx,dz=x-p.x,z-p.z
+        return dx*math.cos(p.t)-dz*math.sin(p.t),dx*math.sin(p.t)+dz*math.cos(p.t)
+    end
+    -- Match the already validated attachment chain to its coupling nodes.
+    -- Internal drawbars contribute two model links for one attached implement.
+    local parent,index=vehicle,1
+    while index<=#model.links do
+        local object=parent:getAttachedImplements()[1].object
+        local link=model.links[index]
+        link.hitchNode=object:getActiveInputAttacherJoint().node
+        if link.positionNode then
+            model.links[index+1].hitchNode=link.positionNode
+            index=index+1
+        end
+        parent,index=object,index+1
+    end
+    for i,link in ipairs(model.links) do
+        local x,_,z=getWorldTranslation(link.hitchNode)
+        link.hitchX,link.hitch=offset(poses[i],x,z)
+        link.axleX,link.length=offset(poses[i+1],x,z)
+        if not H.math.finite(link.length) or link.length<0.5 then return nil,'invalid projected hitch geometry' end
+    end
+    return model
+end
+
 function W.poses(model)
     local poses = {model.root}
     for _, link in ipairs(model.links) do
@@ -92,10 +153,26 @@ end
 function W.settledPoses(model,root)
     local poses={root}
     for i,link in ipairs(model.links) do
-        local x,z=H.math.position(poses[i],0,link.hitch-link.length)
+        local x,z=H.math.position(poses[i],(link.hitchX or 0)-(link.axleX or 0),link.hitch-link.length)
         poses[i+1]={x=x,z=z,t=root.t}
     end
     return poses
+end
+
+-- Queue-only kinematics. Retain the measured coupling vectors; the shared
+-- headland-loop model and native unloading algorithms keep their own behaviour.
+function W.advance(model,previous,root)
+    local result={root}
+    for i,link in ipairs(model.links) do
+        local ox,oz=H.math.position(previous[i],link.hitchX or 0,link.hitch)
+        local nx,nz=H.math.position(result[i],link.hitchX or 0,link.hitch)
+        local dx,dz,angle=nx-ox,nz-oz,previous[i+1].t
+        local mid=angle+(dx*math.cos(angle)-dz*math.sin(angle))/link.length/2
+        angle=angle+(dx*math.cos(mid)-dz*math.sin(mid))/link.length
+        local x,z=H.math.position({x=nx,z=nz,t=angle},-(link.axleX or 0),-link.length)
+        result[i+1]={x=x,z=z,t=angle}
+    end
+    return result
 end
 
 function W.rectangle(body, pose, buffer)
@@ -104,21 +181,56 @@ function W.rectangle(body, pose, buffer)
         xOffset=(body.left+body.right)/2, zOffset=(body.front+body.back)/2}, buffer or 0.3)
 end
 
-function W.new(strategy,model)
+-- Find the first forward endpoint where every measured body clears both AD
+-- markers. Their exclusion circles become forbidden translation intervals;
+-- a remote marker beyond this pull-off must not turn it into a distant trip.
+-- Use the same one-metre body padding and radius as stagingClear/arrivalClear.
+function W.arrivalTravelDistance(strategy,model)
+    local origin=strategy.queueData and strategy.queueData.arrivalOrigin or model.root
+    local marker=strategy.invertedStartPositionMarkerNode
+    local radius=2*strategy.turningRadius+4
+    local poses=W.settledPoses(model,model.root)
+    local intervals={}
+    for _,centre in ipairs({origin,marker and W.pose(marker) or false}) do
+        if centre then
+            for i,body in ipairs(model.bodies) do
+                local pose=poses[i]
+                local dx,dz=centre.x-pose.x,centre.z-pose.z
+                local x=dx*math.cos(pose.t)-dz*math.sin(pose.t)
+                local z=dx*math.sin(pose.t)+dz*math.cos(pose.t)
+                local lateral=math.max(body.right-1-x,x-body.left-1,0)
+                if lateral<radius then
+                    local reach=math.sqrt(radius^2-lateral^2)
+                    intervals[#intervals+1]={first=z-body.front-1-reach,last=z-body.back+1+reach}
+                end
+            end
+        end
+    end
+    table.sort(intervals,function(a,b) return a.first<b.first end)
+    local travel=2*strategy.turningRadius+8
+    for _,interval in ipairs(intervals) do
+        -- Two metres also cover the 1.5 m arrival tolerance.
+        if travel>=interval.first-2 and travel<=interval.last+2 then travel=interval.last+2 end
+    end
+    return travel
+end
+
+function W.new(strategy,model,goal)
     local reason
     if not model then model,reason=W.model(strategy.vehicle) end
     if not model then return nil, reason end
     local boundary = FieldworkBoundary.forVehicle(strategy.vehicle, 0)
     if not boundary then return nil, 'field boundary unavailable' end
-    local world = {strategy=strategy, model=model, boundary=boundary, fruit={}, node=createTransformGroup('cpQueueProbe')}
-    world.entrance,world.entranceReason=entryGate(strategy,model,boundary)
+    local world = {strategy=strategy, model=model, startPoses=W.poses(model),
+        boundary=boundary, fruit={}, node=createTransformGroup('cpQueueProbe')}
+    world.entrance,world.entranceReason=entryGate(strategy,model,boundary,goal)
     link(getRootNode(), world.node)
     world.collision = PathfinderCollisionDetector(strategy.vehicle, {}, {}, false, CpUtil.getDefaultCollisionFlags())
     for _, desc in pairs(g_fruitTypeManager:getFruitTypes()) do
         if desc.terrainDataPlaneId and desc.terrainDataPlaneId ~= 0 and desc.numStateChannels and desc.numStateChannels > 0 then
             local modifier = DensityMapModifier.new(desc.terrainDataPlaneId, desc.startStateChannel, desc.numStateChannels,
                 g_currentMission.terrainRootNode)
-            local item = {modifier=modifier, filter=DensityMapFilter.new(modifier), cut={},
+            local item = {name=desc.name, modifier=modifier, filter=DensityMapFilter.new(modifier), cut={},
                 grass=desc.name=='GRASS' or desc.name=='MEADOW'}
             for state, isCut in pairs(desc.cutStates or {}) do
                 if isCut == true and type(state) == 'number' and state >= 0 and state % 1 == 0 then
@@ -137,28 +249,79 @@ function W.delete(world)
     if world and world.node then delete(world.node); world.node=nil end
 end
 
-function W.cropFree(world, rectangle, grassVerge)
+function W.cropFree(world, rectangle, grassVerge, allowEmpty)
+    world.densityFailure=nil
     local a,b,d = rectangle[1],rectangle[2],rectangle[4]
+    local function reject(item,reason,count,total,states)
+        world.densityFailure=string.format('%s: crop=%s positive=%s total=%s cut={%s} at %.1f,%.1f',
+            reason,tostring(item.name),tostring(count),tostring(total),table.concat(states or {},','),a.x,a.z)
+        return false,reason
+    end
     for _, item in ipairs(world.fruit) do
         if not (grassVerge and item.grass) then
         item.modifier:setParallelogramWorldCoords(a.x,a.z,b.x,b.z,d.x,d.z,DensityCoordType.POINT_POINT_POINT)
         item.filter:setValueCompareParams(DensityValueCompareType.GREATER,0)
         local _, count, total = item.modifier:executeGet(item.filter)
-        if not H.math.finite(count) or not H.math.finite(total) or total<=0 or count<0 then return false end
-        local standing = count
+        if not H.math.finite(count) or not H.math.finite(total) or total<0 or (total==0 and not allowEmpty) or count<0 or count>total then
+            return reject(item,'invalid crop density',count,total)
+        end
+        local standing,states = count,{}
         for state in pairs(item.cut) do
             item.filter:setValueCompareParams(DensityValueCompareType.EQUAL,state)
             local _, cut, pixels = item.modifier:executeGet(item.filter)
-            if not H.math.finite(cut) or pixels~=total or cut<0 then return false end
+            states[#states+1]=tostring(state)..':'..tostring(cut)
+            if not H.math.finite(cut) or pixels~=total or cut<0 or cut>standing then
+                return reject(item,'inconsistent crop density',count,total,states)
+            end
             standing = standing-cut
         end
-        if standing > 0 then return false end
+        if standing > 0 then return reject(item,'standing crop',count,total,states) end
         end
     end
     return true
 end
 
-function W.bodyClear(world, body, pose, corridor, perimeterConnector)
+
+-- Recover only from crop already overlapped by the stationary rig's safety
+-- footprint. Boundaries, islands, obstacles and articulation remain absolute.
+-- New swept ground and every destination retain the ordinary zero-crop check.
+function W.beginCropExit(world,corridor)
+    local clear,reason=W.clear(world,world.startPoses,corridor,true)
+    if clear then return true end
+    local operation=world.strategy.queueData and world.strategy.queueData.operation
+    if reason~='standing crop' or (world.strategy.vehicle.lastSpeedReal or 0)*3600>0.5
+            or (operation~='prepare' and operation~='yield')
+            or world.model.relative or world.finalParking then return false,reason end
+    local footprints={}
+    for i,body in ipairs(world.model.bodies) do
+        footprints[i]=W.rectangle(body,world.startPoses[i])
+    end
+    footprints.physical={}
+    for i,body in ipairs(world.model.bodies) do
+        footprints.physical[i]=W.rectangle(body.collision or body,world.startPoses[i],0)
+    end
+    world.cropExit=footprints
+    clear,reason=W.clear(world,world.startPoses,corridor)
+    if not clear then world.cropExit=nil end
+    return clear,reason
+end
+
+function W.cropExitClear(world,rectangle,grassVerge,strict,footprints)
+    local clear,reason=W.cropFree(world,rectangle,grassVerge)
+    if clear or not world.cropExit or strict or reason~='standing crop' then return clear,reason end
+    for _,piece in ipairs(G.outsideFootprints(rectangle,footprints or world.cropExit)) do
+        local cover=G.coveringRectangle(piece)
+        if not cover then return false,'invalid crop exit geometry' end
+        -- Sub-pixel fragments can contain zero density pixels. The full body
+        -- query above must be valid; malformed counts still fail closed.
+        local clear,reason=W.cropFree(world,cover,grassVerge,true)
+        if not clear then return false,reason end
+    end
+    return true
+end
+
+function W.bodyClear(world, body, pose, corridor, perimeterConnector, strictCrop)
+    world.densityFailure=nil
     local rectangle = W.rectangle(body, pose)
     local contained=G.within(rectangle,world.boundary.polygon,world.boundary.islands)
     local entrance=not contained and inEntrance(world,rectangle)
@@ -167,7 +330,19 @@ function W.bodyClear(world, body, pose, corridor, perimeterConnector)
         if G.overlap(rectangle,island) then return false,'island' end
     end
     if corridor and not corridor(rectangle) then return false, 'outside harvested exit corridor' end
-    if not W.cropFree(world, rectangle,entrance or perimeterConnector) then return false, 'standing crop' end
+    local finalParking=world.finalParking
+    local mayCrossCrop=finalParking and world.strategy.queueFinishClearance==finalParking
+        and finalParking.world==world and world.strategy.combineController:getFillLevel()<0.01
+    if not mayCrossCrop then
+        local cropFree,cropReason=W.cropExitClear(world,rectangle,entrance or perimeterConnector,strictCrop)
+        if cropFree and world.cropExit and not strictCrop then
+            -- The safety halo may already overlap crop, but it is not occupied
+            -- ground: the actual body must not move into that original halo.
+            cropFree,cropReason=W.cropExitClear(world,W.rectangle(body.collision or body,pose,0),
+                entrance or perimeterConnector,false,world.cropExit.physical)
+        end
+        if not cropFree then return false,cropReason end
+    end
     PathfinderUtil.setWorldPositionAndRotationOnTerrain(world.node,pose.x,pose.z,pose.t,0.5)
     -- Reuse native collision filtering, without appending every background
     -- rejection to PathfinderUtil's global debug-box array.
@@ -177,6 +352,7 @@ function W.bodyClear(world, body, pose, corridor, perimeterConnector)
     local detector=world.collision
     detector.currentOverlapBoxPosition={pos={x,y,z},direction={math.sin(ry),math.cos(ry)},size=math.max(width,length)}
     detector.collidingShapes=0
+    detector.collidingShapesText=nil
     overlapBox(x,y+0.2,z,rx,ry,rz,width,1,length,'_overlapBoxCallback',detector,
         detector.collisionMask,true,true,true,true)
     if detector.collidingShapes > 0 then
@@ -185,13 +361,17 @@ function W.bodyClear(world, body, pose, corridor, perimeterConnector)
     return true
 end
 
-function W.clear(world, poses, corridor)
+function W.clear(world, poses, corridor, strictCrop)
+    world.failureDetail=nil
     for i, body in ipairs(world.model.bodies) do
         if i > 1 and math.abs(H.math.delta(poses[i-1].t,poses[i].t)) > world.model.links[i-1].maxArticulation then
             return false, 'articulation limit'
         end
-        local clear, reason = W.bodyClear(world,body,poses[i],corridor)
-        if not clear then return false,reason end
+        local clear, reason = W.bodyClear(world,body,poses[i],corridor,nil,strictCrop)
+        if not clear then
+            world.failureDetail=string.format('body=%d at %.1f,%.1f: %s',i,poses[i].x,poses[i].z,world.densityFailure or reason)
+            return false,reason
+        end
     end
     for i=2,#poses do
         for j=1,i-1 do
@@ -211,11 +391,65 @@ function W.currentBodies(vehicle)
         seen[object]=true
         local body = object.rootNode and H.getBody(object,object.rootNode)
         if not body then return false end
-        result[#result+1] = {body=body,pose=W.pose(object.rootNode)}
+        result[#result+1] = {body=body,pose=W.pose(object.rootNode),object=object}
         for _, attachment in ipairs(object.getAttachedImplements and object:getAttachedImplements() or {}) do
             if not collect(attachment.object) then return false end
         end
         return true
     end
     return collect(vehicle) and result or nil
+end
+
+-- Mounted combine/header parts move as one rigid vehicle, but empty space
+-- between their footprints is not swept by a header-width chassis rectangle.
+function W.rigidModel(vehicle)
+    local bodies=W.currentBodies(vehicle)
+    if not bodies then return nil,'harvester body geometry unavailable' end
+    local origin=W.pose(vehicle:getAIDirectionNode())
+    local model={root=origin,bodies={},links={},relative={},width=0,front=-math.huge,back=math.huge}
+    for i,item in ipairs(bodies) do
+        -- A vehicle's AI markers may describe the attached work width. The
+        -- chassis uses its own dimensions; each mounted part retains its full
+        -- unfolded marker extents below, so header coverage is not discarded.
+        local body=item.object==vehicle and item.body.collision or item.body
+        local dx,dz=item.pose.x-origin.x,item.pose.z-origin.z
+        model.relative[i]={x=dx*math.cos(origin.t)-dz*math.sin(origin.t),
+            z=dx*math.sin(origin.t)+dz*math.cos(origin.t),t=H.math.delta(item.pose.t,origin.t)}
+        model.bodies[i]=body
+        model.width=math.max(model.width,body.left-body.right)
+        for _,point in ipairs(W.rectangle(body,item.pose,0)) do
+            local along=(point.x-origin.x)*math.sin(origin.t)+(point.z-origin.z)*math.cos(origin.t)
+            model.front=math.max(model.front,along); model.back=math.min(model.back,along)
+        end
+    end
+    return model
+end
+
+function W.rigidClear(world,root)
+    for i,body in ipairs(world.model.bodies) do
+        local relative=world.model.relative[i]
+        local x,z=H.math.position(root,relative.x,relative.z)
+        local clear,reason=W.bodyClear(world,body,{x=x,z=z,t=root.t+relative.t})
+        if not clear then
+            local obstacle=reason=='vehicle or obstacle' and world.collision.collidingShapesText
+            world.failureDetail=string.format('component=%d at %.1f,%.1f: %s%s',i,x,z,world.densityFailure or reason,
+                obstacle and (' ('..obstacle..')') or '')
+            return false,reason
+        end
+    end
+    world.failureDetail=nil
+    return true
+end
+
+function W.sameRigidShape(a,b)
+    if #a.bodies~=#b.bodies then return false end
+    for i,body in ipairs(a.bodies) do
+        for _,key in ipairs({'left','right','front','back'}) do
+            if math.abs(body[key]-b.bodies[i][key])>0.01 then return false end
+        end
+        local x,y=a.relative[i],b.relative[i]
+        if math.abs(x.x-y.x)>0.01 or math.abs(x.z-y.z)>0.01
+                or math.abs(H.math.delta(x.t,y.t))>math.rad(0.1) then return false end
+    end
+    return true
 end

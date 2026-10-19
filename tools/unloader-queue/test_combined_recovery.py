@@ -52,7 +52,7 @@ class CrossingTests(unittest.TestCase):
                 assert(select(4,f:getDriveData())==10 and not f.queueCombineHold)
             ''')
 
-    def test_already_inside_keeps_follower_job_and_plans_original_leader_target(self):
+    def test_occupied_turn_exit_releases_blocker_before_original_leader_retries(self):
         self.lua.execute('''
             fv.rootNode.x=0; fh.rootNode.x=5; fv.stopped=true
             local state=f.state; local course=f.course
@@ -61,12 +61,67 @@ class CrossingTests(unittest.TestCase):
             c.aiTurn:getDriveData(33)
             assert(calls==1 and context.turnEndWpIx==953)
             c.callback(c.callbackOwner,nil)
-            for i=1,30 do f:getDriveData(); c:getDriveData() end
-            assert(calls==1 and c.queueTrailerWait)
+            assert(c.queueCombineHold and c.queueCombineHold.clearing and not f.queueCombineHold)
+            for i=1,30 do
+                g_currentMission.time=g_currentMission.time+1000
+                assert(select(4,f:getDriveData())==10)
+                assert(select(4,c:getDriveData())==0)
+                c.aiTurn:getDriveData(33)
+            end
+            assert(calls==1 and c.queueTrailerWait,'occupied endpoint repeatedly replanned')
             assert(f.course==course and f.state==state and not stopped)
-            g_currentMission.time=g_currentMission.time+5001
+            -- Root alone is insufficient: the full header must also clear.
+            fv.rootNode.x=80; c:getDriveData(); assert(c.queueCombineHold)
+            fh.rootNode.x=85; c:getDriveData(); assert(not c.queueCombineHold)
+            c:getDriveData(); g_currentMission.time=g_currentMission.time+2001
             c:getDriveData(); c.aiTurn:getDriveData(33)
             assert(calls==2 and context.turnEndWpIx==953)
+        ''')
+
+    def test_released_blocker_keeps_clearance_priority_with_five_combines(self):
+        self.lua.execute('''
+            fv.rootNode.x=0; fh.rootNode.x=5; fv.stopped=true
+            f:getDriveData(); c.aiTurn:getDriveData(33); c.callback(c.callbackOwner,nil)
+            assert(c.queueCombineHold and c.queueCombineHold.clearing)
+            for i=1,3 do
+                local x=9+i*3
+                local vehicle={rootNode={x=x,z=0,t=0},size={width=3.5,length=8},spec_combine={}}
+                local header={rootNode={x=x,z=5,t=0},size={width=15.2,length=2}}
+                vehicle.getAIDirectionNode=function() return vehicle.rootNode end
+                vehicle.getAttachedImplements=function() return {{object=header}} end
+                vehicle.getIsCpActive=function() return true end
+                vehicle.getIsCpFieldWorkActive=vehicle.getIsCpActive
+                local driver={vehicle=vehicle,states=c.states,state=c.states.TURNING,fieldWorkCourse=fc,
+                    turnContext={turnStartWpIx=200+i,isHeadlandCorner=function() return false end}}
+                local turnCourse=Course(vehicle,{{x=x,z=0},{x=x,z=80}},true)
+                driver.aiTurn={turnContext=driver.turnContext,turnCourse=turnCourse,
+                    startRecoveryTurn=function() end,states={TURNING={}}}
+                driver.aiTurn.state=driver.aiTurn.states.TURNING
+                driver.getCurrentCourse=function() return turnCourse end
+                driver.ppc={getRelevantWaypointIx=function() return 1 end}
+                vehicle.getCpDriveStrategy=function() return driver end
+                table.insert(g_currentMission.vehicleSystem.vehicles,vehicle)
+            end
+            f.fieldWorkerProximityController.hasSameCourse=function() return true end
+            for i=1,30 do
+                assert(not Q.holdCombineTurn(f,10),'third combine re-held clearing blocker')
+                assert(Q.holdCombineTurn(c,10))
+            end
+            -- When clearance priority ends, ordinary traffic rules apply again.
+            c.queueCombineHold=nil
+            assert(Q.holdCombineTurn(f,10))
+        ''')
+
+    def test_stale_bypass_failure_cannot_release_a_new_hold_pair(self):
+        self.lua.execute('''
+            fv.rootNode.x=0; fh.rootNode.x=5; fv.stopped=true
+            f:getDriveData(); c.aiTurn:getDriveData(33)
+            local previous=f.queueCombineHold
+            local replacement={lead=previous.lead,context=previous.context,course=previous.course}
+            f.queueCombineHold=replacement
+            c.callback(c.callbackOwner,nil)
+            assert(f.queueCombineHold==replacement and not c.queueCombineHold)
+            assert(c.queueTrailerWait and not stopped)
         ''')
 
     def test_priority_is_frozen_and_header_only_crossing_is_protected(self):
@@ -165,9 +220,13 @@ class AcceptedRouteTests(unittest.TestCase):
             tv.stopped=false; g_currentMission.time=wait.retryAt+1
             c:getDriveData(); assert(c.queueTrailerWait==wait and calls==1)
             tv.stopped=true
+            c:getDriveData()
+            assert(c.queueTrailerWait==wait and calls==1 and data.search==search)
+            -- A checked search owns recovery until it completes or fails.
+            Q.failed(data,'no safe clearance route'); Q.cancel(u)
             c:getDriveData(); recovery:getDriveData(33)
             assert(calls==2 and not c.queueTrailerWait and c.queueBypass)
-            assert(data.search==search and data.yieldRequests[hv]==request)
+            assert(not data.search and data.yieldRequests[hv]==request)
             c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=20,y=-10,t=0},{x=20,y=-30,t=0}})
             for i=1,30 do c:getDriveData() end
             assert(recovery.state==recovery.states.TURNING and calls==2)
@@ -327,6 +386,36 @@ class PreparationTests(unittest.TestCase):
             data.goal=near; Q.failed(data,'destination occupied'); Q.cancel(u)
             assert(Q.target(u)~=near)
         ''')
+
+    def pending_preparation(self):
+        self.lua.execute('''
+            Q.refresh=function() end; Q.schedule=function() end
+            snapshot={vehicle={lastSpeedReal=0},position={x=0,z=100},fill=0,capacity=20000,rate=50,callPercent=80}
+            Q.combines={a=snapshot,b=snapshot}
+            data=Q.take(u,'prepare'); data.assignment={combine='a'}; data.stage={phase=1}
+            Q.request(u,{x=0,z=30,t=0})
+            assert(data.search)
+            search=data.search; generation=data.generation
+            Q.target=function() return nil end
+        ''')
+
+    def test_long_preparation_search_retargets_when_unloading_deadline_becomes_urgent(self):
+        self.pending_preparation()
+        self.lua.execute('''
+            g_currentMission.time=3000; Q.tick(u)
+            assert(data.search==search and data.generation==generation)
+            snapshot.fill=19500; g_currentMission.time=6000; Q.tick(u)
+            assert(not data.search and data.generation>generation and not data.stage)
+        ''')
+
+    def test_changed_assignment_or_successor_role_discards_stale_search(self):
+        for change in ("data.assignment.combine='b'", 'data.assignment.successor=true', 'data.assignment.future=true'):
+            with self.subTest(change=change):
+                self.setUp(); self.pending_preparation()
+                self.lua.execute(change+'''
+                    g_currentMission.time=3000; Q.tick(u)
+                    assert(not data.search and data.generation>generation and not data.stage)
+                ''')
 
     def test_slots_exclude_ad_access_turn_reservations_and_bends(self):
         self.lua.execute('''
