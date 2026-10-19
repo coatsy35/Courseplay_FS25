@@ -20,7 +20,7 @@ local function arrivalTransit(strategy,model,goal)
     local dx,dz=goal.x-start.x,goal.z-start.z
     local s,c=math.sin(start.t),math.cos(start.t)
     local forward=dx*s+dz*c
-    local limit=math.max(AIUtil.getLength(strategy.vehicle)+6,2*strategy.turningRadius+8)
+    local limit=W.arrivalTravelDistance(strategy,model)
     if forward<=0 or forward>limit+0.01 or math.abs(dx*c-dz*s)>0.01
             or math.abs(H.math.delta(start.t,goal.t))>0.001 then return end
     local left,right,front,back=-math.huge,math.huge,-math.huge,math.huge
@@ -179,6 +179,40 @@ function W.rectangle(body, pose, buffer)
     return G.rectangle({x=pose.x,z=pose.z,heading=pose.t}, {
         width=body.left-body.right, length=body.front-body.back,
         xOffset=(body.left+body.right)/2, zOffset=(body.front+body.back)/2}, buffer or 0.3)
+end
+
+-- Find the first forward endpoint where every measured body clears both AD
+-- markers. Their exclusion circles become forbidden translation intervals;
+-- a remote marker beyond this pull-off must not turn it into a distant trip.
+-- Use the same one-metre body padding and radius as stagingClear/arrivalClear.
+function W.arrivalTravelDistance(strategy,model)
+    local origin=strategy.queueData and strategy.queueData.arrivalOrigin or model.root
+    local marker=strategy.invertedStartPositionMarkerNode
+    local radius=2*strategy.turningRadius+4
+    local poses=W.settledPoses(model,model.root)
+    local intervals={}
+    for _,centre in ipairs({origin,marker and W.pose(marker) or false}) do
+        if centre then
+            for i,body in ipairs(model.bodies) do
+                local pose=poses[i]
+                local dx,dz=centre.x-pose.x,centre.z-pose.z
+                local x=dx*math.cos(pose.t)-dz*math.sin(pose.t)
+                local z=dx*math.sin(pose.t)+dz*math.cos(pose.t)
+                local lateral=math.max(body.right-1-x,x-body.left-1,0)
+                if lateral<radius then
+                    local reach=math.sqrt(radius^2-lateral^2)
+                    intervals[#intervals+1]={first=z-body.front-1-reach,last=z-body.back+1+reach}
+                end
+            end
+        end
+    end
+    table.sort(intervals,function(a,b) return a.first<b.first end)
+    local travel=2*strategy.turningRadius+8
+    for _,interval in ipairs(intervals) do
+        -- Two metres also cover the 1.5 m arrival tolerance.
+        if travel>=interval.first-2 and travel<=interval.last+2 then travel=interval.last+2 end
+    end
+    return travel
 end
 
 function W.new(strategy,model,goal)

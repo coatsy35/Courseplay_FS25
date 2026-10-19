@@ -1,3 +1,35 @@
+## Build 3050 - measured AD arrival clearance
+
+The 19 October 3049 log repeatedly rejects the same 26 m straight pull-off
+at actual arrival (-451.1, -328.9), before any movement, with
+"whole train cannot occupy target". For trailer /323 this occurs at
+09:53:06.262, followed by a parking-search timeout at 09:56:10.103 and another
+rejection at 09:56:30.909. The saved return markers for three tractors lie
+roughly 30-40 m ahead of that arrival. Each places the old endpoint inside
+its return-lane exclusion. A regression using those coordinates and the
+engine fixture reproduces all three failures. The saved values and fixture
+are not an exact live vehicle-pose capture. Evidence:
+`out/incident-3049-ad-arrival/`.
+
+The old fixed-distance target used native AI length, which may describe only
+the tractor, and allowed just 4 m clearance from actual arrival despite the
+normal 2r+4 clearance rule. The new target uses every measured body, including
+the trailer, and both actual-arrival and saved-return marker exclusions. It
+selects the first forward endpoint beyond the overlapping exclusion intervals,
+with margin for arrival tolerance. A remote marker outside that movement does
+not lengthen it. The narrow straight-transit boundary exception uses that same
+calculation; every route sample still checks crop, islands and physical
+obstacles. Transit remains temporary and cannot become a parked waiting slot.
+
+Regression coverage now requires a valid exit, rather than merely accepting
+rejection of a target near the return marker. It includes the three saved
+marker positions, a long trailer, rotated arrivals, a remote marker, bounded
+verge travel and a complete pull-off followed by checked parallel parking on
+a completed centre row closer to a combine. Source and extracted ZIP release
+checks are mandatory. Harvester finishing, unloading, departure thresholds
+and native AD handover are unchanged. In-game arrival and staging still need
+validation on the reported field; passing engine fixtures is not that proof.
+
 ## Build 3049 - restart safety, departure recovery and occupied transfer clearance
 
 The 18 October 3048 log records 2,032 Lua update errors after CR11/319 was

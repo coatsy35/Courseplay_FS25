@@ -592,10 +592,112 @@ class ArrivalTests(unittest.TestCase):
             Q.captureArrival(u); Q.take(u,'prepare')
             u.invertedStartPositionMarkerNode={x=12,z=28,t=0}
             local goal=Q.arrivalExit(u); local model=W.model(v)
-            assert(not goal.accept(W.settledPoses(model,goal),model),
+            assert(goal.accept(W.settledPoses(model,goal),model),
+                'pull-off target was left inside the distinct AD return lane')
+            assert(not goal.accept(W.settledPoses(model,{x=0,z=26,t=0}),model),
                 'short transit clearance weakened the distinct AD return lane')
-            u.invertedStartPositionMarkerNode={x=0,z=0,t=0}
+            place(goal.x,goal.z,goal.t); assert(Q.arrivalClear(u))
+        ''')
+
+    def test_logged_arrival_and_saved_return_markers_produce_a_checked_exit(self):
+        # Logged 3049 arrival; three distinct startPosition values in savegame20.
+        # Body dimensions are the engine fixture, not a claim of exact live poses.
+        for marker in ((-435.836121, -365.332764), (-433.976349, -355.294464),
+                       (-434.645599, -356.307892)):
+            with self.subTest(marker=marker):
+                self.setUp()
+                self.lua.globals().marker_x, self.lua.globals().marker_z = marker
+                self.lua.execute('''
+                    local origin={x=-451.1,z=-328.9,heading=math.rad(170.2)}
+                    local polygon={}
+                    for _,p in ipairs({{x=6,z=-100},{x=150,z=-100},{x=150,z=150},{x=6,z=150}}) do
+                        polygon[#polygon+1]=CpUnloaderQueueGeometry.point(origin,p.x,p.z)
+                    end
+                    v.cpGetFieldPolygon=function() return polygon end
+                    place(origin.x,origin.z,origin.heading)
+                    AIUtil.getLength=function() return 6 end; u.turningRadius=9
+                    u.invertedStartPositionMarkerNode={x=marker_x,z=marker_z,t=0}
+                    Q.captureArrival(u); local data=Q.take(u,'prepare')
+                    local model=W.model(v)
+                    local x,z=H.math.position(model.root,0,26)
+                    local old={x=x,z=z,t=model.root.t}
+                    assert(not Q.stagingClear(u,W.settledPoses(model,old),model),
+                        'fixture must reproduce the rejected 26 m destination')
+                    local goal=assert(Q.arrivalExit(u))
+                    assert(goal.accept(W.settledPoses(model,goal),model),
+                        'computed exit still occupies the saved return marker')
+                    Q.request(u,goal); assert(data.search,data.reason)
+                    local done,path
+                    for i=1,1000 do
+                        done,path=CpUnloaderQueueSearch.step(data.search,1)
+                        if done then break end
+                    end
+                    assert(done and path and data.search.expanded==0,
+                        'arrival fell into the long parking fallback')
+                    local poses=W.poses(data.world.model)
+                    for i=2,#path do
+                        poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+                    end
+                    assert(goal.accept(poses,data.world.model))
+                    Q.startRoute(data,path); place(goal.x,goal.z,goal.t); assert(Q.onLast(u))
+                    assert(data.arrivalDeparted and Q.arrivalClear(u) and not data.parkedGoal)
+                ''')
+
+    def test_pull_off_measures_long_trailer_and_ignores_remote_marker(self):
+        self.lua.execute('''
+            AIUtil.getLength=function() return 6 end; u.turningRadius=9
+            trailer.size.length=24
+            Q.captureArrival(u); Q.take(u,'prepare')
+            local model=W.model(v)
+            local goal=assert(Q.arrivalExit(u))
             assert(goal.accept(W.settledPoses(model,goal),model))
+            place(goal.x,goal.z,goal.t)
+            assert(Q.arrivalClear(u),'tractor cleared but long trailer still occupies arrival')
+            place(0,0,0)
+            u.invertedStartPositionMarkerNode={x=0,z=1000,t=0}
+            assert(Q.arrivalExit(u).z==goal.z,'unrelated distant return marker enlarged pull-off')
+        ''')
+
+    def test_pull_off_continues_to_parallel_cleared_row_near_combine(self):
+        self.lua.execute('''
+            v.cpGetFieldPolygon=function()
+                return {{x=6,z=-100},{x=150,z=-100},{x=150,z=200},{x=6,z=200}}
+            end
+            AIUtil.getLength=function() return 6 end; u.turningRadius=9
+            u.invertedStartPositionMarkerNode={x=12,z=28,t=0}
+            Q.captureArrival(u); local data=Q.take(u,'prepare')
+            local points={}; for z=-50,180 do points[#points+1]={x=40,z=z} end
+            local course=Course(v,points,false)
+            local combine={fieldWorkCourse=course,course=course,
+                getClosestFieldworkWaypointIx=function() return 201 end}
+            Q.combines={a={driver=combine,position={x=40,z=150}}}
+            u.isServingPosition=function() return true end
+            local function follow(goal)
+                Q.request(u,goal); assert(data.search,data.reason)
+                local done,path,reason
+                for i=1,10000 do
+                    done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
+                    if done then break end
+                end
+                assert(done and path,tostring(reason))
+                local poses=W.poses(data.world.model)
+                for i=2,#path do
+                    poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+                end
+                Q.startRoute(data,path)
+                local destination=data.goal
+                assert(destination.accept(poses,data.world.model))
+                place(destination.x,destination.z,destination.t); assert(Q.onLast(u))
+                return destination
+            end
+            assert(follow(assert(Q.target(u))).transit and not data.parkedGoal)
+            local parked=follow(assert(Q.target(u)))
+            assert(not parked.transit and data.parkedGoal==parked)
+            assert(parked.x==40 and parked.z>0 and parked.z<150,
+                'parking did not advance along a completed row towards the combine')
+            assert(math.abs(math.sin(parked.t))<0.01,'rig parked across the harvested row')
+            assert(Q.arrivalClear(u))
+            assert(Q.target(u)==parked,'parallel waiting slot was not retained')
         ''')
 
     def test_blocked_straight_exit_does_not_drive_or_loop(self):
@@ -650,7 +752,7 @@ class ArrivalTests(unittest.TestCase):
             end
             AIUtil.getLength=function() return 6 end; u.turningRadius=9
             Q.combines={}; Q.captureArrival(u); local data=Q.take(u,'prepare')
-            local goal=assert(Q.arrivalExit(u)); assert(goal.z==26)
+            local goal=assert(Q.arrivalExit(u)); assert(goal.z>26 and goal.z<50)
             local ordinary=assert(W.new(u))
             assert(not W.clear(ordinary,W.settledPoses(ordinary.model,goal)),
                 'fixture no longer exposes the short entrance gate')
@@ -668,7 +770,7 @@ class ArrivalTests(unittest.TestCase):
             assert(goal.accept(poses,data.world.model),'trailer still occupies AD arrival')
             assert(not W.clear(data.world,W.settledPoses(data.world.model,{x=-30,z=26,t=0})),
                 'straight exit admitted a sideways off-field excursion')
-            assert(not W.clear(data.world,W.settledPoses(data.world.model,{x=0,z=45,t=0})),
+            assert(not W.clear(data.world,W.settledPoses(data.world.model,{x=0,z=goal.z+20,t=0})),
                 'straight exit admitted an unbounded trip along the verge')
             Q.startRoute(data,path); place(goal.x,goal.z,goal.t); assert(Q.onLast(u))
             assert(data.arrivalDeparted and not data.parkedGoal)

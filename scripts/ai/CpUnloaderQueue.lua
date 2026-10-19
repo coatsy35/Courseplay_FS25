@@ -418,14 +418,14 @@ function Q.findUnloader(combine,stopped,waypoint)
     return false
 end
 
-function Q.stagingClear(driver,poses,model,arrivalRadius)
+function Q.stagingClear(driver,poses,model)
     Q.pruneTurnReservations()
     local origin=arrivalOrigin(driver)
     local marker=driver.invertedStartPositionMarkerNode
     local returnOrigin=marker and W.pose(marker)
     for i,body in ipairs(model.bodies) do
         local rectangle=W.rectangle(body,poses[i],1)
-        for index,markerOrigin in ipairs({origin or false,returnOrigin or false}) do
+        for _,markerOrigin in ipairs({origin or false,returnOrigin or false}) do
             if markerOrigin then
                 -- Closest point on the complete oriented body, including edges
                 -- and containment; checking corners alone misses circle crossings.
@@ -435,8 +435,7 @@ function Q.stagingClear(driver,poses,model,arrivalRadius)
                 local z=dx*math.sin(pose.t)+dz*math.cos(pose.t)
                 local nearestX=math.max(body.right-1,math.min(body.left+1,x))
                 local nearestZ=math.max(body.back-1,math.min(body.front+1,z))
-                local sameArrival=index==1 or (origin and distance(origin,markerOrigin)<1)
-                local radius=sameArrival and arrivalRadius or 2*driver.turningRadius+4
+                local radius=2*driver.turningRadius+4
                 if math.sqrt((x-nearestX)^2+(z-nearestZ)^2)<radius then return false end
             end
         end
@@ -559,13 +558,14 @@ end
 function Q.arrivalExit(driver)
     local data=Q.data(driver)
     if (data.arrivalExitRetry or 0)>now() then return end
-    local here=W.pose(driver.vehicle:getAIDirectionNode())
-    local length=AIUtil.getLength(driver.vehicle)
-    local travel=math.max(length+6,2*driver.turningRadius+8)
+    local model=W.model(driver.vehicle)
+    if not model then return end
+    local here=model.root
+    local travel=W.arrivalTravelDistance(driver,model)
     local x,z=H.math.position(here,0,travel)
     local goal={x=x,z=z,t=here.t,arrival=true,transit=true,straight=true}
     if not Q.targetAvailable(driver,goal) then return end
-    goal.accept=function(poses,model) return Q.stagingClear(driver,poses,model,4) end
+    goal.accept=function(poses,model) return Q.stagingClear(driver,poses,model) end
     return goal
 end
 
