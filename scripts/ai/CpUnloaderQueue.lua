@@ -905,7 +905,10 @@ function Q.tick(driver)
         -- Arrival searches retain partial work while native pathfinding owns
         -- the frame. The shared update slice and individual searches remain bounded.
         if data.operation=='yield' and Q.updateYieldRecovery(driver) then return end
-        if data.search and data.operation=='prepare' and not (data.goal and data.goal.arrival)
+        -- Finish a local parallel parking search after a cancelled approach. A
+        -- new background assignment must not repeatedly strand a bent train.
+        -- Native calls and full/manual departure still pre-empt this ownership.
+        if data.search and data.operation=='prepare' and not (data.goal and (data.goal.arrival or data.goal.parking))
                 and now()-(data.searchRetargetAt or data.searchStarted)>=3000 then
             data.searchRetargetAt=now()
             local assignment=data.assignment

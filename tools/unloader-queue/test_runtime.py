@@ -82,6 +82,44 @@ class OwnershipTests(unittest.TestCase):
             assert(u.queueData.search==nil and u.queueData.generation>generation)
         ''')
 
+    def test_local_parking_survives_reassignment_but_native_call_takes_over(self):
+        for change in ("data.assignment.combine='b'", 'data.assignment.successor=true',
+                       'data.assignment.future=true', 'snapshot.fill=19500'):
+            with self.subTest(change=change):
+                self.setUp()
+                self.lua.execute('''
+                    local Q=CpUnloaderQueue
+                    u.combineToUnload=nil
+                    u.settings={fullThreshold={getValue=function() return 85 end}}
+                    u.isDriveUnloadNowRequested=function() return false end
+                    u.getAllTrailersFull=function() return false end
+                    Q.refresh=function() end; Q.schedule=function() end
+                    Q.target=function() return nil end
+                    Q.preparationEta=function() return 30 end
+                    snapshot={fill=0,capacity=20000,rate=50,callPercent=80}
+                    Q.combines={a=snapshot,b=snapshot}
+                    data=Q.take(u,'prepare'); data.assignment={combine='a'}
+                    data.goal={x=0,z=30,t=0,parking=true}; data.search={}
+                    data.searchStarted=0; data.searchAssignment='a'; data.searchStage=1
+                    data.searchGeneration=data.generation
+                    search=data.search; generation=data.generation
+                '''+change+'''
+                    g_currentMission.time=4000; CpUnloaderQueue.tick(u)
+                    assert(data.search==search and data.generation==generation,
+                        'local parallel parking was abandoned for background staging')
+                    assert(u:isAllowedToBeCalled())
+                    u.getPipeOffset=function() return 8,2 end
+                    u.getCombinesMeasuredBackDistance=function() return 6 end
+                    u.isPathfindingNeeded=function() return true end
+                    u.setNewState=function(self,state) self.state=state end
+                    u.startPathfindingToMovingCombine=function(self,waypoint,x,z)
+                        assert(x==8 and z==-11); nativeApproach=true
+                    end
+                    assert(u:call(c,{}) and nativeApproach)
+                    assert(u.combineToUnload==c and u.state==u.states.WAITING_FOR_PATHFINDER)
+                    assert(not data.search and data.generation>generation)
+                ''')
+
     def test_exit_is_not_available_to_a_new_native_call(self):
         self.lua.execute('''
             CpUnloaderQueue.take(u,'prepare')

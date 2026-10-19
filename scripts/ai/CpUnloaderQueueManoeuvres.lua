@@ -484,7 +484,6 @@ function Q.driveFinishClearance(combine)
             end
         end
         data.waitingTrailer=nil
-        if Q.clearFinishTraffic(combine) then combine:setMaxSpeed(0); return end
         data.clearanceStarted=data.clearanceStarted or time
     end
     local here=W.pose(combine.vehicle:getAIDirectionNode())
@@ -559,6 +558,16 @@ function Q.driveFinishClearance(combine)
         end
     end
     if reason then
+        -- Reserve the broad finish lane against new parking, but only ask an
+        -- existing rig to move when it obstructs an actual checked route pose.
+        -- Other route options may already be clear after native reverse clearance.
+        if reason=='vehicle or obstacle' then
+            local boxes=rigidRectangles(model,route.points[math.min(data.sample+1,#route.points)],2)
+            Q.clearFinishTraffic(combine,function(rect)
+                for _,box in ipairs(boxes) do if G.overlap(box,rect) then return true end end
+                return false
+            end)
+        end
         local detail=data.world.failureDetail or reason
         combine:debug('Queue: final parking candidate %d route %d rejected after %.1f m: %s',
             data.candidate,route.option,route.points[math.min(data.sample+1,#route.points)].s,detail)
@@ -790,10 +799,10 @@ local function parkedQueueTrailer(driver)
         and not driver.combineToUnload and AIUtil.isStopped(driver.vehicle)
 end
 
--- A rig parked before the finish reservation became active must be asked to
--- clear explicitly: a stationary combine may never fire a proximity callback.
-function Q.clearFinishTraffic(combine)
-    local area=Q.finishLane(combine)
+-- A stationary combine may never fire a proximity callback. Request clearance
+-- for existing rigs in the supplied route area without blocking other options.
+function Q.clearFinishTraffic(combine,area)
+    area=area or Q.finishLane(combine)
     if not area then return false end
     local pending=false
     for driver,data in pairs(Q.members) do
@@ -815,7 +824,7 @@ function Q.clearFinishTraffic(combine)
                     request.turnClearance=area; request.checked=nil
                     request.turn=nil; request.turnContext=nil
                     data.nextAttempt=0
-                    driver:debug('Queue: clearing reserved final lane for %s',CpUtil.getName(combine.vehicle))
+                    driver:debug('Queue: clearing blocked final parking route for %s',CpUtil.getName(combine.vehicle))
                 end
             end
         end

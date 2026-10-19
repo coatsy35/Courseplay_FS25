@@ -470,11 +470,12 @@ class FinishClearanceTests(unittest.TestCase):
             plan(); assert(starts==1 and not finishes)
         ''')
 
-    def near_final_release(self):
+    def near_final_release(self, at_end=False):
+        self.lua.globals().release_at_end = at_end
         self.lua.execute('''
             c.state=c.states.WORKING; c.unloadState=nil
-            c.course:setCurrentWaypointIx(c.course:getNumberOfWaypoints()-10)
-            move(-20)
+            c.course:setCurrentWaypointIx(c.course:getNumberOfWaypoints()-(release_at_end and 0 or 10))
+            move(release_at_end and 0 or -20)
             u.state=u.states.UNLOADING_MOVING_COMBINE; u.combineToUnload=harvester
             u.isServingPosition=function() return true end
             u.ppc.setNormalLookaheadDistance=function() end
@@ -530,6 +531,71 @@ class FinishClearanceTests(unittest.TestCase):
             assert(Q.stagingClear(u,W.settledPoses(model,{x=65,z=-60,t=0}),model))
             harvester.active=false
             assert(Q.stagingClear(u,poses,model),'completed job left stale reservation')
+        ''')
+
+    def released_finish_fixture(self):
+        self.near_final_release(at_end=True)
+        self.lua.execute('''
+            place(12,-18,0); c.near=false
+            c.state=c.states.UNLOADING_ON_FIELD
+            c.unloadState=c.states.WAITING_FOR_UNLOAD_AFTER_FIELDWORK_ENDED
+            AIUtil.isStopped=function() return true end
+            local area=assert(Q.finishLane(c))
+            assert(area(W.rectangle(W.model(v).bodies[1],W.pose(v.rootNode))))
+            assert(Q.holdFinalRelease(u),'released trailer must wait while combine moves')
+            -- Include the stopped tractor and its trailer in the real overlap
+            -- boundary, rather than declaring the finished combine's route clear.
+            local constructor=PathfinderCollisionDetector
+            PathfinderCollisionDetector=function(vehicle,...)
+                local detector=constructor(vehicle,...); detector.vehicle=vehicle; return detector
+            end
+            overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,detector)
+                local box=G.rectangle({x=x,z=z,heading=ry},{width=2*w,length=2*l},0)
+                detector.collidingShapes=0
+                for _,vehicle in ipairs({harvester,v}) do
+                    for _,item in ipairs(detector.vehicle~=vehicle and W.currentBodies(vehicle) or {}) do
+                        if G.overlap(box,W.rectangle(item.body,item.pose,0)) then
+                            detector.collidingShapes=1
+                        end
+                    end
+                end
+                if collision==1 or (staticObstacle and G.inside(box,staticObstacle)) then
+                    detector.collidingShapes=1
+                end
+            end
+        ''')
+
+    def test_native_reverse_clearance_does_not_require_empty_finish_reservation(self):
+        self.released_finish_fixture()
+        self.lua.execute('''
+            advance(); plan()
+            assert(c.queueFinishClearance.driving,'reserved rear area prevented checked parking')
+            assert(u.queueData.finalRelease and not u.queueData.yieldRequests,
+                'clear released trailer was unnecessarily sent into another manoeuvre')
+            followParking(); assert(finishes==1 and not Q.holdFinalRelease(u))
+        ''')
+
+    def test_actual_route_blocker_yields_after_native_reverse_and_parking_resumes(self):
+        self.released_finish_fixture()
+        self.lua.execute('''
+            place(-14,15,math.pi/2)
+            for i=1,3000 do
+                advance()
+                if u.queueData.yieldRequests then break end
+                assert(not c.queueFinishClearance.driving and not finishes)
+            end
+            local request=assert(u.queueData.yieldRequests and u.queueData.yieldRequests[harvester])
+            assert(u.queueData.operation=='yield' and request.finishCourse==c.fieldWorkCourse)
+            assert(request.turnClearance and not Q.holdFinalRelease(u))
+            -- Only the intersecting route pose is requested, not the whole broad
+            -- reservation behind the combine which caused the original deadlock.
+            local rear=W.rectangle(W.model(v).bodies[1],{x=12,z=-18,t=0})
+            assert(Q.finishLane(c)(rear) and not request.turnClearance(rear))
+            place(65,-60,0)
+            Q.yieldTarget(u,true); g_currentMission.time=g_currentMission.time+2001
+            Q.yieldTarget(u,true)
+            plan(); assert(c.queueFinishClearance.driving and not finishes)
+            followParking(); assert(finishes==1)
         ''')
 
     def test_already_parked_final_lane_blocker_gets_persistent_checked_yield(self):
@@ -743,15 +809,14 @@ class FinishClearanceTests(unittest.TestCase):
         ''')
 
     def test_blocked_straight_uses_a_checked_curve_and_follows_its_live_sweep(self):
+        self.released_finish_fixture()
         self.lua.execute('''
-            local obstacle={x=0,z=24}
-            overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,detector)
-                local rect=G.rectangle({x=x,z=z,heading=ry},{width=2*w,length=2*l},0)
-                detector.collidingShapes=(collision==1 or G.inside(rect,obstacle)) and 1 or 0
-            end
+            staticObstacle={x=-17.5,z=13}
             advance(); plan()
             local data=c.queueFinishClearance
-            assert(data and data.driving and data.route.angle~=0 and starts==1)
+            assert(data and data.driving and data.route.option>1 and starts==1)
+            assert(u.queueData.finalRelease and not u.queueData.yieldRequests,
+                'static obstacle caused unrelated released trailer to yield')
             local points=data.route.points
             assert(c.course:getNumberOfWaypoints()==#points)
             for i,p in ipairs(points) do

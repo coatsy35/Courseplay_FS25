@@ -1,3 +1,41 @@
+## Build 3056 - release the final-parking deadlock and retain local parking searches
+
+The 3054 log shows CR11/319 entering final clearance at 22:02:11.309.
+T7.300/322 completes its native 15 m reverse at 22:02:15.925, but is then
+sent into repeated queue yields to clear the broad reserved finish lane.
+The empty combine waits before testing any parking route; CR11/318 in turn
+waits behind it. The 3045 sequence did not impose that extra prerequisite.
+Evidence: out/incident-3054-crosswise-headland/log-2026-10-19T21-05-40.315Z.txt,
+lines 171487, 171575, 171587-171588, 172404 and 172655.
+
+Final parking now waits for native reverse clearance, then validates its own
+complete chassis/header route. The broad reservation still excludes new
+waiting positions. An existing trailer is asked to yield only when it overlaps
+the actual rejected route pose; that request does not prevent other checked
+route options being considered. Obstacle rejection and live stopping checks
+remain active. Lead-first finishing for up to five combines, extra headland
+travel, cleared-row parking and native completion/folding are retained.
+
+The earlier crosswise /322 incident has a separate cause. Its moving approach
+is cancelled after the combine manoeuvres at 21:28:27.272. A local parking
+search starts, then is discarded at 21:28:30.365 when the background assignment
+changes; searches for farther staging positions leave the rig stationary.
+The same snapshot records this at lines 114707-114726, 114810-114811 and 117562.
+Local parking searches now retain their existing bounded work across assignment
+and deadline changes, just as arrival searches do. Assigned staging searches
+still retarget. Native unloading calls and full/manual departures retain priority.
+No additional manoeuvre state, crop permission or collision tolerance is added.
+
+Regression coverage reproduces the old final-parking deadlock and checks the
+complete released-trailer wait, parking route and native completion. It also
+checks a genuine route blocker, an unrelated released trailer during a static
+obstacle detour, and live braking. Parking ownership tests reproduce each
+background retarget cancellation and verify immediate native call takeover.
+Both new reproductions fail with the previous runtime and pass with these
+changes. Build 3055's arrival selection and all later fixes remain included.
+Run all source and extracted-ZIP release checks before publishing. These engine
+boundary tests do not replace validation in the actual saved game.
+
 ## Build 3055 - preserve usable approaches when the AD exit is blocked
 
 Build 3054 still leaves the reported empty T7.300/325 at its AD arrival.
