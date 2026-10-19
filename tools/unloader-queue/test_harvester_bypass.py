@@ -406,7 +406,7 @@ class HarvesterBypassTests(unittest.TestCase):
         '''.replace('args[3]==targetNode', 'args[3].x==20 and args[3].z==30'))
 
     def test_failed_detour_with_invalid_queue_start_keeps_native_clearance(self):
-        self.travel_fixture()
+        self.travel_fixture(trailer_z=20)
         self.lua.execute('''
             u.states={}
             for _,collection in ipairs({AIDriveStrategyUnloadCombine.myStates,AIDriveStrategyUnloadCombine.myCombineUnloadStates}) do
@@ -415,7 +415,7 @@ class HarvesterBypassTests(unittest.TestCase):
             u.isBeingHeld=function() return false end
             u.setNewState=function(self,state) self.state=state end
             u.createMoveAwayCourse=function(self)
-                return Course(self.vehicle,{{x=0,z=40},{x=0,z=30,rev=true}},true)
+                return Course(self.vehicle,{{x=0,z=20},{x=0,z=10,rev=true}},true)
             end
             u.startCourse=function(self,course) self.course=course end
             AIUtil.isOtherVehicleAhead=function() return true end
@@ -423,11 +423,53 @@ class HarvesterBypassTests(unittest.TestCase):
             CpMathUtil.isOppositeDirection=function() return false end
             assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
             densityCount=20
+            c.isVehicleInProximity=function() return true end -- actual nearby blockage
             c.callback(c.callbackOwner,nil)
             assert(c.queueTrailerWait and not stopped and not Q.owns(u))
             assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE and not u.queueData.search)
             local course=u.course
             c:getDriveData(33); assert(u.course==course)
+        ''')
+
+    def test_remote_turn_wait_does_not_restart_native_clearance_or_retry_deadline(self):
+        self.travel_fixture(trailer_x=-11, trailer_z=222.5)
+        self.lua.execute('''
+            old.turnCourse=Course(hv,{{x=0,z=0},{x=0,z=250},{x=20,z=280}},true)
+            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
+            densityCount=20
+            c.callback(c.callbackOwner,nil)
+            assert(c.queueTrailerWait and Q.owns(u) and u.queueData.operation=='prepare')
+            local wait=c.queueTrailerWait; local retry=wait.retryAt
+            local generation=u.queueData.generation
+            for i=1,40 do
+                g_currentMission.time=g_currentMission.time+100
+                assert(Q.checkParkedTrailerTravel(c))
+                assert(c.queueTrailerWait==wait and wait.retryAt==retry)
+                assert(Q.owns(u) and u.queueData.generation==generation)
+            end
+            g_currentMission.time=retry
+            assert(Q.checkParkedTrailerTravel(c))
+            assert(not c.queueTrailerWait and c.queueBypass)
+            assert(context.turnEndWpIx==953 and not stopped)
+        ''')
+
+    def test_remote_turn_retry_does_not_freeze_an_active_parking_search(self):
+        self.travel_fixture(trailer_x=-11, trailer_z=222.5)
+        self.lua.execute('''
+            old.turnCourse=Course(hv,{{x=0,z=0},{x=0,z=250},{x=20,z=280}},true)
+            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
+            densityCount=20; c.callback(c.callbackOwner,nil)
+            local wait=c.queueTrailerWait; local data=u.queueData
+            data.search={}; local search=data.search; local generation=data.generation
+            for i=1,40 do
+                g_currentMission.time=g_currentMission.time+1000
+                assert(Q.checkParkedTrailerTravel(c))
+                assert(c.queueTrailerWait==wait and not data.bypass)
+                assert(data.search==search and data.generation==generation)
+            end
+            -- A finished/failed search permits the existing combine retry again.
+            data.search=nil; assert(Q.checkParkedTrailerTravel(c))
+            assert(not c.queueTrailerWait and c.queueBypass)
         ''')
 
     def test_reverse_disabled_still_plans_before_any_movement(self):

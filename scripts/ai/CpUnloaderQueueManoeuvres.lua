@@ -1276,8 +1276,7 @@ local function requestTurnClearance(combine,driver,area)
     if data.operation=='yield' and request and request.turnClearance==area then return false end
     if not Q.priority(driver,combine.vehicle) then
         if Q.owns(driver) and (data.nativeYieldUntil or 0)>g_currentMission.time and Q.nativeMoveAway then
-            Q.nativeMoveAway(driver,combine.vehicle)
-            return Q.nativeClearanceActive(driver)
+            return Q.nativeMoveAway(driver,combine.vehicle)
         end
         return false
     end
@@ -1333,11 +1332,16 @@ function Q.checkParkedTrailerTravel(combine)
             -- returning to the queue, but moving clearance/departures go first.
             local stationary=(not blocked or AIUtil.isStopped(wait.driver.vehicle))
                 and (not traffic or AIUtil.isStopped(traffic.vehicle))
+            -- Let the trailer finish its checked escape/parking search before
+            -- freezing it for another combine detour. The queue already bounds
+            -- stalled searches and routes; a five-second retry must not starve them.
+            local queueData=wait.driver.queueData
+            local queueBusy=Q.owns(wait.driver) and queueData and (queueData.search or queueData.path)
             local departureBusy=Q.departureClearanceActive(wait.driver)
                 or (wait.driver.queueData and wait.driver.queueData.nativeDeparture
                     and ((wait.driver.pathfinderController and wait.driver.pathfinderController.pathfinder)
                         or Q.nativeClearanceActive(wait.driver)))
-            if stationary and not departureBusy and g_currentMission.time>=(wait.retryAt or 0) then
+            if stationary and not departureBusy and not queueBusy and g_currentMission.time>=(wait.retryAt or 0) then
                 wait.retryAt=g_currentMission.time+5000
                 combine.queueTrailerWait=nil
                 resumeBypass(combine,wait)
@@ -1947,6 +1951,31 @@ function Q.nativeClearanceActive(driver)
     return false
 end
 
+-- A future route reservation is not a local collision. Native move-away uses
+-- the other vehicle's frame and needs current sensor or adjacent-body evidence.
+-- In particular, a rejected long turn must not repeatedly
+-- cancel a remote trailer's parking search or push it towards the field edge.
+function Q.hasLocalBlocker(driver,vehicle)
+    if not vehicle then return false end
+    local other=vehicle.getCpDriveStrategy and vehicle:getCpDriveStrategy()
+    local range=(ProximityController and ProximityController.sensorRange) or 10
+    local function sensed(strategy,target)
+        if not strategy or not strategy.isVehicleInProximity then return false end
+        local near,d=strategy:isVehicleInProximity(target)
+        return near and (d==nil or (H.math.finite(d) and d>=0 and d<=range))
+    end
+    -- Confirm live body locality even for a sensor ID. Sensors report only the
+    -- closest object, so a closer tree may also hide a genuinely adjacent header.
+    local margin=(sensed(driver,vehicle) or sensed(other,driver.vehicle)) and range or 2
+    local ours,theirs=W.currentBodies(driver.vehicle),W.currentBodies(vehicle)
+    for _,a in ipairs(ours or {}) do
+        for _,b in ipairs(theirs or {}) do
+            if G.overlap(W.rectangle(a.body,a.pose,margin),W.rectangle(b.body,b.pose,0)) then return true end
+        end
+    end
+    return false
+end
+
 -- A failed queue search must not monopolise clearance. Native proximity and
 -- move-away steering remain responsible for the handback; never skip W.clear.
 function Q.updateYieldRecovery(driver)
@@ -1976,7 +2005,7 @@ function Q.updateYieldRecovery(driver)
             if AIDriveStrategyCombineCourse.isActiveCpCombine(other) then vehicle=other; break end
         end
     end
-    if not vehicle then return false end
+    if not vehicle or not Q.hasLocalBlocker(driver,vehicle) then return false end
     Q.reason(data,'yield made no progress; returning clearance to native CP')
     Q.release(driver)
     data.priorityCombine=nil; data.yieldRequests=nil

@@ -220,9 +220,13 @@ class AcceptedRouteTests(unittest.TestCase):
             tv.stopped=false; g_currentMission.time=wait.retryAt+1
             c:getDriveData(); assert(c.queueTrailerWait==wait and calls==1)
             tv.stopped=true
+            c:getDriveData()
+            assert(c.queueTrailerWait==wait and calls==1 and data.search==search)
+            -- A checked search owns recovery until it completes or fails.
+            Q.failed(data,'no safe clearance route'); Q.cancel(u)
             c:getDriveData(); recovery:getDriveData(33)
             assert(calls==2 and not c.queueTrailerWait and c.queueBypass)
-            assert(data.search==search and data.yieldRequests[hv]==request)
+            assert(not data.search and data.yieldRequests[hv]==request)
             c.callback(c.callbackOwner,{{x=0,y=0,t=0},{x=20,y=-10,t=0},{x=20,y=-30,t=0}})
             for i=1,30 do c:getDriveData() end
             assert(recovery.state==recovery.states.TURNING and calls==2)

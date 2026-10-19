@@ -1,3 +1,41 @@
+## Build 3052 - distant turn requests and interrupted trailer recovery
+
+The 19 October 3051 log records /322 starting an 853.1 m native approach to
+CR11/318 at 13:24:26, then returning to idle after missing the rendezvous at
+13:25:31. Subsequent queue preparation rejects the initial pose as standing
+crop. At 13:37:51 CR11/319's 329 m planned row turn crosses the trailer and
+its checked detour fails. At 13:38:01.778, our fallback requests native
+move-away despite 52.3 m longitudinal separation. Native clearance completes
+in the same update, preparation resumes, and the fallback repeats roughly
+every 0.12 seconds. By 15:23 it reports 222.5 m separation and a tree/object
+1.1 m away; parking searches repeatedly restart at zero nodes. Evidence:
+out/incident-3051-corner/rolled-log-until-14-45-49.txt (lines 15098-15118,
+17852-17856, 35909-35930, 36656-36690) and
+out/incident-3051-corner/log-2026-10-19T14-23-57-848Z.txt.
+The logs establish the abandoned approach and repeated fallback, not the
+precise physical trajectory into the photographed corner.
+
+Native move-away now requires physical locality: body footprints within the
+native sensor range with a current detection, or genuinely adjacent footprints
+when a nearer object obscures a tractor/trailer/header. Stale IDs or invalid
+sensor distances cannot establish a remote blockage. A future turn reservation alone cannot
+cancel remote preparation or start a combine-relative native clearance course.
+A rejected fallback does not reset the combine's five-second retry deadline;
+active checked trailer searches/routes also finish before another detour
+freezes the trailer. Existing search/stall limits still apply. A failed remote
+yield retains its checked recovery instead of releasing it into that loop.
+Genuine nearby blockers, including a header obscured in the sensors by a
+closer tree, retain native clearance. Turn occupancy still holds the combine
+until the route clears or a checked detour is found.
+
+Regressions reproduce repeated remote callbacks beyond the cooldown, a remote
+yield timeout, a nearer tree, the retained turn wait/retry, and parking-search
+progress during retries. No crop, boundary or obstacle check is waived: a rig
+already overlapping standing crop or a tree still needs a valid exit, so these
+checks do not prove recovery from the photographed trapped pose. Run source
+and extracted ZIP qualification, then validate a fresh 3052 run in-game. The
+3051 final-lane, loaded-departure and 3050 AD-arrival changes remain intact.
+
 ## Build 3051 - final-lane priority and loaded return clearance
 
 The 19 October 3049 log shows trailer /323 emptying CR11/318 at

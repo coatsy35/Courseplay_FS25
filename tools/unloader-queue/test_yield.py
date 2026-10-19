@@ -87,6 +87,54 @@ class YieldTests(unittest.TestCase):
         ''')
 
 
+    def test_remote_callback_cannot_cancel_parking_search_across_cooldown(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(-11,222.5,math.pi); c.near=false
+            Q.take(u,'prepare'); local data=u.queueData
+            densityCount=20 -- the reported invalid start; no permission to cross more crop
+            data.search={}; local search=data.search; local generation=data.generation
+            local course={}; u.course=course
+            for time=0,45000,100 do
+                g_currentMission.time=time
+                u:onBlockingVehicle(harvester,false)
+                assert(Q.owns(u) and data.operation=='prepare')
+                assert(data.search==search and data.generation==generation and u.course==course)
+            end
+        ''')
+
+    def test_stale_sensor_id_does_not_establish_physical_locality(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(-11,222.5,math.pi)
+            c.isVehicleInProximity=function() return true,1 end
+            assert(not Q.hasLocalBlocker(u,harvester))
+            c.isVehicleInProximity=function() return true,math.huge end
+            assert(not Q.hasLocalBlocker(u,harvester))
+        ''')
+
+    def test_remote_yield_timeout_keeps_checked_recovery(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(-11,222.5,math.pi); c.near=false
+            Q.take(u,'prepare'); assert(Q.priority(u,harvester))
+            local data=u.queueData
+            data.yieldRequests[harvester].turnClearance=function() return true end
+            data.yieldProgressTime=0; data.yieldFailed=true
+            data.search={}; local search=data.search; local generation=data.generation
+            g_currentMission.time=16000
+            assert(not Q.updateYieldRecovery(u))
+            assert(Q.owns(u) and data.operation=='yield' and data.search==search)
+            assert(data.generation==generation and data.yieldRequests[harvester])
+        ''')
+
+    def test_adjacent_header_hidden_by_tree_still_allows_local_clearance(self):
+        self.lua.execute('''
+            harvester,c,header=makeHarvester(0,14,math.pi); c.near=false
+            -- Put the real mounted header beside the tractor; sensors see the tree.
+            header.rootNode.z=4
+            densityCount=20
+            Q.take(u,'prepare'); u:onBlockingVehicle(harvester,false)
+            assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
+        ''')
+
     def test_excluded_unloading_modes_keep_original_blocking_callback(self):
         for mode in ('augerWagon', 'fieldUnloadPositionNode', 'useGiantsUnload'):
             with self.subTest(mode=mode):

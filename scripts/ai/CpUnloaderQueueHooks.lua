@@ -380,8 +380,9 @@ end
 
 local blocking = U.onBlockingVehicle
 Q.nativeMoveAway=function(driver,vehicle)
+    if not Q.hasLocalBlocker(driver,vehicle) then return false end
     local previous=driver.state
-    local result=blocking(driver,vehicle,false)
+    blocking(driver,vehicle,false)
     if driver.state~=previous and Q.nativeClearanceActive(driver) then
         -- Native callback accepted control. Its old coroutine must not later
         -- replace the clearance course or report failure against the new state.
@@ -394,8 +395,9 @@ Q.nativeMoveAway=function(driver,vehicle)
             data.yieldRequests=nil; data.priorityCombine=nil
             data.nativeYieldUntil=g_currentMission.time+15000
         end
+        return true
     end
-    return result
+    return false
 end
 function U:onBlockingVehicle(vehicle,isBack)
     if not Q.enabled(self) then return blocking(self,vehicle,isBack) end
