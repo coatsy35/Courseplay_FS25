@@ -64,7 +64,18 @@ class ParkingTests(unittest.TestCase):
             for _,p in ipairs(goal.choices) do assert(p.x==50,'uncut row displaced harvested slot') end
             densityCount=1
             Q.request(u,goal)
-            assert(not u.queueData.search and u.queueData.reason:find('standing crop',1,true),'parking crossed actual crop')
+            -- Recovery may accept the already-occupied start; candidate slots
+            -- are checked incrementally and must still reject standing crop.
+            local data=u.queueData
+            local done,path,reason
+            if data.search then
+                for i=1,1000 do
+                    done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
+                    if done then break end
+                end
+                assert(done and not path,'parking crossed actual crop')
+            else reason=data.reason end
+            assert(reason:find('standing crop',1,true),'crop rejection was lost')
         ''')
 
     def test_native_foreground_keeps_small_parking_slice_without_duplicate_frame_work(self):
