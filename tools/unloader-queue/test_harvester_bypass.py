@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import unittest
+from lupa.lua52 import LuaRuntime
 
 SOURCE=Path(__file__).resolve().parents[2]
 ROOT=Path(sys.argv.pop(1)).resolve() if len(sys.argv)>1 and not sys.argv[1].startswith('-') else SOURCE
@@ -12,7 +13,9 @@ runtime.ROOT=ROOT
 
 class HarvesterBypassTests(unittest.TestCase):
     def setUp(self):
-        runtime.EngineBoundaryTests.setUp(self)
+        self.lua=LuaRuntime(unpack_returned_tuples=True)
+        self.lua.globals().ROOT=ROOT.as_posix()
+        self.lua.execute((SOURCE/'tools/straight-entry/engine-boundary.lua').read_text())
         self.lua.execute('AIDriveStrategyCourse={}; AIDriveStrategyFieldWorkCourse={}')
         for name in ('AIDriveStrategyUnloadCombine','AIDriveStrategyCombineCourse'):
             self.lua.execute((ROOT/f'scripts/ai/strategies/{name}.lua').read_text())
@@ -40,9 +43,8 @@ class HarvesterBypassTests(unittest.TestCase):
                 getIsCpActive=function(self) return self.active end,
                 getAIDirectionNode=function() return {x=0,z=0,t=0} end,
                 stopCurrentAIJob=function() stopped=true end}
-            tv=v; tv.stopped=true
+            tv={stopped=true,getIsCpActive=function() return true end}
             AIUtil.isStopped=function(v) return v.stopped end
-            AIUtil.getTurningRadius=function() return 9 end
             AIUtil.getSteeringParameters=function() return nil,0 end
             AIUtil.hasChainedAttachments=function() return false end
             AIUtil.getDirectionNodeToReverserNodeOffset=function() return 0 end
@@ -102,15 +104,9 @@ class HarvesterBypassTests(unittest.TestCase):
             hv.getCpDriveStrategy=function() return c end
             local header={rootNode={x=0,z=5,t=0},size={width=15.2,length=2}}
             hv.getAttachedImplements=function() return {{object=header}} end
-            tv.rootNode.x=0; tv.rootNode.z=40; tv.rootNode.t=0; tv.size={width=3,length=5}
+            tv.rootNode={x=0,z=40,t=0}; tv.size={width=3,length=5}
             tv.getAIDirectionNode=function() return tv.rootNode end
-            trailer.rootNode.x=0; trailer.rootNode.z=30; trailer.rootNode.t=0
-            trailer.size={width=3,length=10}
-            trailer.getActiveInputAttacherJoint=function(self)
-                self.joint.node.x=tv.rootNode.x; self.joint.node.z=tv.rootNode.z-3.3
-                self.joint.node.t=tv.rootNode.t
-                return self.joint
-            end
+            trailer={rootNode={x=0,z=30,t=0},size={width=3,length=10}}
             tv.getAttachedImplements=function() return {{object=trailer}} end
             c.getCurrentCourse=function() return installed or old.turnCourse end
             c.ppc.getRelevantWaypointIx=function() return 1 end
@@ -140,11 +136,6 @@ class HarvesterBypassTests(unittest.TestCase):
         self.travel_fixture(trailer_x=40)
         self.lua.execute('''
             for k,value in pairs(AIDriveStrategyUnloadCombine.myCombineUnloadStates) do u.states[k]=value end
-            -- Supply the engine state queried by early trailer traffic detection.
-            local grainStrategy={alwaysNeedsUnloader=function() return false end,
-                hasAutoAimPipe=function() return false end,isDischarging=function() return false end}
-            grainTarget={getIsCpActive=function() return true end,
-                getCpDriveStrategy=function() return grainStrategy end}
             function trafficRig(x,z,state,assignment,departing)
                 local vehicle={active=true,stopped=false,rootNode={x=x,z=z,t=math.pi/2},size={width=3,length=5}}
                 local trailer={rootNode={x=x-10,z=z,t=math.pi/2},size={width=3,length=10}}
@@ -171,7 +162,7 @@ class HarvesterBypassTests(unittest.TestCase):
         self.lua.execute('''
             outgoing,ov,ot=trafficRig(0,40,u.states.DRIVING_BACK_TO_START_POSITION_WHEN_FULL,nil,true)
             serving,sv,st=trafficRig(0,20,u.states.BACKING_UP_FOR_REVERSING_COMBINE,hv,false)
-            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,grainTarget,false)
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
             local departure=outgoing.course; local approach=incoming.course; local assignment=incoming.combineToUnload
             incoming.pathfinderController={pathfinder={}}; local runner=incoming.pathfinderController.pathfinder
             assert(select(4,c:getDriveData(33))==0 and c.aiTurn==old)
@@ -194,7 +185,7 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_approach_waiting_transition_cannot_be_seized_by_proximity_callback(self):
         self.traffic_fixture()
         self.lua.execute('''
-            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,grainTarget,false)
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
             c:getDriveData(33)
             nativeUnloaderStep=function(driver)
                 driver.stateAfterWaitingForManeuveringCombine=driver.state
@@ -237,7 +228,7 @@ class HarvesterBypassTests(unittest.TestCase):
     def test_new_reservation_invalidates_cached_clear_approach_in_same_update(self):
         self.traffic_fixture()
         self.lua.execute('''
-            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,grainTarget,false)
+            incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
             assert(not Q.holdIncomingTurn(incoming,15))
             c:getDriveData(33)
             assert(Q.holdIncomingTurn(incoming,15))
@@ -318,7 +309,7 @@ class HarvesterBypassTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.setUp(); self.traffic_fixture()
                 self.lua.execute('''
-                    incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,grainTarget,false)
+                    incoming,iv,it=trafficRig(-20,55,u.states.DRIVING_TO_MOVING_COMBINE,{},false)
                     c:getDriveData(33); assert(Q.holdIncomingTurn(incoming,15))
                 '''+change+'''
                     assert(not Q.holdIncomingTurn(incoming,15))
@@ -404,73 +395,6 @@ class HarvesterBypassTests(unittest.TestCase):
             recovery:getDriveData(33)
             assert(calls==2 and args[3]==targetNode and context.turnEndWpIx==953)
         '''.replace('args[3]==targetNode', 'args[3].x==20 and args[3].z==30'))
-
-    def test_failed_detour_with_invalid_queue_start_keeps_native_clearance(self):
-        self.travel_fixture(trailer_z=20)
-        self.lua.execute('''
-            u.states={}
-            for _,collection in ipairs({AIDriveStrategyUnloadCombine.myStates,AIDriveStrategyUnloadCombine.myCombineUnloadStates}) do
-                for name,properties in pairs(collection) do u.states[name]={name=name,properties=properties} end
-            end
-            u.isBeingHeld=function() return false end
-            u.setNewState=function(self,state) self.state=state end
-            u.createMoveAwayCourse=function(self)
-                return Course(self.vehicle,{{x=0,z=20},{x=0,z=10,rev=true}},true)
-            end
-            u.startCourse=function(self,course) self.course=course end
-            AIUtil.isOtherVehicleAhead=function() return true end
-            AIUtil.getImplementOrVehicleWithSpecialization=function() return trailer end
-            CpMathUtil.isOppositeDirection=function() return false end
-            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
-            densityCount=20
-            c.isVehicleInProximity=function() return true end -- actual nearby blockage
-            c.callback(c.callbackOwner,nil)
-            assert(c.queueTrailerWait and not stopped and not Q.owns(u))
-            assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE and not u.queueData.search)
-            local course=u.course
-            c:getDriveData(33); assert(u.course==course)
-        ''')
-
-    def test_remote_turn_wait_does_not_restart_native_clearance_or_retry_deadline(self):
-        self.travel_fixture(trailer_x=-11, trailer_z=222.5)
-        self.lua.execute('''
-            old.turnCourse=Course(hv,{{x=0,z=0},{x=0,z=250},{x=20,z=280}},true)
-            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
-            densityCount=20
-            c.callback(c.callbackOwner,nil)
-            assert(c.queueTrailerWait and Q.owns(u) and u.queueData.operation=='prepare')
-            local wait=c.queueTrailerWait; local retry=wait.retryAt
-            local generation=u.queueData.generation
-            for i=1,40 do
-                g_currentMission.time=g_currentMission.time+100
-                assert(Q.checkParkedTrailerTravel(c))
-                assert(c.queueTrailerWait==wait and wait.retryAt==retry)
-                assert(Q.owns(u) and u.queueData.generation==generation)
-            end
-            g_currentMission.time=retry
-            assert(Q.checkParkedTrailerTravel(c))
-            assert(not c.queueTrailerWait and c.queueBypass)
-            assert(context.turnEndWpIx==953 and not stopped)
-        ''')
-
-    def test_remote_turn_retry_does_not_freeze_an_active_parking_search(self):
-        self.travel_fixture(trailer_x=-11, trailer_z=222.5)
-        self.lua.execute('''
-            old.turnCourse=Course(hv,{{x=0,z=0},{x=0,z=250},{x=20,z=280}},true)
-            assert(Q.checkParkedTrailerTravel(c)); c.aiTurn:getDriveData(33)
-            densityCount=20; c.callback(c.callbackOwner,nil)
-            local wait=c.queueTrailerWait; local data=u.queueData
-            data.search={}; local search=data.search; local generation=data.generation
-            for i=1,40 do
-                g_currentMission.time=g_currentMission.time+1000
-                assert(Q.checkParkedTrailerTravel(c))
-                assert(c.queueTrailerWait==wait and not data.bypass)
-                assert(data.search==search and data.generation==generation)
-            end
-            -- A finished/failed search permits the existing combine retry again.
-            data.search=nil; assert(Q.checkParkedTrailerTravel(c))
-            assert(not c.queueTrailerWait and c.queueBypass)
-        ''')
 
     def test_reverse_disabled_still_plans_before_any_movement(self):
         self.travel_fixture()
@@ -796,105 +720,6 @@ class HarvesterBypassTests(unittest.TestCase):
             c.states.DRIVING_TO_WORK_START_WAYPOINT={}
             c.state=c.states.DRIVING_TO_WORK_START_WAYPOINT
             assert(not Q.holdHeadlandCorner(c))
-        ''')
-
-    def centre_transfer_fixture(self):
-        self.travel_fixture(trailer_x=100)
-        self.headland_corner_fixture()
-        self.lua.execute('''
-            hv.rootNode.z=15; hv:getAttachedImplements()[1].object.rootNode.z=20
-            hv.getIsCpFieldWorkActive=hv.getIsCpActive
-            c.ppc.getRelevantWaypointIx=function() return 4 end
-            leaderNode.x=-25; leaderNode.z=20; leaderNode.t=math.pi/2
-            lv.rootNode=leaderNode; lv.size={width=3.5,length=8}; lv.stopped=true
-            lv.getIsCpActive=lv.getIsCpFieldWorkActive
-            leadHeader={rootNode={x=-20,z=20,t=math.pi/2},size={width=15.2,length=2}}
-            lv.getAttachedImplements=function() return {{object=leadHeader}} end
-            setmetatable(lead,AIDriveStrategyCombineCourse)
-            lead.states.WORKING={}; lead.states.TURNING={}
-            lead.state=lead.states.DRIVING_TO_WORK_START_WAYPOINT
-            lead.settings=settings; lead.debug=function() end
-            lead.getCurrentCourse=function(self) return self.course end
-            lead.ppc={getRelevantWaypointIx=function() return 1 end}
-            lead.course=Course(lv,{{x=-25,z=20},{x=0,z=20},{x=60,z=20}},true)
-            transferCourse=lead.course
-        ''')
-
-    def test_centre_transfer_waits_for_actual_header_then_releases_the_occupant(self):
-        for first in ('c:getDriveData()', 'lead:getDriveData()'):
-            self.setUp(); self.centre_transfer_fixture()
-            self.lua.execute(first+'''
-                assert(select(4,lead:getDriveData())==0)
-                assert(lead.queueTransferHold and not Q.holdHeadlandCorner(c))
-                assert(select(4,c:getDriveData())==10,'headland follower could not clear')
-                assert(lead.course==transferCourse and c.course==fc)
-                hv.rootNode.z=60; hv:getAttachedImplements()[1].object.rootNode.z=65
-                c.ppc.getRelevantWaypointIx=function() return 13 end
-                assert(select(4,lead:getDriveData())==10)
-                assert(not lead.queueTransferHold and lead.course==transferCourse)
-            ''')
-
-    def test_centre_transfer_checks_header_tip_and_all_five_combine_bodies(self):
-        self.centre_transfer_fixture()
-        self.lua.execute('''
-            -- Move the tractor body clear; its header still occupies the sweep.
-            hv.rootNode.z=6; hv:getAttachedImplements()[1].object.rootNode.z=11
-            local fleet={lv}
-            for i=1,3 do
-                local body={rootNode={x=80+i*20,z=80,t=0},size={width=4,length=8},spec_combine={}}
-                body.getAIDirectionNode=function(self) return self.rootNode end
-                body.getAttachedImplements=function() return {} end
-                body.getIsCpFieldWorkActive=function() return true end
-                fleet[#fleet+1]=body
-            end
-            fleet[#fleet+1]=hv; g_currentMission.vehicleSystem.vehicles=fleet
-            assert(Q.holdCentreTransfer(lead,20),'fifth combine header omitted')
-            hv:getAttachedImplements()[1].object.rootNode.z=-10
-            assert(not Q.holdCentreTransfer(lead,20))
-        ''')
-
-    def test_full_connector_fallback_checks_current_remaining_route(self):
-        self.centre_transfer_fixture()
-        self.lua.execute('''
-            local points={}
-            for i=1,276 do points[i]={x=-301+2*i,z=20} end
-            lead.course=Course(lv,points,true)
-            local ix=100
-            lead.ppc.getRelevantWaypointIx=function() return ix end
-            local function position(x) leaderNode.x=x; leadHeader.rootNode.x=x+5 end
-            position(-101)
-            assert(not Q.holdCentreTransfer(lead,20),'distant future conflict held full connector')
-            ix=138; position(-25)
-            assert(Q.holdCentreTransfer(lead,20),'current connector collision omitted')
-            ix=166; position(31)
-            assert(not Q.holdCentreTransfer(lead,20),'passed connector still reserved')
-            assert(lead.course:getNumberOfWaypoints()==276 and lead.turnContext.turnStartWpIx==2)
-        ''')
-
-    def test_transfer_clearance_never_releases_follower_into_another_harvester(self):
-        self.centre_transfer_fixture()
-        self.lua.execute('''
-            assert(Q.holdCentreTransfer(lead,20))
-            local body={rootNode={x=0,z=35,t=0},size={width=4,length=8},spec_combine={}}
-            body.getAIDirectionNode=function(self) return self.rootNode end
-            body.getAttachedImplements=function() return {} end
-            g_currentMission.vehicleSystem.vehicles[3]=body
-            assert(Q.holdHeadlandCorner(c),'follower released into third combine')
-            g_currentMission.vehicleSystem.vehicles[3]=nil
-            assert(not Q.holdHeadlandCorner(c))
-        ''')
-
-    def test_transfer_check_uses_braking_distance_and_discards_replaced_courses(self):
-        self.centre_transfer_fixture()
-        self.lua.execute('''
-            hv.rootNode.x=15; hv:getAttachedImplements()[1].object.rootNode.x=15
-            assert(not Q.holdCentreTransfer(lead,0))
-            assert(Q.holdCentreTransfer(lead,32),'commanded travel speed ignored')
-            lead.course=Course(lv,{{x=-25,z=20},{x=-80,z=20}},true)
-            assert(not Q.holdCentreTransfer(lead,10))
-            lead.course=transferCourse; assert(Q.holdCentreTransfer(lead,32))
-            lead.state=lead.states.WORKING
-            assert(not Q.holdCentreTransfer(lead,32) and not lead.queueTransferHold)
         ''')
 
     def test_success_stop_and_fullness_release_both_hold_references(self):

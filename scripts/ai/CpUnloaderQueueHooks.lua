@@ -4,45 +4,6 @@ local Q = CpUnloaderQueue
 local U = AIDriveStrategyUnloadCombine
 local C = AIDriveStrategyCombineCourse
 
--- Loaded return routes need room for the native proximity brake (1.5 m),
--- not just the pathfinder's 0.25 m collision padding. Scope both changes to
--- this exact marker request; combine approaches and other drivers stay native.
-if PathfinderController and PathfinderConstraints then
-    local P,K=PathfinderController,PathfinderConstraints
-    local findNode=P.findPathToNode
-    function P:findPathToNode(context,node,x,z,...)
-        local driver=self.callbackObject
-        if driver and driver.pathfinderController==self and Q.enabled(driver)
-                and driver.queueData and driver.queueData.nativeDeparture
-                and node==driver.invertedStartPositionMarkerNode
-                and self.callbackSuccessFunction==driver.onPathfindingDoneToInvertedGoalPositionMarker then
-            context.queueDepartureClearance=true
-            -- The destination may legitimately lie outside the field. Restrict
-            -- the exemption to its final alignment, keeping the field cost elsewhere.
-            local length=AIUtil.getLength(driver.vehicle)
-            local width=math.max(8,driver.vehicle.size.width+4)
-            context:areaToIgnoreOffFieldPenalty(PathfinderUtil.NodeArea(node,x-width/2,
-                math.min(z,0)-length,width,math.abs(z)+2*length))
-        end
-        return findNode(self,context,node,x,z,...)
-    end
-    local constraintsInit=K.init
-    function K:init(context,...)
-        constraintsInit(self,context,...)
-        if context.queueDepartureClearance then
-            self.offFieldPenalty=math.max(self.offFieldPenalty,PathfinderContext.defaultOffFieldPenalty)
-            self.initialOffFieldPenalty=self.offFieldPenalty
-            local margin=(ProximityController and ProximityController.stopThresholdNormal or 1.5)+0.5
-            for _,box in pairs({self.vehicleData:getVehicleOverlapBoxParams(),
-                    self.vehicleData:getTowedImplementOverlapBoxParams()}) do
-                box.width=box.width+margin-0.25; box.length=box.length+margin-0.25
-            end
-            self.logger:debug(self.vehicle,
-                'Queue: loaded return keeps off-field penalty %.1f and %.1f m obstacle clearance',self.offFieldPenalty,margin)
-        end
-    end
-end
-
 local setVehicle = U.setAIVehicle
 function U:setAIVehicle(vehicle,...)
     local result=setVehicle(self,vehicle,...)
@@ -81,9 +42,6 @@ end
 local update = U.update
 function U:update(dt)
     Q.releaseFinishedCombine(self)
-    Q.updateStoppedApproach(self)
-    Q.updateFinalUnload(self)
-    if self.vehicle:getCpDriveStrategy()~=self then return end
     Q.resumeWaitingApproach(self)
     Q.tick(self)
     -- A no-marker/full event can synchronously stop CP and delete this driver.
@@ -94,93 +52,18 @@ end
 local drive = U.getDriveData
 function U:getDriveData(...)
     Q.releaseFinishedCombine(self)
-    Q.checkTrailerTraffic(self)
     Q.speed(self)
     local hold=Q.holdIncomingTurn(self)
     local gx,gz,forwards,speed,acceleration=drive(self,...)
-    local pocketHold=Q.holdPocketDeparture(self,forwards,speed)
-    local trafficHold=Q.trailerTrafficHold(self)
-    local departureHold=Q.holdWorkingDeparture(self,forwards,speed)
-    local finalReleaseHold=Q.holdFinalRelease(self)
-    if trafficHold or pocketHold or departureHold or finalReleaseHold then speed=0 end
-    local incomingHold=Q.holdIncomingTurn(self,speed) or hold
-    if incomingHold then speed=0 end
-    if Q.watchNativeDeparture(self,speed,pocketHold or trafficHold or incomingHold or departureHold or finalReleaseHold,forwards) then speed=0 end
-    speed=Q.finalUnloadSpeed(self,speed)
-    speed=Q.stoppedApproachSpeed(self,speed)
+    if Q.holdPocketDeparture(self,forwards,speed) then speed=0 end
+    if Q.holdIncomingTurn(self,speed) or hold then speed=0 end
     return gx,gz,forwards,speed,acceleration
-end
-
-local stoppedUnload = U.unloadStoppedCombine
-function U:unloadStoppedCombine()
-    if Q.releaseFinishedCombine(self) then return end
-    if self.queueStationaryPipe and self.queueStationaryPipe==self.combineToUnload and not Q.finalApproachTarget(self) then
-        self.queueStationaryPipe=nil
-        local c=self.combineToUnload and self.combineToUnload:getCpDriveStrategy()
-        if c and not c:willWaitForUnloadToFinish() and not c:isUnloadFinished() then
-            self:startCourseFollowingCombine(); self:setMaxSpeed(0); return
-        end
-    end
-    if Q.ordinaryStoppedTarget(self) and Q.watchStoppedMovingUnload(self) then return end
-    if Q.watchFinalUnload(self) then return end
-    Q.capturePocketDeparture(self,self.combineToUnload,true)
-    return stoppedUnload(self)
-end
-
-local stoppedApproach = U.startUnloadingStoppedCombine
-function U:startUnloadingStoppedCombine()
-    if Q.deferFinalPipeApproach(self) then return end
-    return stoppedApproach(self)
-end
-
-local admission = U.isOkToStartUnloadingCombine
-function U:isOkToStartUnloadingCombine()
-    if Q.stoppedAdmission(self)==false then return false end
-    return admission(self)
-end
-
-local frontAdmission = U.isInFrontAndAlignedToMovingCombine
-function U:isInFrontAndAlignedToMovingCombine(...)
-    if Q.hasStoppedRendezvousOvershoot(self) then
-        self:debugSparse('Queue: full stopped combine cannot reach a fill node ahead of its pipe; use native rear approach')
-        return false
-    end
-    return frontAdmission(self,...)
-end
-
-local needsPath = U.isPathfindingNeeded
-function U:isPathfindingNeeded(vehicle,target,...)
-    if vehicle==self.vehicle and Q.hasStoppedRendezvousOvershoot(self)
-            and target==self:getPipeOffsetReferenceNode() then return true end
-    if vehicle==self.vehicle and Q.finalApproachTarget(self)
-            and target==self:getPipeOffsetReferenceNode() and Q.pipeEntryAligned(self)==false then
-        return true -- nearby but misaligned still needs the checked rear entry
-    end
-    return needsPath(self,vehicle,target,...)
-end
-
-local startUnload = U.startUnloadingCombine
-function U:startUnloadingCombine()
-    if Q.finalApproachTarget(self) then
-        self.queueStationaryPipe=self.combineToUnload
-        self:startUnloadingStoppedCombine(); return
-    end
-    return startUnload(self)
-end
-
-local movingUnload = U.unloadMovingCombine
-function U:unloadMovingCombine()
-    if Q.releaseFinishedCombine(self) then return end
-    if Q.watchStoppedMovingUnload(self) then return end
-    Q.capturePocketDeparture(self,self.combineToUnload,true)
-    return movingUnload(self)
 end
 
 local allowed = U.isAllowedToBeCalled
 function U:isAllowedToBeCalled()
-    if Q.holdFinalRelease(self) then return false end
     if self.queueData and (self.queueData.approachRetryAt or 0)>g_currentMission.time then return false end
-    if self.queueData and (self.queueData.bypass or self.queueData.trailerTraffic or Q.trailerTrafficHold(self)) then return false end
+    if self.queueData and self.queueData.bypass then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then return self.queueData.operation=='prepare' end
     return allowed(self)
@@ -190,24 +73,9 @@ end
 -- its exact final goal. Other failures retain native retry/error handling.
 local waitingPath = U.startPathfindingToWaitingCombine
 function U:startPathfindingToWaitingCombine(x,z)
-    -- Reserve the original unloading entry before moving the pathfinder goal
-    -- farther back; an outgoing trailer still owns that final space.
     if Q.deferWaitingApproach(self,x,z) then return end
     if self.queueData then self.queueData.waitingApproach={combine=self.combineToUnload,x=x,z=z} end
-    local originalX,originalZ=x,z
-    local entryAllowed
-    x,z,entryAllowed=Q.stoppedApproachGoal(self,x,z)
-    if entryAllowed==false then return end
-    if self.queueStoppedApproach and Q.deferWaitingApproach(self,originalX,originalZ) then return end
-    if Q.beginStoppedEscape(self) then return end
-    local result=waitingPath(self,x,z)
-    -- The native context is created inside waitingPath and can synchronously
-    -- install a backup. Bind it after that call, before the next update.
-    local recovery=self.queueStoppedApproach or self.queueFinalUnload
-    if recovery and recovery.combine==self.combineToUnload and self.pathfinderController then
-        recovery.controller=self.pathfinderController; recovery.context=self.pathfinderController.currentContext
-    end
-    return result
+    return waitingPath(self,x,z)
 end
 
 local stationaryFailed = U.onPathfindingFailedToStationaryTarget
@@ -223,13 +91,11 @@ function U:onPathfindingDoneToWaitingCombine(controller,success,course,invalid)
     if not success and attempt and attempt.combine==self.combineToUnload
             and Q.deferWaitingApproach(self,attempt.x,attempt.z) then return false end
     if self.queueData then self.queueData.waitingApproach=nil end
-    Q.stoppedApproachPath(self,success,course)
     return waitingDone(self,controller,success,course,invalid)
 end
 
 local call = U.call
 function U:call(combine,waypoint)
-    if Q.holdFinalRelease(self) then return false end
     if self.queueData and self.queueData.bypass then return false end
     if Q.enabled(self) and ((self.queueData and self.queueData.nativeDeparture) or Q.atDepartureThreshold(self)) then return false end
     if Q.enabled(self) and Q.owns(self) then
@@ -322,18 +188,10 @@ end
 
 local combineDrive = C.getDriveData
 function C:getDriveData(...)
-    local finalHold=Q.holdFinalApproach(self)
-    local transferHold=Q.holdCentreTransfer(self)
     local cornerHold=Q.holdHeadlandCorner(self)
     local hold=Q.checkCombineTurns(self) or Q.checkParkedTrailerTravel(self) or cornerHold
     local gx,gz,forwards,speed,acceleration=combineDrive(self,...)
     cornerHold=Q.holdHeadlandCorner(self) or cornerHold
-    finalHold=Q.holdFinalApproach(self) or finalHold
-    if finalHold~=self.queueFinalApproachHold then
-        self:debug(finalHold and 'Queue: holding final straight for preceding harvester to unload and park'
-            or 'Queue: preceding harvester clear; resuming final straight')
-        self.queueFinalApproachHold=finalHold
-    end
     if cornerHold~=self.queueCornerHold then
         if cornerHold then
             self:debug('Queue: waiting before headland corner for centre-entry combine %s', CpUtil.getName(cornerHold))
@@ -342,8 +200,7 @@ function C:getDriveData(...)
         end
         self.queueCornerHold=cornerHold
     end
-    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or cornerHold or hold or finalHold
-            or Q.holdCentreTransfer(self,speed) or transferHold then speed=0 end
+    if Q.checkCombineTurns(self,speed) or Q.checkParkedTrailerTravel(self) or cornerHold or hold then speed=0 end
     return gx,gz,forwards,speed,acceleration
 end
 
@@ -351,15 +208,15 @@ end
 -- full-job event consumed by AD. Do not impose a second handover gate.
 local unload = U.startUnloadingTrailers
 function U:startUnloadingTrailers(...)
-    Q.clearStoppedApproach(self)
-    self.queueStationaryPipe=nil; self.queueStoppedWatch=nil
-    Q.clearFinalUnload(self)
     if Q.enabled(self) then
-        -- Native reverse clearance still creates room for the combine. Retain
-        -- its identity until it has physically left and travelled a full length.
+        -- Remember a pocket departure only after native reverse clearance.
+        -- Pathfinding can take longer than the pause, so start its clock when
+        -- the resulting forward route is actually ready to move.
         if self.state==self.states.MOVING_BACK_WITH_TRAILER_FULL then
             local vehicle=self.state.properties.vehicle
-            Q.capturePocketDeparture(self,vehicle)
+            local combine=vehicle and vehicle:getCpDriveStrategy()
+            Q.data(self).pocketDeparturePause=combine and combine.isAboutToReturnFromPocket
+                and combine:isAboutToReturnFromPocket() and {} or nil
         end
         if Q.owns(self) then Q.release(self) else Q.cancel(self) end
         local data=Q.data(self)
@@ -371,50 +228,19 @@ end
 
 local last = U.onLastWaypointPassed
 function U:onLastWaypointPassed(...)
-    if Q.finishRecoveryBackup(self) then return end
-    if Q.stoppedApproachLast(self) then return end
-    if Q.finishFinalReverse(self) then return end
     if Q.owns(self) then Q.onLast(self); return end
     return last(self,...)
 end
 
 local blocking = U.onBlockingVehicle
-Q.nativeMoveAway=function(driver,vehicle)
-    if not Q.hasLocalBlocker(driver,vehicle) then return false end
-    local previous=driver.state
-    blocking(driver,vehicle,false)
-    if driver.state~=previous and Q.nativeClearanceActive(driver) then
-        -- Native callback accepted control. Its old coroutine must not later
-        -- replace the clearance course or report failure against the new state.
-        if driver.pathfinderController then driver.pathfinderController.pathfinder=nil end
-        Q.clearStoppedApproach(driver); Q.clearFinalUnload(driver)
-        Q.cancel(driver)
-        local data=driver.queueData
-        if data then
-            data.operation=nil; data.waitingApproach=nil; data.deferredApproach=nil
-            data.yieldRequests=nil; data.priorityCombine=nil
-            data.nativeYieldUntil=g_currentMission.time+15000
-        end
-        return true
-    end
-    return false
-end
 function U:onBlockingVehicle(vehicle,isBack)
-    if not Q.enabled(self) then return blocking(self,vehicle,isBack) end
-    if Q.departureClearanceActive(self) then return end
-    if isBack then return blocking(self,vehicle,isBack) end
-    if Q.nativeClearanceActive(self) then return end
-    if Q.beginTrailerTraffic(self,vehicle) then return end
     if Q.deferTrailerYield(self,vehicle) then return end
     if Q.priority(self,vehicle) then return end
-    return Q.nativeMoveAway(self,vehicle)
+    return blocking(self,vehicle,isBack)
 end
 
 local remove = U.delete
 function U:delete(...)
-    Q.clearStoppedApproach(self)
-    self.queueStationaryPipe=nil; self.queueStoppedWatch=nil
-    Q.clearFinalUnload(self)
     local result=remove(self,...)
     Q.remove(self)
     return result
@@ -424,7 +250,6 @@ end
 -- Invalidate a pending preparation route before native backup takes ownership.
 local backup = U.requestToBackupForReversingCombine
 function U:requestToBackupForReversingCombine(vehicle,...)
-    if Q.departureClearanceActive(self) or Q.deferStationaryTurnBackup(self,vehicle) then return end
     if Q.deferTrailerYield(self,vehicle) then return end
     if Q.owns(self) then Q.release(self) end
     return backup(self,vehicle,...)

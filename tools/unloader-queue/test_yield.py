@@ -20,11 +20,7 @@ class YieldTests(unittest.TestCase):
         self.lua.execute('''
             Q=CpUnloaderQueue; W=CpUnloaderQueueWorld; H=HeadlandLoopGeometry; G=CpUnloaderQueueGeometry
             setmetatable(u,AIDriveStrategyUnloadCombine)
-            u.states={}
-            for _,collection in ipairs({AIDriveStrategyUnloadCombine.myStates,AIDriveStrategyUnloadCombine.myCombineUnloadStates}) do
-                for name,properties in pairs(collection) do u.states[name]={name=name,properties=properties} end
-            end
-            u.state=u.states.IDLE
+            u.states=AIDriveStrategyUnloadCombine.myStates; u.state=u.states.IDLE
             u.releaseCombine=function(self) self.combineToUnload=nil end
             u.debugSparse=function() end
             u.setMaxSpeed=function(self,speed) self.speed=speed end
@@ -36,16 +32,6 @@ class YieldTests(unittest.TestCase):
             u.ppc={getReverserNode=function() return trailer.steeringAxleNode end}
             v.getCpDriveStrategy=function() return u end
             AIUtil.getLength=function() return 18 end
-            -- Geometry/engine adapters only; native onBlockingVehicle still
-            -- selects and installs its move-away state through the real hook.
-            u.isBeingHeld=function() return held or false end
-            u.setNewState=function(self,state) self.state=state end
-            AIUtil.isOtherVehicleAhead=function() return true end
-            AIUtil.getImplementOrVehicleWithSpecialization=function() return trailer end
-            CpMathUtil.isOppositeDirection=function() return false end
-            u.createMoveAwayCourse=function(self)
-                return Course(self.vehicle,{{x=0,z=0},{x=0,z=-10,rev=true}},true)
-            end
             function makeHarvester(x,z,t)
                 local h={rootNode={x=x,z=z,t=t},size={width=3.5,length=8},active=true}
                 h.getAIDirectionNode=function() return h.rootNode end
@@ -85,188 +71,6 @@ class YieldTests(unittest.TestCase):
             nativeQueueTarget=Q.target
             Q.target=function() return nil end
         ''')
-
-
-    def test_remote_callback_cannot_cancel_parking_search_across_cooldown(self):
-        self.lua.execute('''
-            harvester,c,header=makeHarvester(-11,222.5,math.pi); c.near=false
-            Q.take(u,'prepare'); local data=u.queueData
-            densityCount=20 -- the reported invalid start; no permission to cross more crop
-            data.search={}; local search=data.search; local generation=data.generation
-            local course={}; u.course=course
-            for time=0,45000,100 do
-                g_currentMission.time=time
-                u:onBlockingVehicle(harvester,false)
-                assert(Q.owns(u) and data.operation=='prepare')
-                assert(data.search==search and data.generation==generation and u.course==course)
-            end
-        ''')
-
-    def test_stale_sensor_id_does_not_establish_physical_locality(self):
-        self.lua.execute('''
-            harvester,c,header=makeHarvester(-11,222.5,math.pi)
-            c.isVehicleInProximity=function() return true,1 end
-            assert(not Q.hasLocalBlocker(u,harvester))
-            c.isVehicleInProximity=function() return true,math.huge end
-            assert(not Q.hasLocalBlocker(u,harvester))
-        ''')
-
-    def test_remote_yield_timeout_keeps_checked_recovery(self):
-        self.lua.execute('''
-            harvester,c,header=makeHarvester(-11,222.5,math.pi); c.near=false
-            Q.take(u,'prepare'); assert(Q.priority(u,harvester))
-            local data=u.queueData
-            data.yieldRequests[harvester].turnClearance=function() return true end
-            data.yieldProgressTime=0; data.yieldFailed=true
-            data.search={}; local search=data.search; local generation=data.generation
-            g_currentMission.time=16000
-            assert(not Q.updateYieldRecovery(u))
-            assert(Q.owns(u) and data.operation=='yield' and data.search==search)
-            assert(data.generation==generation and data.yieldRequests[harvester])
-        ''')
-
-    def test_adjacent_header_hidden_by_tree_still_allows_local_clearance(self):
-        self.lua.execute('''
-            harvester,c,header=makeHarvester(0,14,math.pi); c.near=false
-            -- Put the real mounted header beside the tractor; sensors see the tree.
-            header.rootNode.z=4
-            densityCount=20
-            Q.take(u,'prepare'); u:onBlockingVehicle(harvester,false)
-            assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
-        ''')
-
-    def test_excluded_unloading_modes_keep_original_blocking_callback(self):
-        for mode in ('augerWagon', 'fieldUnloadPositionNode', 'useGiantsUnload'):
-            with self.subTest(mode=mode):
-                self.setUp()
-                self.lua.execute('''
-                    u.state=u.states.MOVING_BACK
-                    u.pathfinderController={pathfinder={}}; local search=u.pathfinderController.pathfinder
-                '''+f'u.{mode}=true'+'''
-                    u:onBlockingVehicle(harvester,false)
-                    assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
-                    assert(not u.queueData and u.pathfinderController.pathfinder==search)
-                ''')
-
-    def test_working_combine_invalid_start_returns_to_native_clearance(self):
-        for obstacle in ('densityCount=20', 'collision=1'):
-            with self.subTest(obstacle=obstacle):
-                self.setUp()
-                self.lua.execute('''
-                    u.state={name='NATIVE_APPROACH'}; u.combineToUnload=harvester
-                    u.pathfinderController={pathfinder={}}; local search=u.pathfinderController.pathfinder
-                '''+obstacle+'''
-                    nativeRequest()
-                    assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
-                    assert(u.combineToUnload==harvester and not u.pathfinderController.pathfinder)
-                    assert(not Q.owns(u) and u.course and u.queueData.nativeYieldUntil>0)
-                    local course=u.course
-                    nativeRequest(); assert(u.course==course)
-                ''')
-
-    def test_native_clearance_is_not_cancelled_by_another_combine(self):
-        for state in ('MOVING_AWAY_FROM_OTHER_VEHICLE','BACKING_UP_FOR_REVERSING_COMBINE',
-                      'MOVING_BACK','MOVING_BACK_WITH_TRAILER_FULL','MOVING_BACK_BEFORE_PATHFINDING','MOVING_BACK_FOR_HEADLAND_TURN'):
-            with self.subTest(state=state):
-                self.setUp()
-                self.lua.execute('''
-                    u.state=u.states.'''+state+'''; assert(u.state)
-                    local state=u.state; u.combineToUnload=harvester
-                    u.course={}; local course=u.course
-                    local second=makeHarvester(0,15,0)
-                    u:onBlockingVehicle(second,false)
-                    assert(u.state==state and u.course==course and u.combineToUnload==harvester)
-                ''')
-
-    def test_rear_only_blocking_callback_does_not_take_queue_control(self):
-        self.lua.execute('''
-            u.state={name='NATIVE_APPROACH'}; local state=u.state
-            u.combineToUnload=harvester
-            u:onBlockingVehicle(harvester,true)
-            assert(u.state==state and not Q.owns(u) and u.combineToUnload==harvester)
-        ''')
-
-    def test_failed_yield_hands_back_once_without_immediate_retake(self):
-        self.lua.execute('''
-            Q.take(u,'prepare'); nativeRequest(); Q.tick(u)
-            collision=1; Q.failed(u.queueData,'start: vehicle or obstacle','start')
-            local data=u.queueData; local generation=data.generation
-            g_currentMission.time=16000; Q.tick(u)
-            assert(not Q.owns(u) and u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
-            assert(not data.path and not data.search and not data.yieldRequests)
-            assert(data.generation>generation and data.nativeYieldUntil>g_currentMission.time)
-            local course=u.course; collision=0
-            nativeRequest(); Q.tick(u)
-            assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE and u.course==course)
-            u.state=u.states.IDLE; Q.tick(u)
-            assert(data.operation=='prepare')
-            assert(not Q.priority(u,harvester)) -- late repeat cannot steal native clearance back
-        ''')
-
-    def test_live_progress_and_transient_stop_do_not_trigger_handback(self):
-        self.lua.execute('''
-            Q.take(u,'prepare'); nativeRequest(); Q.tick(u)
-            Q.failed(u.queueData,'temporary route obstruction')
-            g_currentMission.time=14000; place(0,-2,0); Q.tick(u)
-            assert(Q.owns(u) and not u.queueData.yieldFailed)
-            g_currentMission.time=20000; Q.tick(u)
-            assert(Q.owns(u) and u.queueData.operation=='yield')
-        ''')
-
-    def test_foreground_starved_yield_is_bounded_and_stopped_request_releases(self):
-        self.lua.execute('''
-            Q.take(u,'prepare'); nativeRequest(); Q.tick(u)
-            u.queueData.search={}; u.queueData.searchGeneration=u.queueData.generation
-            local foreground={getCpDriveStrategy=function() return {pathfinderController={pathfinder={}}} end}
-            g_currentMission.vehicleSystem.vehicles={foreground}
-            g_currentMission.time=61000; Q.tick(u)
-            assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE and not Q.owns(u))
-        ''')
-
-    def test_handback_targets_remaining_blocker_and_preserves_held_search(self):
-        self.lua.execute('''
-            place(25,0,0); Q.take(u,'prepare'); nativeRequest(); Q.tick(u)
-            local second,other=makeHarvester(25,12,math.pi); other.near=true
-            assert(Q.priority(u,second)); c.near=false
-            Q.yieldTarget(u,true); g_currentMission.time=3000; Q.yieldTarget(u,true)
-            assert(not u.queueData.yieldRequests[harvester])
-            Q.failed(u.queueData,'no route')
-            local native=Q.nativeMoveAway
-            Q.nativeMoveAway=function(driver,vehicle) assert(vehicle==second); return native(driver,vehicle) end
-            g_currentMission.time=20000; Q.tick(u)
-            assert(u.state==u.states.MOVING_AWAY_FROM_OTHER_VEHICLE)
-            Q.nativeMoveAway=native
-            u.state={name='NATIVE_APPROACH'}; u.combineToUnload=harvester
-            u.pathfinderController={pathfinder={}}; local search=u.pathfinderController.pathfinder
-            held=true; densityCount=20
-            u:onBlockingVehicle(harvester,false)
-            assert(u.pathfinderController.pathfinder==search and u.combineToUnload==harvester)
-        ''')
-
-    def test_completed_or_superseded_turn_drops_only_stale_frozen_clearance(self):
-        for change in ("c.state=c.states.WORKING", "c.aiTurn={turnContext=c.turnContext,startRecoveryTurn=function() end}"):
-            with self.subTest(change=change):
-                self.setUp()
-                self.lua.execute('''
-                    Q.take(u,'prepare'); nativeRequest()
-                    c.states={TURNING={},WORKING={}}; c.state=c.states.TURNING
-                    c.turnContext={}; c.aiTurn={turnContext=c.turnContext,startRecoveryTurn=function() end}
-                    local request=u.queueData.yieldRequests[harvester]
-                    c.course=Course(harvester,{{x=0,z=12},{x=0,z=0},{x=0,z=-30}},true)
-                    request.turnClearance=assert(Q.yieldArea(harvester,c.course,math.huge,1600))
-                    request.turn=c.aiTurn; request.turnContext=c.turnContext
-                    harvester.rootNode.x=1000; header.rootNode.x=1000; c.course=nil; c.near=false
-                    local second,other=makeHarvester(0,12,math.pi); other.near=true
-                    assert(Q.priority(u,second))
-                '''+change+'''
-                    g_currentMission.time=10000; Q.yieldTarget(u,true)
-                    assert(not request.turnClearance)
-                    g_currentMission.time=13000; Q.yieldTarget(u,true)
-                    assert(not u.queueData.yieldRequests[harvester])
-                    assert(u.queueData.yieldRequests[second] and u.queueData.operation=='yield')
-                    second.active=false; Q.yieldTarget(u,true)
-                    assert(u.queueData.operation=='prepare')
-                ''')
 
     def test_native_request_enters_yield_and_repeated_request_preserves_search(self):
         self.lua.execute('''
@@ -512,10 +316,9 @@ class YieldTests(unittest.TestCase):
                 if done then break end
             end
             assert(done and path,reason or 'yield search did not complete')
-            Q.startRoute(data,path); assert(data.course and u.course==data.course)
             local poses=W.poses(data.world.model)
             for i=2,#path do
-                poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+                poses=H.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
             end
             for i,p in ipairs(poses) do
                 local n=i==1 and v.rootNode or trailer.rootNode
@@ -523,7 +326,7 @@ class YieldTests(unittest.TestCase):
             end
             local x,z=H.math.position(v.rootNode,0,-3.3)
             trailer.joint.node.x=x; trailer.joint.node.z=z; trailer.joint.node.t=v.rootNode.t
-            assert(Q.onLast(u)); c.near=false
+            Q.startRoute(data,path); assert(Q.onLast(u)); c.near=false
             Q.yieldTarget(u,true); g_currentMission.time=2100; Q.yieldTarget(u,true)
             assert(data.operation=='prepare')
             -- Complete recovery into a real straight headland slot, including
@@ -531,23 +334,21 @@ class YieldTests(unittest.TestCase):
             c.fieldWorkCourse=Course(harvester,{{x=50,z=20},{x=50,z=50},{x=50,z=80},
                 {x=50,z=110},{x=50,z=140},{x=50,z=170}},false)
             for i=1,6 do c.fieldWorkCourse:getWaypoint(i).attributes:setHeadlandPassNumber(1) end
-            c.course=c.fieldWorkCourse; c.getClosestFieldworkWaypointIx=function() return 6 end
             Q.combines={test={driver=c,position={x=0,z=12}}}
             u.isServingPosition=function() return true end
             u.invertedStartPositionMarkerNode={x=50,z=10,t=0}
             data.assignment={}
             local parking=assert(nativeQueueTarget(u))
-            assert(parking.x==50 and math.abs(math.sin(parking.t))<0.001,'parking is not parallel to the row')
+            assert(parking.x==50 and math.abs(H.math.delta(parking.t,0))<0.001)
             Q.request(u,parking)
             for i=1,100000 do
                 done,path,reason=CpUnloaderQueueSearch.step(data.search,1)
                 if done then break end
             end
             assert(done and path,reason or 'return to aligned parking failed')
-            Q.startRoute(data,path); assert(data.course and u.course==data.course)
             poses=W.poses(data.world.model)
             for i=2,#path do
-                poses=W.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
+                poses=H.advance(data.world.model,poses,path[i]); assert(W.clear(data.world,poses))
             end
             for _,p in ipairs(poses) do
                 assert(math.abs(H.math.delta(p.t,parking.t))<math.rad(5))
@@ -558,8 +359,8 @@ class YieldTests(unittest.TestCase):
             end
             local x,z=H.math.position(v.rootNode,0,-3.3)
             trailer.joint.node.x=x; trailer.joint.node.z=z; trailer.joint.node.t=v.rootNode.t
-            Q.onLast(u)
-            assert(data.operation=='prepare' and data.parkedGoal==(path.goal or parking))
+            Q.startRoute(data,path); Q.onLast(u)
+            assert(data.operation=='prepare' and data.parkedGoal==parking)
         ''')
 
     def test_unavailable_geometry_holds_without_repeating_two_messages(self):

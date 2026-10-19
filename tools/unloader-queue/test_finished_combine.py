@@ -103,69 +103,6 @@ class FinishedCombineTests(unittest.TestCase):
             assert(result():find('handover'))
         ''')
 
-    def test_three_successive_final_loads_reverse_then_last_partial_load_departs(self):
-        self.lua.execute('''
-            local fleet={}
-            for i=1,3 do
-                local vehicle={rootNode=100*i,active=true}
-                vehicle.getIsCpActive=function() return vehicle.active end
-                vehicle.getCpDriveStrategy=function() return c end
-                fleet[i]=vehicle
-            end
-            g_currentMission.vehicleSystem.vehicles=fleet
-            c.callUnloader=function() end
-            c.debug=function() end
-            c.unloaderToRendezvous={get=function() return nil end,reset=function() end}
-            c.unloader={reset=function() end}
-            c.alwaysNeedsUnloader=function() return false end
-            c.combineController={getFillLevel=function() return empty end}
-            for i=1,3 do
-                combine=fleet[i]; empty=1000; clearance=-4
-                u.combineToUnload=combine
-                u.state=i==2 and u.states.UNLOADING_MOVING_COMBINE or u.states.UNLOADING_STOPPED_COMBINE
-                assert(not Q.releaseFinishedCombine(u),'loaded combine must unload in place')
-                empty=0; drive()
-                assert(u.combineToUnload==nil and u.state.properties.vehicle==combine)
-                assert(not u.state.properties.holdCombine and reverseStarts==i)
-                assert(u.state==(i<3 and u.states.MOVING_BACK or u.states.MOVING_BACK_WITH_TRAILER_FULL))
-                assert(starts==0,'native departure must wait for reverse clearance')
-                combine.active=false
-                obstacle=true; local _,_,_,speed=drive(); assert(speed==0)
-                obstacle=false; clearance=1; drive()
-                if i<3 then assert(u.state==u.states.IDLE and starts==0)
-                else
-                    assert(starts==1 and u.queueData.nativeDeparture and not u:getAllTrailersFull())
-                    finishSearch(true); u:onLastWaypointPassed()
-                    assert(result():find('handover'))
-                end
-            end
-        ''')
-
-    def test_active_final_empty_due_trailer_uses_native_reverse_and_departure(self):
-        for state in ('UNLOADING_STOPPED_COMBINE', 'UNLOADING_MOVING_COMBINE'):
-            for request in ('cutoff', 'manual'):
-                with self.subTest(state=state, request=request):
-                    self.setUp()
-                    self.lua.execute('''
-                        c.combineController={getFillLevel=function() return 0 end}
-                        c.alwaysNeedsUnloader=function() return false end
-                        c.debug=function() end
-                        c.unloaderToRendezvous={get=function() return nil end,reset=function() end}
-                        c.unloader={reset=function() end}
-                        u.settings.fullThreshold={getValue=function() return 73 end}
-                        u.getAllTrailersFull=function() return %s end
-                        u.isDriveUnloadNowRequested=function() return %s end
-                        u.state=u.states.%s
-                        drive()
-                        assert(u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL and starts==0)
-                        assert(u.state.properties.vehicle==combine and not u.state.properties.holdCombine)
-                        clearance=1; drive()
-                        assert(starts==1 and u.queueData.nativeDeparture)
-                        finishSearch(true); u:onLastWaypointPassed()
-                        assert(result():find('handover'))
-                    ''' % ('true' if request=='cutoff' else 'false',
-                           'true' if request=='manual' else 'false', state))
-
     def test_combine_on_another_field_does_not_keep_partial_trailer_waiting(self):
         self.lua.execute('other.rootNode=900; finish(); drive(); assert(u.state==u.states.MOVING_BACK_WITH_TRAILER_FULL)')
 

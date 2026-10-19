@@ -36,9 +36,7 @@ local function key(poses)
 end
 
 local function checkedStart(world,corridor)
-    -- Choices can start seconds apart. Do not mix a captured tractor position
-    -- with trailer nodes read later while the rig settles or is pushed.
-    local poses=world.startPoses or W.poses(world.model)
+    local poses=W.poses(world.model)
     local clear,reason=W.clear(world,poses,corridor)
     if not clear then
         if reason=='field boundary' and world.entranceReason then
@@ -63,49 +61,6 @@ local function reverseTracking(world,poses)
     return index
 end
 
-local function heuristic(search,pose)
-    local best=distance(pose,search.goal)
-    for _,goal in ipairs(search.goals or {}) do best=math.min(best,distance(pose,goal)) end
-    return best
-end
-
-local function connectGoal(search,parent)
-    if search.reverse or search.escape then return false end
-    if search.goals then
-        -- One obstacle tree serves every parallel slot. Try the nearest slot
-        -- first, then rotate alternatives instead of exploring the same ground
-        -- independently twelve times.
-        local ranked={}
-        for _,goal in ipairs(search.goals) do ranked[#ranked+1]=goal end
-        table.sort(ranked,function(a,b) return distance(parent.poses[1],a)<distance(parent.poses[1],b) end)
-        local index=math.max(0,math.floor((search.expanded or 0)/8)-1)%#ranked+1
-        search.goal=ranked[index]
-    end
-    local world,goal,radius=search.world,search.goal,search.radius
-    local poses=parent.poses
-    local start=State3D(poses[1].x,-poses[1].z,CpMathUtil.angleFromGame(poses[1].t))
-    local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
-    -- The tractor reaching the requested heading does not align its trailer.
-    -- Reserve a straight run-in so the direct candidate can settle the train.
-    local runIn=0
-    for _,link in ipairs(world.model.links) do runIn=runIn+link.length end
-    runIn=math.max(10,3*runIn)
-    local approach=target
-    if not goal.reverse and distance(poses[1],goal)>runIn+2 then
-        approach=State3D(goal.x-runIn*math.sin(goal.t),-(goal.z-runIn*math.cos(goal.t)),target.t)
-    end
-    local solution=DubinsSolver():solve(start,approach,radius)
-
-    local limit=math.max(120,3*distance(search.root.poses[1],goal))
-    if not solution or parent.distance+solution:getLength(radius)+(approach~=target and runIn or 0)>limit then
-        return false
-    end
-    search.direct=solution:getWaypoints(start,radius)
-    if approach~=target then search.direct[#search.direct+1]=target end
-    search.directIx=2; search.directNode=parent
-    return true
-end
-
 function S.new(world,goal,corridor)
     local poses,reason,phase=checkedStart(world,corridor)
     if not poses then return nil,reason,phase end
@@ -120,10 +75,17 @@ function S.new(world,goal,corridor)
     local search={world=world,goal=goal,corridor=corridor,radius=radius,open={root},seen={},expanded=0,root=root}
     local start=State3D(poses[1].x,-poses[1].z,CpMathUtil.angleFromGame(poses[1].t))
     local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
-    if goal.straight then
-        search.direct={start,target}; search.directIx=2; search.directNode=root
-        search.directOnly=true
-    elseif goal.reverse then
+    -- The tractor reaching the requested heading does not align its trailer.
+    -- Reserve a straight run-in so the direct candidate can settle the train.
+    local runIn=0
+    for _,link in ipairs(world.model.links) do runIn=runIn+link.length end
+    runIn=math.max(10,3*runIn)
+    local approach=target
+    if not goal.reverse and distance(poses[1],goal)>runIn+2 then
+        approach=State3D(goal.x-runIn*math.sin(goal.t),-(goal.z-runIn*math.cos(goal.t)),target.t)
+    end
+    local solution=not goal.reverse and DubinsSolver():solve(start,approach,radius)
+    if goal.reverse then
         search.trackingIndex,reason=reverseTracking(world,poses)
         if not search.trackingIndex then return nil,reason end
         for _,p in ipairs(poses) do
@@ -132,28 +94,12 @@ function S.new(world,goal,corridor)
         search.reverse=true
         search.direct={start,target}
         search.directIx=2; search.directNode=root
-    else connectGoal(search,root) end
-    return search
-end
-
--- A prescribed forward manoeuvre still uses the same incremental whole-rig
--- validation. No unchecked waypoint or unconstrained lattice fallback is used.
-function S.via(world,goals,corridor)
-    local search,reason,phase=S.new(world,goals[#goals],corridor)
-    if not search then return nil,reason,phase end
-    local p=search.root.poses[1]
-    local start=State3D(p.x,-p.z,CpMathUtil.angleFromGame(p.t))
-    local points={start}
-    for _,goal in ipairs(goals) do
-        local target=State3D(goal.x,-goal.z,CpMathUtil.angleFromGame(goal.t))
-        local solution=DubinsSolver():solve(start,target,search.radius)
-        if not solution then return nil,'no outward forward connection' end
-        local segment=solution:getWaypoints(start,search.radius)
-        for i=2,#segment do points[#points+1]=segment[i] end
-        start=target
+    elseif solution and solution:getLength(radius)<math.max(100,3*distance(poses[1],goal)) then
+        search.direct=solution:getWaypoints(start,radius)
+        if approach~=target then search.direct[#search.direct+1]=target end
+        search.directIx=2
+        search.directNode=root
     end
-    search.direct=points; search.directIx=2; search.directNode=search.root
-    search.directOnly=true
     return search
 end
 
@@ -215,7 +161,7 @@ function S.step(search,budget)
             local f=edge.step/edge.count
             local a,b=edge.parent.poses[1],edge.target
             local root={x=a.x+(b.x-a.x)*f,z=a.z+(b.z-a.z)*f,t=a.t+H.math.delta(b.t,a.t)*f}
-            local poses=W.advance(search.world.model,edge.poses,root)
+            local poses=H.advance(search.world.model,edge.poses,root)
             if search.reverse then
                 root.trackX=poses[search.trackingIndex].x; root.trackZ=poses[search.trackingIndex].z
             end
@@ -246,7 +192,7 @@ function S.step(search,budget)
                 if edge.step==edge.count then
                     local travelled=edge.parent.distance+distance(a,b)
                     local node={poses=poses,parent=edge.parent,segment=edge.segment,distance=travelled,
-                        cost=travelled+(search.escape and 0 or heuristic(search,root))}
+                        cost=travelled+(search.escape and 0 or distance(root,search.goal))}
                     search.edge=nil
                     if search.direct then
                         search.directNode=node
@@ -283,10 +229,6 @@ function S.step(search,budget)
                     search.done=true; return true,nil,search.reason or 'no safe queue route'
                 end
                 search.parent=pop(search.open); search.steer=search.reverse and 0 or -1; search.expanded=search.expanded+1
-                -- A lattice rarely lands on a precise parking pose with every
-                -- trailer straight. Reuse the checked analytic run-in as the
-                -- obstacle search advances, instead of exhausting the grid.
-                if search.expanded%8==0 and connectGoal(search,search.parent) then return false end
             end
             local a=search.parent.poses[1]
             local turn=search.steer*2/search.radius
@@ -321,9 +263,9 @@ end
 function S.choicePhase(search)
     if not search.choices then return end
     if search.arrival then
-        if search.shared then return end
-        local slot=search.slots and search.slots[search.index]
-        return (slot and slot.fallback and 'arrival ' or 'direct ')..search.index
+        if search.index<=#search.choices then return 'direct '..search.index end
+        if search.fallback then return 'arrival '..(search.fallbackIndex-1) end
+        return
     end
     if not search.escape then return end
     if search.index<=#search.choices then return search.index end
@@ -335,20 +277,15 @@ function S.chargeChoices(search,elapsed,startedPhase)
     -- A completed candidate may have advanced the search during this frame.
     -- Never charge its expensive last check to an untried next candidate.
     if not phase or phase~=startedPhase then return end
-    local slot=search.slots and search.slots[search.index]
-    local limit=search.arrival and ((slot and slot.fallback and 100 or 50)*2^math.min(slot and slot.round or 0,2))
+    local limit=search.arrival and (search.active and 50 or 100)
         or (type(phase)=='number' and 300/math.max(1,#search.choices) or 200)
     if search.workPhase~=phase then search.workPhase=phase; search.phaseWorkMs=0 end
     search.phaseWorkMs=search.phaseWorkMs+elapsed
     if search.phaseWorkMs<limit then return end
     if search.arrival then
-        -- Yield fairly without throwing away sampled edges or the open list.
-        -- Increase the next quantum so a valid but costly route can finish.
-        local slot=search.slots and search.slots[search.index]
-        if slot then slot.round=(slot.round or 0)+1 end
-        search.index=search.index%#search.choices+1
-        search.workPhase=nil; search.phaseWorkMs=0
-        return
+        if search.active then search.active=nil; search.index=search.index+1
+        else search.fallback=nil end
+        search.reason='arrival candidate budget exhausted; trying next nearby position'
     elseif type(phase)=='number' then
         search.active=nil; search.index=search.index+1
         search.reason='fixed clearance candidate budget exhausted'
@@ -359,52 +296,7 @@ function S.chargeChoices(search,elapsed,startedPhase)
     return search.reason
 end
 
--- Validate each inexpensive direct candidate fairly, then share one obstacle
--- tree across all valid parking poses. This avoids twelve copies of the same
--- crop/rig edge work at an AD entrance.
-function S.stepArrival(search,budget)
-    if search.shared then
-        local done,path,reason=S.step(search.shared,budget)
-        if path then path.goal=search.shared.goal end
-        search.reason=reason or search.shared.reason
-        return done,path,reason
-    end
-    search.slots=search.slots or {}
-    local index=search.index
-    local slot=search.slots[index]
-    if not slot then
-        slot={}; search.slots[index]=slot
-        slot.state,search.reason=S.new(search.world,search.choices[index],search.corridor)
-        slot.failed=not slot.state
-        if slot.state then slot.state.directOnly=true end
-    end
-    if not slot.failed and not slot.fallback then
-        local done,path,reason=S.step(slot.state,budget)
-        if path then path.goal=search.choices[index]; return true,path end
-        if not done then return false end
-        search.reason=reason
-        slot.fallback=not search.choices[index].reverse
-        slot.failed=not slot.fallback
-    end
-    search.index=index%#search.choices+1
-    search.workPhase=nil; search.phaseWorkMs=0
-    local goals,shared={},nil
-    for i=1,#search.choices do
-        local candidate=search.slots[i]
-        if not candidate or (not candidate.failed and not candidate.fallback) then return false end
-        if candidate.fallback then
-            goals[#goals+1]=search.choices[i]
-            shared=shared or candidate.state
-        end
-    end
-    if not shared then return true,nil,search.reason end
-    shared.done=nil; shared.directOnly=nil; shared.direct=nil; shared.edge=nil
-    shared.goals=goals; search.shared=shared
-    return false
-end
-
 function S.stepChoices(search,budget)
-    if search.arrival then return S.stepArrival(search,budget) end
     if search.index>#search.choices then
         if search.best then return true,search.best end
         if search.escape then

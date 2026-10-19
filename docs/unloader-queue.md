@@ -1,3 +1,42 @@
+## Build 3053 - restore the completed-field milestone
+
+Build 3052 did not resolve the reported corner blockage. The 19 October log
+records trailer /322 starting a native approach to CR11/318 at 17:02:51.466,
+then returning to idle when the rendezvous is missed at 17:03:57.118. Queue
+preparation subsequently rejects the starting pose as standing crop. At
+17:16:21.254 CR11/319 begins its turn at waypoint 1202. The planned turn
+crosses the stationary trailer, and the checked detour fails at 17:16:30.900.
+The crop-start and detour failures continue through 17:51. Evidence:
+out/incident-3052-turn1202/log-2026-10-19T16-51-51.980Z.txt
+(lines 15165-15174, 17912-17919, 36069-36167 and 36795-36801).
+
+The distant native move-away restart loop corrected in 3052 is absent from
+this run. That correction addressed a secondary failure; it did not provide
+a valid escape from the crop-start pose. The logs establish these transitions,
+not the exact physical trajectory into the trees.
+
+Build 3053 deliberately restores the exact runtime of the user-confirmed
+whole-field milestone 3031 (03a903c11b0ae39cdf7b2bad228ed792c3df6e12), rather
+than adding another recovery branch. All later runtime changes are removed
+from this comparison build, including the later arrival, departure and
+harvester finishing changes. Their commits, release ZIPs and the historical
+notes below are retained. The corresponding 3031 regression suite and release
+qualification are restored together; tests of subsequently removed behaviour
+remain available in Git history.
+
+Release with build_queue.py 3053 --match-release pointing at the preserved
+3031 ZIP. This requires every packaged file and inventory entry to match that
+ZIP byte-for-byte except the numbered manifest version, in addition to the
+source and extracted ZIP release checks. Keep the established unloader test
+filename/title and leave the live mod untouched.
+
+This is a controlled return to a field-completing baseline, not evidence that
+3031 fixes the current trapped pose. The same initial crop rejection is
+present in that milestone, and its final parking/remaining unload issues
+were still open. A fresh in-game field run is required. Do not describe the
+later fixes as retained in this build or claim the corner incident is solved
+by automated tests.
+
 ## Build 3052 - distant turn requests and interrupted trailer recovery
 
 The 19 October 3051 log records /322 starting an 853.1 m native approach to
