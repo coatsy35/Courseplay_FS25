@@ -588,7 +588,7 @@ function Q.poolTarget(driver,arrival,clearance)
             and Q.arrived(driver,parked) then return parked end
     local here=W.pose(driver.vehicle:getAIDirectionNode())
     local origin=arrival and arrivalOrigin(driver) or here
-    local candidates,visited={},{}
+    local candidates,visited,approaches={},{},{}
     local model=W.model(driver.vehicle)
     if not model then return end
     local function order(a,b)
@@ -621,8 +621,23 @@ function Q.poolTarget(driver,arrival,clearance)
                         if not visited[key] then
                             visited[key]=true
                             for _,opposite in ipairs({false,true}) do
-                                local score=d+driver.turningRadius*math.abs(H.math.delta(here.t,p.t+(opposite and math.pi or 0)))
-                                if #candidates<12 or score<=candidates[#candidates].score then
+                                local heading=p.t+(opposite and math.pi or 0)
+                                local score=d+driver.turningRadius*math.abs(H.math.delta(here.t,heading))
+                                -- An arrival beside a blocked verge needs alternatives on
+                                -- both sides of its heading, including facing back along a row.
+                                -- Twelve adjacent, equally directed slots are not twelve
+                                -- different approaches. Keep a representative of each.
+                                local sector
+                                if arrival then
+                                    local dx,dz=p.x-here.x,p.z-here.z
+                                    local lateral=dx*math.cos(here.t)-dz*math.sin(here.t)
+                                    local forward=dx*math.sin(here.t)+dz*math.cos(here.t)
+                                    sector=(lateral>=-0.01 and 1 or 0)+(forward>=-0.01 and 2 or 0)
+                                        +(math.cos(heading-here.t)>=0 and 4 or 0)
+                                end
+                                local alternative=sector and approaches[sector]
+                                if #candidates<12 or score<=candidates[#candidates].score
+                                        or (sector and (not alternative or score<=alternative.score)) then
                                     local candidate=Q.stagingCandidate(driver,course,i,opposite,context)
                                     if candidate then
                                         local accept=candidate.accept
@@ -638,7 +653,11 @@ function Q.poolTarget(driver,arrival,clearance)
                                         if candidate.accept(W.settledPoses(model,candidate),model) then
                                             -- Travel/turning cost keeps easy parallel entries ahead of
                                             -- a closer slot that requires a hairpin at the boundary.
-                                            candidates[#candidates+1]={goal=candidate,score=score}
+                                            local entry={goal=candidate,score=score}
+                                            if sector and (not alternative or order(entry,alternative)) then
+                                                approaches[sector]=entry
+                                            end
+                                            candidates[#candidates+1]=entry
                                             table.sort(candidates,order)
                                             if #candidates>12 then table.remove(candidates) end
                                         end
@@ -651,8 +670,18 @@ function Q.poolTarget(driver,arrival,clearance)
             end
         end
     end
+    -- Reserve at most eight places for distinct arrival approaches; fill the
+    -- remaining places by distance/heading cost. The search remains capped at 12.
+    local selected,seen={},{}
+    for _,entry in pairs(approaches) do
+        selected[#selected+1]=entry; seen[entry]=true
+    end
+    for _,entry in ipairs(candidates) do
+        if #selected<12 and not seen[entry] then selected[#selected+1]=entry end
+    end
+    table.sort(selected,order)
     local choices={}
-    for i=1,math.min(12,#candidates) do choices[i]=candidates[i].goal end
+    for i,entry in ipairs(selected) do choices[i]=entry.goal end
     if #choices==0 then return end
     local best=choices[1]
     return {x=best.x,z=best.z,t=best.t,choices=choices,firstValid=true,arrival=arrival or nil,parking=true}
@@ -686,8 +715,9 @@ function Q.request(driver,goal,corridor)
     data.searchFuture=data.assignment and data.assignment.future
     data.searchStage=data.stage and data.stage.phase
     data.searchWorkMs=0
-    driver:debug('Queue: %s target %.1f, %.1f, %.1f m away%s',data.operation,goal.x,goal.z,
-        distance(W.pose(driver.vehicle:getAIDirectionNode()),goal),goal.arrival and ' (clear AD arrival)' or '')
+    driver:debug('Queue: %s target %.1f, %.1f, %.1f m away%s; heading %.1f, %d candidates',
+        data.operation,goal.x,goal.z,distance(W.pose(driver.vehicle:getAIDirectionNode()),goal),
+        goal.arrival and ' (clear AD arrival)' or '',math.deg(goal.t) % 360,goal.choices and #goal.choices or 1)
 
 end
 

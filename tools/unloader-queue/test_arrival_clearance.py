@@ -700,6 +700,91 @@ class ArrivalTests(unittest.TestCase):
             assert(Q.target(u)==parked,'parallel waiting slot was not retained')
         ''')
 
+    def test_blocked_verge_exit_keeps_opposite_approach_to_cleared_row(self):
+        # The nearest twelve slots can all face forwards and need the same
+        # obstructed loop. Rotate the physical field, crop and obstacle together.
+        for angle in (0, 1.4):
+            with self.subTest(angle=angle):
+                yielding.YieldTests.setUp(self)
+                self.lua.globals().arrivalAngle=angle
+                self.lua.execute('''
+                    local origin={x=119.1,z=-360.9,t=arrivalAngle}
+                    local function point(x,z)
+                        local px,pz=H.math.position(origin,x,z)
+                        return {x=px,z=pz}
+                    end
+                    local function localX(x,z)
+                        return (x-origin.x)*math.cos(origin.t)-(z-origin.z)*math.sin(origin.t)
+                    end
+                    v.cpGetFieldPolygon=function()
+                        return {point(-100,-200),point(-6,-200),point(-6,30),point(-100,30)}
+                    end
+                    AIUtil.getLength=function() return 6 end; u.turningRadius=8
+                    place(origin.x,origin.z,origin.t)
+                    Q.target=nativeQueueTarget; Q.captureArrival(u)
+                    local data=Q.take(u,'prepare')
+                    local tree=point(0,30); tree.heading=origin.t
+                    tree=G.rectangle(tree,{width=10,length=30},0)
+                    overlapBox=function(x,y,z,rx,ry,rz,w,h,l,callback,detector)
+                        local box=G.rectangle({x=x,z=z,heading=ry},{width=w*2,length=l*2},0)
+                        detector.collidingShapes=G.overlap(box,tree) and 1 or 0
+                    end
+                    local raw=DensityMapModifier.new
+                    DensityMapModifier.new=function(...)
+                        local m=raw(...)
+                        m.setParallelogramWorldCoords=function(self,ax,az,bx,bz,dx,dz)
+                            self.crop=math.min(localX(ax,az),localX(bx,bz),localX(dx,dz),
+                                localX(bx+dx-ax,bz+dz-az)) < -44
+                        end
+                        m.executeGet=function(self,filter)
+                            return 0,(filter.mode==1 and self.crop) and 100 or 0,100
+                        end
+                        return m
+                    end
+                    Q.combines={}; u.isServingPosition=function() return true end
+                    for j=0,3 do
+                        local points={}; for z=-180,80 do points[#points+1]=point(-40-j*2,z) end
+                        local course=Course(v,points,false)
+                        local combine={fieldWorkCourse=course,course=course,
+                            getClosestFieldworkWaypointIx=function() return 251 end}
+                        Q.combines[j]={driver=combine,position=point(-40-j*2,70)}
+                    end
+                    local straight=assert(Q.target(u)); assert(straight.transit)
+                    Q.request(u,straight)
+                    assert(not data.search and not data.path and data.reason:find('obstacle'))
+                    local goal=assert(Q.target(u)); assert(goal.parking and #goal.choices<=12)
+                    local reversed={}; for j=0,3 do reversed[j]=Q.combines[3-j] end
+                    Q.combines=reversed
+                    local reordered=assert(Q.target(u))
+                    assert(#reordered.choices==#goal.choices,'fleet order changed shortlist size')
+                    for i,p in ipairs(goal.choices) do
+                        local other=reordered.choices[i]
+                        assert(p.x==other.x and p.z==other.z and p.t==other.t,
+                            'fleet order changed arrival approaches')
+                    end
+                    Q.request(u,goal); local search=assert(data.search,data.reason)
+                    local done,path,reason
+                    for i=1,20000 do
+                        done,path,reason=CpUnloaderQueueSearch.step(search,1)
+                        if done or search.shared then break end
+                    end
+                    assert(done and path,'usable opposite-facing slot was lost: '..tostring(reason))
+                    assert(not search.shared,'simple entry unnecessarily fell back to an obstacle tree')
+                    local poses=W.poses(data.world.model)
+                    for i=2,#path do
+                        poses=W.advance(data.world.model,poses,path[i])
+                        assert(W.clear(data.world,poses),'route crossed crop, obstacle or boundary')
+                    end
+                    Q.startRoute(data,path)
+                    local parked=data.goal
+                    assert(math.abs(H.math.delta(parked.t,origin.t+math.pi))<0.01)
+                    assert(parked.accept(poses,data.world.model))
+                    place(poses[1].x,poses[1].z,poses[1].t)
+                    trailer.rootNode.x=poses[2].x; trailer.rootNode.z=poses[2].z; trailer.rootNode.t=poses[2].t
+                    assert(Q.onLast(u) and data.parkedGoal and Q.arrivalClear(u))
+                    assert(Q.target(u)==data.parkedGoal,'rig did not retain parallel parking')
+                ''')
+
     def test_blocked_straight_exit_does_not_drive_or_loop(self):
         for obstacle in ('collision=1', 'densityCount=10'):
             with self.subTest(obstacle=obstacle):

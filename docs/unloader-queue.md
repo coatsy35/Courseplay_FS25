@@ -1,3 +1,40 @@
+## Build 3055 - preserve usable approaches when the AD exit is blocked
+
+Build 3054 still leaves the reported empty T7.300/325 at its AD arrival.
+The 19 October trace captures arrival at 119.1,-360.9 at 21:26:32.540;
+a fresh field boundary completes at 21:26:35.067. The straight exit at
+107.8,-328.9 is then rejected as an obstacle. The alternative parking search
+starts towards 79.1,-367.1, repeatedly encounters standing crop and exhausts
+its elapsed budget at 21:29:42.797. It retries without starting a route.
+Evidence: out/incident-3054-ad-arrival/log-2026-10-19T20-31-14.096Z.txt,
+lines 108627, 108708-108720, 108884, 112675 and 117199-117245. The early
+stale-boundary message is not the blocker after fresh detection succeeds.
+
+The arrival shortlist previously retained only the twelve cheapest poses by
+distance plus heading change. Nearby poses facing the same way can occupy
+all twelve places, discarding a usable opposite-facing or farther-back
+approach before route validation. Arrival selection now reserves up to eight
+representatives across the four areas around the rig and both parallel facing
+directions, then fills the remaining places by the existing cost. The total
+remains capped at twelve. Non-arrival parking selection is unchanged.
+
+Candidates still require completed, sufficiently straight runs, the existing
+near-field distance limit, whole-train access clearance and reservation checks.
+Every route retains the existing crop, obstacle, field/island boundary and
+articulation checks; the complete train must finish parallel. No off-field
+permission or collision/crop tolerance is enlarged. Request logs now include
+heading and candidate count. All earlier departure, native unloading, priority,
+crop-exit and harvester finishing fixes remain present.
+
+A reconstructed engine-boundary regression has a tree blocking the straight
+verge exit, standing crop beside the cleared strip, and enough nearby slots
+to exclude the opposite-facing approach in 3054. It fails with the unchanged
+3054 selector and passes with this change, finding a checked direct route and
+retaining parallel parking. It also covers a rotated layout and reversed fleet
+iteration order. This fixture is not a capture of every live physics/density
+value; the actual save still requires in-game validation. Run the complete
+source and extracted-ZIP release checks before publishing.
+
 ## Build 3054 - retain later fixes and recover a crop-blocked waiting trailer
 
 The user rejected the 3053 rollback and explicitly requested that all later
