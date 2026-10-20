@@ -1,3 +1,34 @@
+## Build 3057 - unload waiting partial loads after the field finishes
+
+On 20 October 2026 the user confirmed that build 3056 worked and completed the
+field. Preserve c655fa92ad03dd5a5feb6f3e2420bf10892a6a70 and its checked ZIP as
+`unloader-queue-3056-field-complete`, the latest confirmed full-field milestone.
+The remaining request is for a waiting trailer with crop aboard (the screenshot
+shows 1110 litres, 3%) to unload after the combines are all stopped and empty.
+An empty combine still travelling must not trigger that departure.
+
+Previously, a partial load could leave when its own final unload completed, but
+a different trailer already waiting did not recheck when the last combine
+finished. Idle and queue-preparation trailers now recheck live local combines
+when they have a positive load and no native combine assignment. Every active
+CP combine blocks this extra departure, including an empty combine driving to
+its parking row. Inactive combines in the service area must be stopped and have
+no grain left in their actual crop fill unit or pending processing slots. Missing
+field or grain data holds the trailer. Combines on other fields do not hold it.
+
+The existing native startUnloadingTrailers entry cancels queue preparation,
+plans the marker route and performs the ordinary AD handover. Empty trailers,
+active unloading, reverse clearance, priority yields and final-release holds
+are unchanged. Adjustable full/manual departures and the established final
+unload sequence remain intact. This adds no driving state or route override.
+
+The new regression fails against 3056 and passes with this change. It follows
+an unrelated 3% trailer through working and travelling empty combines, residual
+and pending grain, native marker travel and handover. It also covers empty
+trailers, other fields, unavailable field/grain data and reverse/yield ownership.
+Run all source and extracted-ZIP release checks before publishing. Confirm the
+new waiting-partial departure in-game; the 3056 full-field result is preserved.
+
 ## Build 3056 - release the final-parking deadlock and retain local parking searches
 
 The 3054 log shows CR11/319 entering final clearance at 22:02:11.309.

@@ -598,6 +598,39 @@ function Q.hasRemainingCombine(driver,finished)
     return false
 end
 
+-- Partial waiting loads leave only after local work and movement have ended.
+-- Unlike hasRemainingCombine, an empty harvester parking still holds the fleet.
+function Q.areFieldCombinesStoppedAndEmpty(driver)
+    if not driver.vehicle:cpGetFieldPolygon() then return false end
+    for _,vehicle in pairs(g_currentMission.vehicleSystem.vehicles) do
+        if vehicle.spec_combine or vehicle.queueFinishedEmptyCombine
+                or AIDriveStrategyCombineCourse.isActiveCpCombine(vehicle) then
+            local x,_,z=getWorldTranslation(vehicle.rootNode)
+            if driver:isServingPosition(x,z,10) then
+                if (vehicle.getIsCpActive and vehicle:getIsCpActive()) or not AIUtil.isStopped(vehicle) then return false end
+                local implement=vehicle.spec_combine and vehicle
+                    or AIUtil.getImplementOrVehicleWithSpecialization(vehicle,Combine)
+                local spec=implement and implement.spec_combine
+                if not spec or not spec.fillUnitIndex or not implement.getFillUnitFillLevel then return false end
+                local fill=implement:getFillUnitFillLevel(spec.fillUnitIndex)
+                if type(fill)~='number' then return false end
+                -- Match CombineController's grain accounting, including crop
+                -- still travelling through a delayed-processing harvester.
+                if (spec.loadingDelay or 0)>0 then
+                    for _,slot in ipairs(spec.loadingDelaySlots or {}) do
+                        if slot.valid then
+                            if type(slot.fillLevelDelta)~='number' then return false end
+                            fill=fill+slot.fillLevelDelta
+                        end
+                    end
+                end
+                if not (fill>=0 and fill<0.01) then return false end
+            end
+        end
+    end
+    return true
+end
+
 function Q.releaseFinishedCombine(driver)
     local combine=driver.combineToUnload
     if not Q.enabled(driver) or not combine or (driver.state~=driver.states.UNLOADING_STOPPED_COMBINE

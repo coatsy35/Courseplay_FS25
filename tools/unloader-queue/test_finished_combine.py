@@ -79,6 +79,105 @@ class FinishedCombineTests(unittest.TestCase):
             function drive() u.maxSpeed=math.huge; return u:getDriveData(16) end
         ''')
 
+    def waiting_partial_fixture(self, preparing=True):
+        self.lua.execute('''
+            u.combineToUnload=nil; u.state=u.states.IDLE
+            Q.target=function() return nil end
+            load=1110; grain=0; otherGrain=0; otherActive=true
+            local trailer={getFillUnitCapacity=function() return 32000 end,
+                getFillUnitFillLevel=function() return load end,
+                getFillUnitFreeCapacity=function() return 32000-load end}
+            u.trailerNodes={{trailer=trailer,fillUnitIx=1}}
+            combine.spec_combine={fillUnitIndex=1,loadingDelay=0,loadingDelaySlots={}}
+            combine.getFillUnitFillLevel=function() return grain end
+            combine.lastSpeedReal=0
+            other.spec_combine={fillUnitIndex=1,loadingDelay=0,loadingDelaySlots={}}
+            other.getFillUnitFillLevel=function() return otherGrain end
+            other.getIsCpActive=function() return otherActive end
+            other.lastSpeedReal=0
+            AIUtil.isStopped=function(vehicle) return math.abs(vehicle.lastSpeedReal)<0.0001 end
+            finish() -- the first combine has already emptied, parked and finished
+        ''')
+        if preparing:
+            self.lua.execute("Q.take(u,'prepare'); u.queueData.search={}; u.queueData.goal={parking=true}")
+
+    def test_other_partial_trailer_waits_until_all_combines_stop_empty_then_hands_over(self):
+        for preparing in (False, True):
+            with self.subTest(preparing=preparing):
+                self.setUp(); self.waiting_partial_fixture(preparing)
+                self.lua.execute('''
+                    Q.tick(u); assert(starts==0 and not u.queueData.nativeDeparture)
+                    -- An empty working or parking combine is still active work.
+                    other.getCpDriveStrategy=function()
+                        return {callUnloader=function() end,queueFinishClearance={}}
+                    end
+                    other.lastSpeedReal=0.002
+                    Q.tick(u); assert(starts==0)
+                    otherActive=false
+                    Q.tick(u); assert(starts==0,'empty travelling combine caused departure')
+                    other.lastSpeedReal=0; otherGrain=100
+                    Q.tick(u); assert(starts==0,'stopped combine still has grain')
+                    otherGrain=0
+                    other.spec_combine.loadingDelay=1
+                    other.spec_combine.loadingDelaySlots={{valid=true,fillLevelDelta=100}}
+                    Q.tick(u); assert(starts==0,'grain still being processed was ignored')
+                    other.spec_combine.loadingDelaySlots[1].valid=false
+                    Q.tick(u)
+                    assert(starts==1 and u.state==u.states.WAITING_FOR_PATHFINDER)
+                    assert(u.queueData.nativeDeparture and not Q.owns(u) and not u.queueData.search)
+                    assert(not u:getAllTrailersFull() and not u:isAllowedToBeCalled())
+                    Q.tick(u); assert(starts==1)
+                    finishSearch(true); u:onLastWaypointPassed()
+                    assert(result():find('handover'))
+                ''')
+
+    def test_empty_waiting_trailer_stays_after_field_finishes(self):
+        self.waiting_partial_fixture()
+        self.lua.execute('''
+            load=0; otherActive=false
+            Q.tick(u); assert(starts==0 and not u.queueData.nativeDeparture)
+            assert(Q.owns(u) and u.queueData.operation=='prepare')
+        ''')
+
+    def test_other_field_does_not_hold_loaded_waiting_trailer(self):
+        self.waiting_partial_fixture()
+        self.lua.execute('''
+            other.rootNode=900 -- active but outside this trailer's service area
+            Q.tick(u); assert(starts==1 and u.queueData.nativeDeparture)
+        ''')
+
+    def test_partial_departure_waits_for_current_field_and_valid_grain_data(self):
+        self.waiting_partial_fixture()
+        self.lua.execute('''
+            otherActive=false
+            u.vehicle.cpIsFieldBoundaryDetectionRunning=function() return true end
+            Q.tick(u); assert(starts==0)
+            u.vehicle.cpIsFieldBoundaryDetectionRunning=function() return false end
+            u.vehicle.cpGetFieldPolygon=function() return nil end
+            Q.tick(u); assert(starts==0)
+            u.vehicle.cpGetFieldPolygon=function() return {} end
+            other.getFillUnitFillLevel=function() return nil end
+            Q.tick(u); assert(starts==0)
+            other.getFillUnitFillLevel=function() return 0 end
+            Q.tick(u); assert(starts==1)
+        ''')
+
+    def test_partial_departure_does_not_interrupt_reverse_or_priority_clearance(self):
+        for state in ('MOVING_BACK', 'MOVING_BACK_WITH_TRAILER_FULL', 'yield'):
+            with self.subTest(state=state):
+                self.setUp(); self.waiting_partial_fixture(False)
+                self.lua.execute('otherActive=false')
+                if state=='yield':
+                    self.lua.execute("Q.take(u,'yield'); Q.updateYieldRecovery=function() return true end")
+                else:
+                    self.lua.execute('u.state=u.states.'+state)
+                self.lua.execute('''
+                    local original=u.state
+                    Q.tick(u); assert(starts==0 and u.state==original)
+                    if Q.owns(u) then Q.release(u) else u.state=u.states.IDLE end
+                    Q.tick(u); assert(starts==1)
+                ''')
+
     def test_finish_before_unloader_update_reverses_then_waits_for_local_combine(self):
         self.lua.execute('''
             finish(); assert(combine.queueFinishedEmptyCombine and not strategy)

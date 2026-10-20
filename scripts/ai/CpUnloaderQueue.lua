@@ -895,6 +895,16 @@ function Q.tick(driver)
         Q.reason(data,'waiting for current field boundary')
         return
     end
+    -- A different trailer may have emptied the last combine. Recheck waiting
+    -- partial loads after current field detection and all native clearance holds.
+    if not data.nativeDeparture and not driver.combineToUnload
+            and (driver.state==driver.states.IDLE or (Q.owns(driver) and data.operation=='prepare')) then
+        local _,fill=capacity(driver)
+        if fill>0 and Q.areFieldCombinesStoppedAndEmpty(driver) then
+            Q.reason(data,'field combines stopped and empty; unloading partial load')
+            driver:startUnloadingTrailers(); return
+        end
+    end
     if driver.state==driver.states.IDLE then Q.take(driver,'prepare') end
     if Q.owns(driver) then
         -- Full/manual departure outranks ordinary queue work. Only a checked

@@ -25,13 +25,17 @@
 - Preserve each tractor's adjustable CP departure threshold and native departure
   and AD handover. Do not hard-code 80% or 85%, change combine courses, or weaken
   crop/collision protections to achieve preparation targets.
+- Preserve build 3056 (commit c655fa92ad03dd5a5feb6f3e2420bf10892a6a70) as the
+  latest completed-field milestone, confirmed by the user on 20 October 2026.
+  Its tag is `unloader-queue-3056-field-complete`. Retain its ZIP and receipt;
+  build subsequent changes on its working behaviour and preserve later fixes.
+  Waiting partial loads should depart only after the local combines are all
+  stopped and empty, including no active parking move.
 - Preserve build 3031 (commit 03a903c11b0ae39cdf7b2bad228ed792c3df6e12) as the
   completed-field milestone, confirmed by the user on 13 October 2026. Its tag is
   `unloader-queue-3031-field-complete`. Retain its ZIP and release receipt unchanged.
-  Build subsequent fixes on this baseline in separate commits/builds, preserving
-  the previous fixes. Final parking clearance and the remaining unload are still
-  open issues; whole-field harvesting is the completed milestone, not acceptance
-  of every queue requirement. See `docs/unloader-queue.md` for the evidence.
+  This historical milestone predates the later finishing fixes and the 3056
+  confirmation above. See `docs/unloader-queue.md` for the recorded evidence.
 - Also retain build 3020 (commit 28b1bd6a8c19f04e4905bb21b997839788a74a00) and its
   ZIP as the historical traffic/unloading baseline. Staged preparation was not
   verified as working in that build.
